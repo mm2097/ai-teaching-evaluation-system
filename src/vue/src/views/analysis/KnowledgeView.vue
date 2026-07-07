@@ -3,30 +3,54 @@
   热力图展示班级与个人知识点掌握情况
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { knowledgeHeatmap } from '@/mock'
+import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
+import { fetchKnowledgeHeatmap } from '@/api/analysis'
+import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
-/** 知识点掌握度热力图 */
+const scope = useAnalysisScope('class')
+const {
+  allowedTargetTypes, targetType, semesterId, deptId, classId, courseId, targetId,
+  semesterOptions, classOptions, courseOptions, targetOptions,
+  showDeptFilter, showClassFilter, showCourseFilter, showTargetTypeFilter, showStudentPicker,
+  queryParams,
+} = scope
+
+const heatmapData = ref({
+  knowledgePoints: [] as string[],
+  students: [] as string[],
+  data: [] as number[][],
+})
+
+async function loadHeatmap(): Promise<void> {
+  heatmapData.value = await fetchKnowledgeHeatmap({ ...queryParams.value, analysisType: '知识点掌握度' })
+}
+
+watch(() => queryParams.value, loadHeatmap, { deep: true, immediate: true })
+
+const knowledgeTargetTypes = computed(() => allowedTargetTypes.value.filter((t) => t !== 'teacher'))
+
 const heatmapOption = computed<EChartsOption>(() => ({
   tooltip: {
     position: 'top',
-    formatter: (params: { value: number[] }) => {
-      const [x, y, val] = params.value
-      return `${knowledgeHeatmap.students[y]} - ${knowledgeHeatmap.knowledgePoints[x]}<br/>掌握度: ${val}%`
+    formatter: (params: unknown) => {
+      const p = params as { value: number[] }
+      const [x, y, val] = p.value
+      return `${heatmapData.value.students[y!]} - ${heatmapData.value.knowledgePoints[x!]}<br/>掌握度: ${val}%`
     },
   },
   grid: { left: 80, right: 40, top: 10, bottom: 80 },
   xAxis: {
     type: 'category',
-    data: knowledgeHeatmap.knowledgePoints,
+    data: heatmapData.value.knowledgePoints,
     splitArea: { show: true },
     axisLabel: { rotate: 30, fontSize: 11 },
   },
   yAxis: {
     type: 'category',
-    data: knowledgeHeatmap.students,
+    data: heatmapData.value.students,
     splitArea: { show: true },
   },
   visualMap: {
@@ -40,13 +64,12 @@ const heatmapOption = computed<EChartsOption>(() => ({
   },
   series: [{
     type: 'heatmap',
-    data: knowledgeHeatmap.data,
+    data: heatmapData.value.data,
     label: { show: true, fontSize: 11 },
     emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
   }],
 }))
 
-/** 薄弱知识点清单 */
 const weakPoints = [
   { name: '面向对象', classRate: 62, weakCount: 18, level: '严重' },
   { name: '异常处理', classRate: 66, weakCount: 15, level: '中等' },
@@ -54,7 +77,6 @@ const weakPoints = [
   { name: '控制结构', classRate: 78, weakCount: 8, level: '轻微' },
 ]
 
-/** 个人 vs 班级对比数据 */
 const compareData = [
   { point: '变量与表达式', personal: 92, classAvg: 84 },
   { point: '控制结构', personal: 78, classAvg: 78 },
@@ -66,6 +88,27 @@ const compareData = [
 
 <template>
   <div class="page-container">
+    <div class="content-card">
+      <AnalysisFilterBar
+        v-model:target-type="targetType"
+        v-model:semester-id="semesterId"
+        v-model:dept-id="deptId"
+        v-model:class-id="classId"
+        v-model:course-id="courseId"
+        v-model:target-id="targetId"
+        :allowed-target-types="knowledgeTargetTypes"
+        :semester-options="semesterOptions"
+        :show-dept-filter="showDeptFilter"
+        :show-class-filter="showClassFilter"
+        :show-course-filter="showCourseFilter"
+        :show-target-type-filter="showTargetTypeFilter"
+        :show-student-picker="showStudentPicker"
+        :class-options="classOptions"
+        :course-options="courseOptions"
+        :target-options="targetOptions"
+      />
+    </div>
+
     <div class="content-card">
       <div class="content-card__title">知识点掌握度热力图</div>
       <BaseChart :option="heatmapOption" height="400px" />

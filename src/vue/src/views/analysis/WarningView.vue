@@ -3,47 +3,71 @@
   展示预警名单、等级与原因，支持筛选
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { warningRecords } from '@/mock'
+import { ref, computed, watch, onMounted } from 'vue'
+import { fetchWarnings } from '@/api/analysis'
+import { semesterOptions, departmentOptions, courses } from '@/mock'
+import { useDictCascade } from '@/composables/useDictCascade'
+import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
+import type { WarningRecord } from '@/types'
 
-/** 筛选条件 */
-const levelFilter = ref('')
-const typeFilter = ref('')
-
-/** 筛选后的预警列表 */
-const filteredWarnings = computed(() => {
-  return warningRecords.filter((item) => {
-    if (levelFilter.value && item.level !== levelFilter.value) return false
-    if (typeFilter.value && item.type !== typeFilter.value) return false
-    return true
-  })
+const userStore = useUserStore()
+const { deptId, classId, classOptions } = useDictCascade({
+  deptId: userStore.userInfo?.deptId,
 })
 
-/** 各级别预警统计 */
+const levelFilter = ref('')
+const typeFilter = ref('')
+const semesterId = ref(1)
+const courseId = ref<number | undefined>()
+const statusFilter = ref<number | ''>('')
+
+const warningList = ref<WarningRecord[]>([])
+
+async function loadWarnings(): Promise<void> {
+  warningList.value = await fetchWarnings({
+    deptId: deptId.value,
+    classId: classId.value,
+    semesterId: semesterId.value,
+    courseId: courseId.value,
+    level: levelFilter.value || undefined,
+    type: typeFilter.value || undefined,
+    status: statusFilter.value === '' ? undefined : statusFilter.value,
+  })
+}
+
+watch([deptId, classId, semesterId, courseId, levelFilter, typeFilter, statusFilter], loadWarnings)
+
+onMounted(loadWarnings)
+
+const filteredWarnings = computed(() => warningList.value)
+
 const levelStats = computed(() => ({
-  高: warningRecords.filter((w) => w.level === '高').length,
-  中: warningRecords.filter((w) => w.level === '中').length,
-  低: warningRecords.filter((w) => w.level === '低').length,
+  高: filteredWarnings.value.filter((w) => w.level === '高').length,
+  中: filteredWarnings.value.filter((w) => w.level === '中').length,
+  低: filteredWarnings.value.filter((w) => w.level === '低').length,
 }))
 
-/** 详情抽屉 */
 const drawerVisible = ref(false)
-const currentWarning = ref(warningRecords[0])
+const currentWarning = ref<WarningRecord | undefined>()
 
-/**
- * 查看预警详情
- * @param row 预警记录
- */
-function viewDetail(row: (typeof warningRecords)[0]): void {
+function viewDetail(row: WarningRecord): void {
   currentWarning.value = row
   drawerVisible.value = true
 }
+
+const statusOptions = [
+  { label: '待处理', value: 0 },
+  { label: '处理中', value: 1 },
+  { label: '已处理', value: 2 },
+  { label: '已忽略', value: 3 },
+]
+
+const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.userInfo?.role || ''))
 </script>
 
 <template>
   <div class="page-container">
-    <!-- 预警统计卡片 -->
     <div class="stat-grid" style="grid-template-columns: repeat(3, 1fr)">
       <div class="warning-stat high">
         <div class="stat-num">{{ levelStats.高 }}</div>
@@ -60,9 +84,20 @@ function viewDetail(row: (typeof warningRecords)[0]): void {
     </div>
 
     <div class="content-card">
-      <!-- 筛选栏 -->
       <div class="filter-bar">
-        <el-select v-model="levelFilter" placeholder="预警等级" clearable style="width: 140px">
+        <el-select v-model="semesterId" placeholder="学期" style="width: 200px">
+          <el-option v-for="s in semesterOptions" :key="s.id" :label="s.label" :value="s.id!" />
+        </el-select>
+        <el-select v-if="showDeptFilter" v-model="deptId" placeholder="院系" clearable style="width: 150px">
+          <el-option v-for="d in departmentOptions.filter(d => d.id)" :key="d.id" :label="d.label" :value="d.id!" />
+        </el-select>
+        <el-select v-model="classId" placeholder="班级" clearable style="width: 140px">
+          <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />
+        </el-select>
+        <el-select v-model="courseId" placeholder="课程" clearable style="width: 150px">
+          <el-option v-for="c in courses" :key="c.id" :label="c.courseName" :value="c.id" />
+        </el-select>
+        <el-select v-model="levelFilter" placeholder="预警等级" clearable style="width: 120px">
           <el-option label="高" value="高" />
           <el-option label="中" value="中" />
           <el-option label="低" value="低" />
@@ -73,13 +108,18 @@ function viewDetail(row: (typeof warningRecords)[0]): void {
           <el-option label="作业未交" value="作业未交" />
           <el-option label="综合异常" value="综合异常" />
         </el-select>
+        <el-select v-model="statusFilter" placeholder="处理状态" clearable style="width: 120px">
+          <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
+        </el-select>
       </div>
 
-      <!-- 预警列表 -->
       <el-table :data="filteredWarnings" stripe border>
         <el-table-column prop="studentId" label="学号" width="130" />
         <el-table-column prop="studentName" label="姓名" width="100" />
         <el-table-column prop="className" label="班级" width="120" />
+        <el-table-column prop="courseName" label="课程" width="120">
+          <template #default="{ row }">{{ row.courseName || '-' }}</template>
+        </el-table-column>
         <el-table-column prop="type" label="预警类型" width="110">
           <template #default="{ row }">
             <el-tag size="small">{{ row.type }}</el-tag>
@@ -92,6 +132,13 @@ function viewDetail(row: (typeof warningRecords)[0]): void {
         </el-table-column>
         <el-table-column prop="reason" label="预警原因" show-overflow-tooltip />
         <el-table-column prop="warningTime" label="预警时间" width="120" />
+        <el-table-column prop="status" label="状态" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.status === 2 ? 'success' : row.status === 0 ? 'danger' : 'warning'">
+              {{ statusOptions.find(s => s.value === row.status)?.label }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="100" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="viewDetail(row)">详情</el-button>
@@ -100,12 +147,12 @@ function viewDetail(row: (typeof warningRecords)[0]): void {
       </el-table>
     </div>
 
-    <!-- 详情抽屉 -->
     <el-drawer v-model="drawerVisible" title="预警详情" size="400px">
       <el-descriptions :column="1" border>
         <el-descriptions-item label="学号">{{ currentWarning?.studentId }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ currentWarning?.studentName }}</el-descriptions-item>
         <el-descriptions-item label="班级">{{ currentWarning?.className }}</el-descriptions-item>
+        <el-descriptions-item label="课程">{{ currentWarning?.courseName || '-' }}</el-descriptions-item>
         <el-descriptions-item label="预警类型">{{ currentWarning?.type }}</el-descriptions-item>
         <el-descriptions-item label="预警等级">
           <el-tag :type="warningLevelType(currentWarning?.level || '')" size="small">

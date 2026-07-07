@@ -3,20 +3,54 @@
   展示多维度学情雷达图、标签与优劣势分析
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { studentProfileRadar, studentTags } from '@/mock'
-import { useUserStore } from '@/stores/user'
+import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
+import { studentProfileRadar } from '@/mock'
+import { fetchStudentProfile } from '@/api/analysis'
+import { useAnalysisScope } from '@/composables/useAnalysisScope'
+import type { StudentProfileData } from '@/types'
 
-const userStore = useUserStore()
+const scope = useAnalysisScope('student')
+const {
+  allowedTargetTypes,
+  targetType,
+  semesterId,
+  deptId,
+  classId,
+  courseId,
+  targetId,
+  semesterOptions,
+  classOptions,
+  courseOptions,
+  targetOptions,
+  showDeptFilter,
+  showClassFilter,
+  showCourseFilter,
+  showTargetTypeFilter,
+  showStudentPicker,
+  queryParams,
+} = scope
 
-/** 展示的学生姓名（学生角色显示自己） */
-const studentName = computed(() =>
-  userStore.userInfo?.role === 'student' ? userStore.userInfo.name : '陈同学',
+const profileData = ref<StudentProfileData | null>(null)
+
+async function loadProfile(): Promise<void> {
+  profileData.value = await fetchStudentProfile({
+    ...queryParams.value,
+    analysisType: '学情画像',
+  })
+}
+
+watch(() => queryParams.value, loadProfile, { deep: true, immediate: true })
+
+const studentName = computed(() => profileData.value?.studentName || '加载中...')
+const studentInfo = computed(() =>
+  profileData.value
+    ? `学号：${profileData.value.studentNo} · ${profileData.value.className}`
+    : '',
 )
 
-/** 学情雷达图配置 */
 const radarOption = computed<EChartsOption>(() => ({
   tooltip: {},
   radar: {
@@ -30,7 +64,7 @@ const radarOption = computed<EChartsOption>(() => ({
       type: 'radar',
       data: [
         {
-          value: studentProfileRadar.values,
+          value: profileData.value?.radarValues || studentProfileRadar.values,
           name: studentName.value,
           areaStyle: { color: 'rgba(37, 99, 235, 0.2)' },
           lineStyle: { color: '#2563eb', width: 2 },
@@ -41,27 +75,41 @@ const radarOption = computed<EChartsOption>(() => ({
   ],
 }))
 
-/** 各维度得分明细 */
-const dimensionScores = [
-  { name: '学业水平', score: 85, desc: '各科目加权平均分处于班级前 20%' },
-  { name: '学习态度', score: 72, desc: '出勤率 88%，作业提交率 92%' },
-  { name: '学习进步', score: 88, desc: '近三次考试平均分提升 12 分' },
-  { name: '知识掌握', score: 76, desc: '核心知识点平均掌握度 76%' },
-  { name: '课堂参与', score: 80, desc: '课堂互动频次高于班级均值' },
-]
+const dimensionScores = computed(() => profileData.value?.dimensionScores || [])
+const studentTags = computed(() => profileData.value?.tags || [])
 </script>
 
 <template>
   <div class="page-container">
+    <div class="content-card">
+      <AnalysisFilterBar
+        v-model:target-type="targetType"
+        v-model:semester-id="semesterId"
+        v-model:dept-id="deptId"
+        v-model:class-id="classId"
+        v-model:course-id="courseId"
+        v-model:target-id="targetId"
+        :allowed-target-types="allowedTargetTypes"
+        :semester-options="semesterOptions"
+        :show-dept-filter="showDeptFilter"
+        :show-class-filter="showClassFilter"
+        :show-course-filter="showCourseFilter"
+        :show-target-type-filter="showTargetTypeFilter"
+        :show-student-picker="showStudentPicker"
+        :class-options="classOptions"
+        :course-options="courseOptions"
+        :target-options="targetOptions"
+      />
+    </div>
+
     <el-row :gutter="16">
-      <!-- 学情画像卡片 -->
       <el-col :xs="24" :lg="8">
         <div class="content-card profile-card">
           <div class="profile-header">
             <el-avatar :size="72" class="profile-avatar">{{ studentName.charAt(0) }}</el-avatar>
             <div>
               <h3>{{ studentName }}</h3>
-              <p>学号：2024001001 · 计科2401班</p>
+              <p>{{ studentInfo }}</p>
             </div>
           </div>
           <div class="profile-tags">
@@ -73,17 +121,16 @@ const dimensionScores = [
           <div class="strength-weakness">
             <div class="sw-item success">
               <h4>优势科目</h4>
-              <p>数据结构 (92分)、计算机网络 (88分)</p>
+              <p>{{ profileData?.strengths || '-' }}</p>
             </div>
             <div class="sw-item danger">
               <h4>薄弱科目</h4>
-              <p>操作系统 (68分)、编译原理 (72分)</p>
+              <p>{{ profileData?.weaknesses || '-' }}</p>
             </div>
           </div>
         </div>
       </el-col>
 
-      <!-- 雷达图 -->
       <el-col :xs="24" :lg="8">
         <div class="content-card">
           <div class="content-card__title">多维度学情雷达图</div>
@@ -91,7 +138,6 @@ const dimensionScores = [
         </div>
       </el-col>
 
-      <!-- 维度得分明细 -->
       <el-col :xs="24" :lg="8">
         <div class="content-card">
           <div class="content-card__title">维度得分详情</div>

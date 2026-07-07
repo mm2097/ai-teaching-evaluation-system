@@ -3,11 +3,23 @@
   分析教学行为指标与学习效果的关联度
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
+import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
+import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
-/** 教学行为指标 */
+const scope = useAnalysisScope('teacher')
+const {
+  allowedTargetTypes, targetType, semesterId, deptId, classId, courseId, targetId,
+  semesterOptions, classOptions, courseOptions, targetOptions,
+  showDeptFilter, showTargetTypeFilter,
+} = scope
+
+const correlationTargetTypes = computed(() =>
+  allowedTargetTypes.value.filter((t) => t === 'teacher' || t === 'course'),
+)
+
 const indicators = [
   { name: '作业布置量', correlation: 0.72, impact: '显著正相关', suggestion: '适度增加课后练习有助于巩固知识' },
   { name: '作业批改反馈', correlation: 0.85, impact: '强正相关', suggestion: '及时详细的批改反馈对成绩提升效果最明显' },
@@ -17,7 +29,6 @@ const indicators = [
   { name: '考试难度系数', correlation: -0.32, impact: '负相关', suggestion: '考试难度过高可能导致及格率下降' },
 ]
 
-/** 关联度柱状图 */
 const barOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis', formatter: '{b}<br/>关联度: {c}' },
   grid: { left: 120, right: 40, top: 20, bottom: 30 },
@@ -41,7 +52,6 @@ const barOption = computed<EChartsOption>(() => ({
   }],
 }))
 
-/** 散点图：作业批改频次 vs 成绩 */
 const scatterOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'item' },
   grid: { left: 60, right: 30, top: 30, bottom: 40 },
@@ -61,6 +71,27 @@ const scatterOption = computed<EChartsOption>(() => ({
 
 <template>
   <div class="page-container">
+    <div class="content-card">
+      <AnalysisFilterBar
+        v-model:target-type="targetType"
+        v-model:semester-id="semesterId"
+        v-model:dept-id="deptId"
+        v-model:class-id="classId"
+        v-model:course-id="courseId"
+        v-model:target-id="targetId"
+        :allowed-target-types="correlationTargetTypes"
+        :semester-options="semesterOptions"
+        :show-dept-filter="showDeptFilter"
+        :show-class-filter="false"
+        :show-course-filter="targetType === 'course'"
+        :show-target-type-filter="showTargetTypeFilter"
+        :show-student-picker="false"
+        :class-options="classOptions"
+        :course-options="courseOptions"
+        :target-options="targetOptions"
+      />
+    </div>
+
     <el-row :gutter="16">
       <el-col :span="14">
         <div class="content-card">

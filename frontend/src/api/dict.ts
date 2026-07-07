@@ -64,3 +64,28 @@ export async function fetchCourses(params?: { teacherId?: number; deptId?: numbe
     return true
   })
 }
+
+/** 学生模糊搜索（按姓名或学号部分匹配） */
+export async function searchStudents(params?: {
+  keyword?: string
+  classId?: number
+  courseId?: number
+  teacherId?: number
+  deptId?: number
+}): Promise<Student[]> {
+  await delay(200)
+  let result = students.filter((s) => {
+    if (params?.deptId && s.deptId !== params.deptId) return false
+    if (params?.classId && s.classId !== params.classId) return false
+    return true
+  })
+
+  if (params?.keyword?.trim()) {
+    const kw = params.keyword.trim().toLowerCase()
+    result = result.filter(
+      (s) => s.studentName.toLowerCase().includes(kw) || s.studentNo.toLowerCase().includes(kw),
+    )
+  }
+
+  return result
+}

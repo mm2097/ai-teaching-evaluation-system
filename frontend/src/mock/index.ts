@@ -17,15 +17,6 @@ export const mockUsers: (UserInfo & { password: string })[] = [
     deptId: 1,
   },
   {
-    id: 2,
-    username: 'manager',
-    password: '123456',
-    name: '李教务',
-    role: 'manager',
-    department: '教务处',
-    deptId: 1,
-  },
-  {
     id: 3,
     username: 'teacher',
     password: '123456',
@@ -49,17 +40,15 @@ export const mockUsers: (UserInfo & { password: string })[] = [
   },
 ]
 
-/** 看板基础统计数据 */
+/** 看板基础统计数据（计算机学院） */
 export const dashboardStats = {
-  studentCount: 2846,
-  courseCount: 186,
-  teacherCount: 128,
+  studentCount: 126,
+  courseCount: 5,
+  teacherCount: 2,
   passRate: 87.6,
   excellentRate: 23.4,
   attendanceRate: 92.3,
-  warningCount: 47,
-  excellentTeacherCount: 35,
-  excellentCourseCount: 28,
+  warningCount: 12,
 }
 
 /** 成绩趋势模拟数据 */
@@ -127,12 +116,11 @@ export const courseEvalList = [
   { id: 2, targetName: '操作系统', targetType: 'course', totalScore: 84.6, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 85, weight: 30 }, { name: '学生参与', score: 82, weight: 25 }, { name: '成绩合理', score: 86, weight: 25 }, { name: '教学效果', score: 84, weight: 20 }], rank: 2 },
 ]
 
-/** 数据导入日志（对应 sys_data_import_log） */
+/** 数据导入日志 */
 export const importLogs: ImportLog[] = [
-  { id: 1, importType: 'score', dataSource: 'excel', fileName: '2025春季成绩导入.xlsx', totalCount: 9868, successCount: 9856, failCount: 12, operatorName: '张管理', importTime: '2026-03-15 09:15:00', status: 1 },
+  { id: 1, importType: 'score', dataSource: 'excel', fileName: '数据结构成绩.xlsx', totalCount: 42, successCount: 42, failCount: 0, operatorName: '王教授', importTime: '2026-03-15 09:15:00', status: 1 },
   { id: 2, importType: 'attendance', dataSource: 'excel', fileName: '计科2401考勤记录.xlsx', totalCount: 520, successCount: 518, failCount: 2, operatorName: '王教授', importTime: '2026-03-14 14:30:00', status: 1 },
   { id: 3, importType: 'assignment', dataSource: 'txt', fileName: '作业提交数据.txt', totalCount: 380, successCount: 375, failCount: 5, operatorName: '王教授', importTime: '2026-03-13 10:00:00', status: 1 },
-  { id: 4, importType: 'student', dataSource: 'database', fileName: 't_student（学生表）', totalCount: 2846, successCount: 2846, failCount: 0, operatorName: '李教务', importTime: '2026-03-10 08:00:00', status: 1 },
 ]
 
 /** 教学数据管理模拟列表 */
@@ -147,33 +135,35 @@ export const teachingDataList: TeachingDataRecord[] = [
   { id: 8, studentId: '2024001004', studentName: '孙同学', courseId: 'CS103', courseName: '计算机网络', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 2, attendance: '缺勤', dataType: 'attendance', importLogId: 2, sourceFileName: '计科2401考勤记录.xlsx' },
   { id: 9, studentId: '2024001001', studentName: '陈同学', courseId: 'CS101', courseName: '数据结构', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, homework: '已提交', dataType: 'assignment', importLogId: 3, sourceFileName: '作业提交数据.txt' },
   { id: 10, studentId: '2024001003', studentName: '赵同学', courseId: 'CS102', courseName: '操作系统', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, homework: '未提交', dataType: 'assignment', importLogId: 3, sourceFileName: '作业提交数据.txt' },
+  { id: 11, studentId: '2024001001', studentName: '陈同学', courseId: 'CS101', courseName: '数据结构', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, attendance: '正常', dataType: 'attendance', sourceFileName: '课堂问答记录.xlsx' },
+  { id: 12, studentId: '2024001002', studentName: '刘同学', courseId: 'CS101', courseName: '数据结构', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, score: 85, dataType: 'score', sourceFileName: '课堂问答记录.xlsx' },
+  { id: 13, studentId: '2024001005', studentName: '周同学', courseId: 'CS101', courseName: '数据结构', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, attendance: '正常', dataType: 'attendance', sourceFileName: '课堂问答记录.xlsx' },
+  { id: 14, studentId: '2024001003', studentName: '赵同学', courseId: 'CS101', courseName: '数据结构', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 1, homework: '已提交', dataType: 'assignment', sourceFileName: '链表实现作业.xlsx' },
+  { id: 15, studentId: '2024001004', studentName: '孙同学', courseId: 'CS103', courseName: '计算机网络', semester: '2025-2026-1', semesterId: 1, deptId: 1, majorId: 1, classId: 2, score: 72, dataType: 'score', sourceFileName: 'TCP协议测验.xlsx' },
 ]
 
 /** 系统用户列表 */
 export const systemUserList = [
   { id: 1, username: 'admin', name: '张管理', role: 'admin', department: '信息中心', status: true, createTime: '2025-09-01' },
-  { id: 2, username: 'manager', name: '李教务', role: 'manager', department: '教务处', status: true, createTime: '2025-09-01' },
   { id: 3, username: 'teacher', name: '王教授', role: 'teacher', department: '计算机学院', status: true, createTime: '2025-09-05' },
   { id: 4, username: 'student', name: '陈同学', role: 'student', department: '计算机学院', status: true, createTime: '2025-09-10' },
-  { id: 5, username: 'teacher2', name: '李副教授', role: 'teacher', department: '数学学院', status: false, createTime: '2025-10-01' },
+  { id: 5, username: 'teacher2', name: '张讲师', role: 'teacher', department: '计算机学院', status: true, createTime: '2025-10-01' },
 ]
 
 /** 操作日志列表 */
 export const systemLogList = [
   { id: 1, username: 'admin', operation: '登录系统', type: '登录', ip: '192.168.1.100', time: '2026-03-15 08:30:00' },
-  { id: 2, username: 'admin', operation: '导入成绩数据', type: '数据操作', ip: '192.168.1.100', time: '2026-03-15 09:15:00' },
-  { id: 3, username: 'manager', operation: '查看教学评价报告', type: '查询', ip: '192.168.1.101', time: '2026-03-15 10:00:00' },
+  { id: 2, username: 'teacher', operation: '上传成绩数据', type: '数据操作', ip: '192.168.1.102', time: '2026-03-15 09:15:00' },
+  { id: 3, username: 'teacher', operation: '发布 AI 练习', type: '数据操作', ip: '192.168.1.102', time: '2026-03-15 10:00:00' },
   { id: 4, username: 'teacher', operation: '导出班级学情报告', type: '导出', ip: '192.168.1.102', time: '2026-03-14 16:30:00' },
   { id: 5, username: 'admin', operation: '修改预警阈值配置', type: '配置修改', ip: '192.168.1.100', time: '2026-03-14 14:20:00' },
-  { id: 6, username: 'teacher', operation: '导入考勤数据', type: '数据操作', ip: '192.168.1.102', time: '2026-03-10 11:00:00' },
+  { id: 6, username: 'teacher', operation: '上传考勤数据', type: '数据操作', ip: '192.168.1.102', time: '2026-03-10 11:00:00' },
 ]
 
-/** 评价指标配置 */
+/** 学生学习质量评价指标配置 */
 export const evalIndicatorConfig = [
-  { id: 1, name: '教学效果', dimension: '教师评价', weight: 35, rule: '基于成绩提升度与及格率加权计算' },
-  { id: 2, name: '教学投入', dimension: '教师评价', weight: 25, rule: '基于作业批改与答疑频次统计' },
-  { id: 3, name: '学生反馈', dimension: '教师评价', weight: 25, rule: '基于评教问卷得分' },
-  { id: 4, name: '教学规范', dimension: '教师评价', weight: 15, rule: '基于教学文档与考勤规范检查' },
-  { id: 5, name: '学业成绩', dimension: '学生评价', weight: 40, rule: '基于各科目加权平均分' },
-  { id: 6, name: '学习态度', dimension: '学生评价', weight: 25, rule: '基于考勤率与作业提交率' },
+  { id: 1, name: '学业成绩', dimension: '学生评价', weight: 40, rule: '基于本课程加权平均分' },
+  { id: 2, name: '学习态度', dimension: '学生评价', weight: 25, rule: '基于考勤率与作业提交率' },
+  { id: 3, name: '学习进步', dimension: '学生评价', weight: 20, rule: '基于近三次测验/考试成绩变化' },
+  { id: 4, name: '知识掌握', dimension: '学生评价', weight: 15, rule: '基于知识点掌握度与 AI 练习得分' },
 ]

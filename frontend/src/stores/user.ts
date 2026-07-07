@@ -4,6 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { ElMessage } from 'element-plus'
 import type { UserInfo, UserRole } from '@/types'
 import { RoleLabels } from '@/types'
 import { authApi } from '@/api/auth'
@@ -44,7 +45,8 @@ export const useUserStore = defineStore('user', () => {
       setToken(token)
       setStoredUser(JSON.stringify(info))
       return true
-    } catch {
+    } catch (e) {
+      ElMessage.error(e instanceof Error ? e.message : '登录失败')
       return false
     }
   }

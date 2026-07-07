@@ -55,10 +55,8 @@ export async function fetchWarnings(query: AnalysisQuery & {
   })
 }
 
-/** 分析对象类型选项 */
+/** 分析对象类型选项（单课程/单班级维度） */
 export const targetTypeOptions: { label: string; value: TargetType }[] = [
   { label: '学生', value: 'student' },
   { label: '班级', value: 'class' },
-  { label: '课程', value: 'course' },
-  { label: '教师', value: 'teacher' },
 ]

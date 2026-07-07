@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { fetchWarnings } from '@/api/analysis'
-import { semesterOptions, departmentOptions, courses } from '@/mock'
+import { semesterOptions, courses } from '@/mock'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
@@ -62,8 +62,6 @@ const statusOptions = [
   { label: '已处理', value: 2 },
   { label: '已忽略', value: 3 },
 ]
-
-const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.userInfo?.role || ''))
 </script>
 
 <template>
@@ -87,9 +85,6 @@ const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.us
       <div class="filter-bar">
         <el-select v-model="semesterId" placeholder="学期" style="width: 200px">
           <el-option v-for="s in semesterOptions" :key="s.id" :label="s.label" :value="s.id!" />
-        </el-select>
-        <el-select v-if="showDeptFilter" v-model="deptId" placeholder="院系" clearable style="width: 150px">
-          <el-option v-for="d in departmentOptions.filter(d => d.id)" :key="d.id" :label="d.label" :value="d.id!" />
         </el-select>
         <el-select v-model="classId" placeholder="班级" clearable style="width: 140px">
           <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />

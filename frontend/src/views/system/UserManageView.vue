@@ -1,7 +1,7 @@
 <!--
   用户与权限管理页面
   支持用户 CRUD、角色分配与账号启停
-  数据走后端 /api/users
+  数据走本地 mock（演示环境）
 -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -34,6 +34,8 @@ async function loadUsers(): Promise<void> {
   loading.value = true
   try {
     userList.value = await userApi.list()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载用户失败')
   } finally {
     loading.value = false
   }
@@ -63,16 +65,24 @@ function handleEdit(row: SystemUser): void {
 /** 删除用户 */
 async function handleDelete(row: SystemUser): Promise<void> {
   await ElMessageBox.confirm(`确定删除用户 "${row.name}" 吗？`, '删除确认', { type: 'warning' })
-  await userApi.remove(row.id)
-  ElMessage.success('用户已删除')
-  await loadUsers()
+  try {
+    await userApi.remove(row.id)
+    ElMessage.success('用户已删除')
+    await loadUsers()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+  }
 }
 
 /** 切换用户状态 */
 async function toggleStatus(row: SystemUser): Promise<void> {
-  await userApi.update(row.id, { status: !row.status })
-  row.status = !row.status
-  ElMessage.success(row.status ? '账号已启用' : '账号已禁用')
+  try {
+    await userApi.update(row.id, { status: !row.status })
+    row.status = !row.status
+    ElMessage.success(row.status ? '账号已启用' : '账号已禁用')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '状态更新失败')
+  }
 }
 
 /** 保存用户(新增或编辑) */
@@ -98,6 +108,8 @@ async function saveUser(): Promise<void> {
     dialogVisible.value = false
     ElMessage.success('保存成功')
     await loadUsers()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     submitting.value = false
   }
@@ -106,8 +118,12 @@ async function saveUser(): Promise<void> {
 /** 重置密码 */
 async function resetPassword(row: SystemUser): Promise<void> {
   await ElMessageBox.confirm(`重置 "${row.name}" 的密码为 123456？`, '重置密码', { type: 'warning' })
-  await userApi.update(row.id, { password: '123456' })
-  ElMessage.success('密码已重置为 123456')
+  try {
+    await userApi.update(row.id, { password: '123456' })
+    ElMessage.success('密码已重置为 123456')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '重置密码失败')
+  }
 }
 
 onMounted(loadUsers)

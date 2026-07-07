@@ -1,0 +1,121 @@
+/**
+ * AI 出题与在线答题模拟数据
+ */
+import type { QuizAssignment, QuizSubmission } from '@/types'
+
+export const quizAssignments: QuizAssignment[] = [
+  {
+    id: 1,
+    title: '数据结构 - 链表与树专项练习',
+    courseId: 1,
+    courseName: '数据结构',
+    classId: 1,
+    className: '计科2401',
+    teacherName: '王教授',
+    knowledgePoints: ['链表操作', '二叉树遍历', '栈与队列'],
+    questionCount: 5,
+    totalScore: 50,
+    status: 'published',
+    publishTime: '2026-03-14 10:00',
+    deadline: '2026-03-20 23:59',
+    questions: [
+      {
+        id: 1,
+        type: 'single',
+        content: '单链表插入节点的时间复杂度是？',
+        options: ['O(1)', 'O(n)', 'O(log n)', 'O(n²)'],
+        answer: 'O(n)',
+        knowledgePoint: '链表操作',
+        score: 10,
+      },
+      {
+        id: 2,
+        type: 'single',
+        content: '二叉树前序遍历的顺序是？',
+        options: ['根-左-右', '左-根-右', '左-右-根', '右-根-左'],
+        answer: '根-左-右',
+        knowledgePoint: '二叉树遍历',
+        score: 10,
+      },
+      {
+        id: 3,
+        type: 'multiple',
+        content: '以下哪些是线性数据结构？（多选）',
+        options: ['数组', '链表', '栈', '二叉树'],
+        answer: ['数组', '链表', '栈'],
+        knowledgePoint: '栈与队列',
+        score: 10,
+      },
+      {
+        id: 4,
+        type: 'fill',
+        content: '队列的特点是 _____ 出队。',
+        answer: '先进先出',
+        knowledgePoint: '栈与队列',
+        score: 10,
+      },
+      {
+        id: 5,
+        type: 'short',
+        content: '简述快速排序的基本思想。',
+        answer: '选取基准元素，将数组分为小于和大于基准的两部分，递归排序',
+        knowledgePoint: '链表操作',
+        score: 10,
+      },
+    ],
+  },
+  {
+    id: 2,
+    title: '操作系统 - 进程管理练习',
+    courseId: 2,
+    courseName: '操作系统',
+    classId: 1,
+    className: '计科2401',
+    teacherName: '王教授',
+    knowledgePoints: ['进程调度', '死锁', '内存管理'],
+    questionCount: 3,
+    totalScore: 30,
+    status: 'draft',
+    questions: [
+      {
+        id: 6,
+        type: 'single',
+        content: '下列调度算法中，可能导致饥饿现象的是？',
+        options: ['FCFS', 'SJF', 'RR', '优先级调度'],
+        answer: '优先级调度',
+        knowledgePoint: '进程调度',
+        score: 10,
+      },
+      {
+        id: 7,
+        type: 'single',
+        content: '死锁产生的必要条件不包括？',
+        options: ['互斥', '占有且等待', '不可抢占', '时间片轮转'],
+        answer: '时间片轮转',
+        knowledgePoint: '死锁',
+        score: 10,
+      },
+      {
+        id: 8,
+        type: 'fill',
+        content: '虚拟内存通过 _____ 技术将磁盘空间作为内存扩展。',
+        answer: '分页',
+        knowledgePoint: '内存管理',
+        score: 10,
+      },
+    ],
+  },
+]
+
+export const quizSubmissions: QuizSubmission[] = [
+  {
+    id: 1,
+    assignmentId: 1,
+    studentId: 1,
+    studentName: '陈同学',
+    score: 45,
+    totalScore: 50,
+    submitTime: '2026-03-15 14:30',
+    answers: { 1: 'O(n)', 2: '根-左-右', 3: ['数组', '链表', '栈'], 4: '先进先出', 5: '分治思想' },
+  },
+]

@@ -1,95 +1,108 @@
 <!--
-  多源数据接入页面
-  支持数据库直连与 Excel/Txt 文件上传导入
+  模板上传页面
+  任课教师下载标准模板、填写后上传，系统校验格式
 -->
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Connection, Upload, Document, Right } from '@element-plus/icons-vue'
+import { Download, Upload, Document, Right, Warning } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import { executeImport, fetchImportLogs } from '@/api/import'
+import { fetchCourses } from '@/api/dict'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
-import { importTypeOptions } from '@/mock'
-import type { ImportLog, ImportType } from '@/types'
-import { delay } from '@/utils/auth'
+import { downloadExcelTemplate, downloadTxtTemplate } from '@/utils/templateDownload'
+import { validateUploadFile } from '@/utils/templateValidator'
+import type { DataTemplateType, ImportLog, ValidationError } from '@/types'
 
 const router = useRouter()
 const dataFlowStore = useDataFlowStore()
 const userStore = useUserStore()
 
-const activeTab = ref('database')
-const importType = ref<ImportType>('score')
-const importHistory = ref<ImportLog[]>([])
-
-const dbForm = reactive({
-  type: 'mysql',
-  host: '127.0.0.1',
-  port: 3306,
-  username: 'root',
-  password: '',
-  database: 'ai_teaching_analysis',
-  table: '',
-})
-
-const dbTesting = ref(false)
-const dbConnected = ref(false)
-const uploadFileList = ref<{ name: string; size: number }[]>([])
-const fieldPreview = ref([
-  { source: 'student_id', target: '学号', mapped: true },
-  { source: 'student_name', target: '姓名', mapped: true },
-  { source: 'course_code', target: '课程号', mapped: true },
-  { source: 'score', target: '分数', mapped: true },
-  { source: 'exam_date', target: '考试时间', mapped: true },
-])
-
+const templateType = ref<DataTemplateType>('score')
+const courseId = ref<number | undefined>()
+const courseOptions = ref<{ label: string; value: number }[]>([])
+const uploadFile = ref<File | null>(null)
+const validationErrors = ref<ValidationError[]>([])
+const validating = ref(false)
 const importing = ref(false)
 const importResult = ref<ImportLog | null>(null)
+const importHistory = ref<ImportLog[]>([])
+
+const templateTypes = [
+  { label: '成绩数据', value: 'score' as const, desc: '考试成绩、测验分数' },
+  { label: '考勤数据', value: 'attendance' as const, desc: '到课、迟到、缺勤记录' },
+  { label: '作业数据', value: 'assignment' as const, desc: '作业提交与得分' },
+  { label: '课堂问答', value: 'qa' as const, desc: '课堂提问、随堂测验情况' },
+]
 
 onMounted(async () => {
   importHistory.value = await fetchImportLogs()
+  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
+  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
+  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+  if (courseOptions.value.length) courseId.value = courseOptions.value[0]!.value
 })
 
-async function testConnection(): Promise<void> {
-  dbTesting.value = true
-  await delay(1000)
-  dbConnected.value = true
-  dbTesting.value = false
-  ElMessage.success('数据库连接成功！')
+function handleDownloadExcel(): void {
+  downloadExcelTemplate(templateType.value)
+  ElMessage.success('Excel 模板已下载')
 }
 
-function getFileName(): string {
-  if (activeTab.value === 'file' && uploadFileList.value.length) {
-    return uploadFileList.value[0]!.name
+function handleDownloadTxt(): void {
+  downloadTxtTemplate(templateType.value)
+  ElMessage.success('Txt 模板已下载')
+}
+
+async function beforeUpload(file: File): Promise<boolean> {
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  if (ext !== 'xlsx' && ext !== 'txt') {
+    ElMessage.error('仅支持 .xlsx（Excel）或 .txt（UTF-8 英文逗号分隔）格式')
+    return false
   }
-  if (activeTab.value === 'database' && dbForm.table) {
-    const tableLabels: Record<string, string> = {
-      t_score: 't_score（成绩表）',
-      t_attendance: 't_attendance（考勤表）',
-      t_assignment_submission: 't_assignment_submission（作业提交表）',
-      t_student: 't_student（学生表）',
+
+  if (!courseId.value) {
+    ElMessage.warning('请先选择所属课程')
+    return false
+  }
+
+  validating.value = true
+  validationErrors.value = []
+  uploadFile.value = file
+
+  try {
+    const result = await validateUploadFile(file, templateType.value)
+    validationErrors.value = result.errors
+    if (result.valid) {
+      ElMessage.success(`格式校验通过，共 ${result.rowCount} 条数据，可以上传`)
+    } else {
+      ElMessage.error(`格式校验失败，共 ${result.errors.length} 处错误，请修正后重传`)
     }
-    return tableLabels[dbForm.table] || dbForm.table
+  } finally {
+    validating.value = false
   }
-  return ''
+
+  return false
 }
 
 async function handleImport(): Promise<void> {
-  const fileName = getFileName()
-  if (!fileName) {
-    ElMessage.warning('请先选择数据源或上传文件')
+  if (!uploadFile.value) {
+    ElMessage.warning('请先上传文件')
+    return
+  }
+  if (validationErrors.value.length) {
+    ElMessage.error('请先修正格式错误后再上传')
     return
   }
 
   importing.value = true
-  importResult.value = null
-
+  const ext = uploadFile.value.name.split('.').pop()?.toLowerCase()
   const log = await executeImport({
-    importType: importType.value,
-    dataSource: activeTab.value === 'database' ? 'database' : uploadFileList.value[0]?.name.endsWith('.txt') ? 'txt' : 'excel',
-    fileName,
-    totalCount: 9868,
+    importType: templateType.value === 'qa' ? 'assignment' : templateType.value as 'score' | 'attendance' | 'assignment',
+    dataSource: ext === 'txt' ? 'txt' : 'excel',
+    fileName: uploadFile.value.name,
+    totalCount: 0,
     operatorName: userStore.userInfo?.name || '未知',
   })
 
@@ -97,26 +110,7 @@ async function handleImport(): Promise<void> {
   dataFlowStore.setLastImportResult(log)
   importHistory.value = await fetchImportLogs()
   importing.value = false
-  ElMessage.success('数据导入完成！')
-}
-
-function beforeUpload(file: File): boolean {
-  uploadFileList.value = [{ name: file.name, size: file.size }]
-  ElMessage.success(`文件 "${file.name}" 解析成功，请配置字段映射`)
-  return false
-}
-
-function selectHistoryLog(log: ImportLog): void {
-  dataFlowStore.setCurrentImportLog(log)
-  ElMessage.info(`已选中导入任务：${log.fileName}`)
-}
-
-function goToClean(): void {
-  if (importResult.value) {
-    router.push('/data/clean')
-  } else {
-    ElMessage.warning('请先完成数据导入')
-  }
+  ElMessage.success('数据上传成功！')
 }
 
 function goToManage(): void {
@@ -124,7 +118,7 @@ function goToManage(): void {
 }
 
 const statusMap: Record<number, { label: string; type: 'success' | 'warning' | 'danger' }> = {
-  0: { label: '导入中', type: 'warning' },
+  0: { label: '上传中', type: 'warning' },
   1: { label: '成功', type: 'success' },
   2: { label: '失败', type: 'danger' },
 }
@@ -134,159 +128,123 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
   <div class="page-container">
     <DataFlowNav />
 
-    <el-tabs v-model="activeTab" type="border-card" class="import-tabs">
-      <el-tab-pane label="数据库直连" name="database">
-        <template #label>
-          <span class="tab-label"><el-icon><Connection /></el-icon> 数据库直连</span>
-        </template>
+    <el-alert
+      type="info"
+      :closable="false"
+      show-icon
+      title="上传说明"
+      description="请先下载标准模板，按模板格式填写数据后上传。系统仅校验文件结构与字段是否匹配，不匹配将提示错误行号。数据由任课教师上传，仅可操作自己授课课程的数据。"
+      style="margin-bottom: 16px"
+    />
 
-        <el-form :model="dbForm" label-width="100px" style="max-width: 600px">
-          <el-form-item label="导入类型">
-            <el-select v-model="importType" style="width: 100%">
-              <el-option v-for="opt in importTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="数据库类型">
-            <el-select v-model="dbForm.type" style="width: 100%">
-              <el-option label="MySQL" value="mysql" />
-              <el-option label="PostgreSQL" value="pgsql" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="主机地址">
-            <el-input v-model="dbForm.host" placeholder="如 127.0.0.1" />
-          </el-form-item>
-          <el-form-item label="端口">
-            <el-input-number v-model="dbForm.port" :min="1" :max="65535" />
-          </el-form-item>
-          <el-form-item label="用户名">
-            <el-input v-model="dbForm.username" />
-          </el-form-item>
-          <el-form-item label="密码">
-            <el-input v-model="dbForm.password" type="password" show-password />
-          </el-form-item>
-          <el-form-item label="数据库名">
-            <el-input v-model="dbForm.database" />
-          </el-form-item>
-          <el-form-item label="目标数据表">
-            <el-select v-model="dbForm.table" placeholder="请先测试连接" :disabled="!dbConnected" style="width: 100%">
-              <el-option label="t_score（成绩表）" value="t_score" />
-              <el-option label="t_attendance（考勤表）" value="t_attendance" />
-              <el-option label="t_assignment_submission（作业提交表）" value="t_assignment_submission" />
-              <el-option label="t_student（学生表）" value="t_student" />
-            </el-select>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :loading="dbTesting" @click="testConnection">测试连接</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
+    <el-row :gutter="16">
+      <el-col :span="10">
+        <div class="content-card">
+          <div class="content-card__title">1. 下载标准模板</div>
+          <el-form label-width="90px">
+            <el-form-item label="数据类型">
+              <el-radio-group v-model="templateType">
+                <el-radio v-for="t in templateTypes" :key="t.value" :value="t.value">
+                  {{ t.label }}
+                </el-radio>
+              </el-radio-group>
+              <p class="type-desc">{{ templateTypes.find(t => t.value === templateType)?.desc }}</p>
+            </el-form-item>
+            <el-form-item label="所属课程">
+              <el-select v-model="courseId" placeholder="选择您授课的课程" style="width: 100%">
+                <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="下载模板">
+              <div class="download-btns">
+                <el-button :icon="Download" @click="handleDownloadExcel">下载 Excel 模板 (.xlsx)</el-button>
+                <el-button :icon="Download" @click="handleDownloadTxt">下载 Txt 模板 (.txt)</el-button>
+              </div>
+            </el-form-item>
+          </el-form>
+        </div>
+      </el-col>
 
-      <el-tab-pane label="文件上传" name="file">
-        <template #label>
-          <span class="tab-label"><el-icon><Upload /></el-icon> 文件上传</span>
-        </template>
+      <el-col :span="14">
+        <div class="content-card">
+          <div class="content-card__title">2. 上传填写好的文件</div>
+          <el-upload
+            drag
+            :before-upload="beforeUpload"
+            accept=".xlsx,.txt"
+            :limit="1"
+            :disabled="validating"
+          >
+            <el-icon class="el-icon--upload" :size="48"><Upload /></el-icon>
+            <div class="el-upload__text">将文件拖到此处，或 <em>点击上传</em></div>
+            <template #tip>
+              <div class="el-upload__tip">
+                仅支持 .xlsx（Excel）和 .txt（UTF-8 英文逗号分隔）格式
+              </div>
+            </template>
+          </el-upload>
 
-        <el-form label-width="100px" style="max-width: 600px; margin-bottom: 16px">
-          <el-form-item label="导入类型">
-            <el-select v-model="importType" style="width: 100%">
-              <el-option v-for="opt in importTypeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-          </el-form-item>
-        </el-form>
+          <div v-if="uploadFile" class="upload-info">
+            <el-icon><Document /></el-icon>
+            <span>{{ uploadFile.name }}</span>
+            <el-tag v-if="!validationErrors.length && !validating" type="success" size="small">校验通过</el-tag>
+            <el-tag v-else-if="validationErrors.length" type="danger" size="small">校验失败</el-tag>
+          </div>
 
-        <el-upload
-          drag
-          :before-upload="beforeUpload"
-          accept=".xlsx,.xls,.txt,.csv"
-          :file-list="uploadFileList.map(f => ({ name: f.name }))"
-          :limit="1"
-        >
-          <el-icon class="el-icon--upload" :size="48"><Document /></el-icon>
-          <div class="el-upload__text">将 Excel / Txt 文件拖到此处，或 <em>点击上传</em></div>
-          <template #tip>
-            <div class="el-upload__tip">支持 .xlsx / .xls / .txt / .csv 格式，单次不超过 10000 条</div>
-          </template>
-        </el-upload>
-      </el-tab-pane>
-    </el-tabs>
+          <div v-if="validationErrors.length" class="error-list">
+            <div class="error-title">
+              <el-icon><Warning /></el-icon>
+              格式错误（请修正后重新上传）：
+            </div>
+            <el-table :data="validationErrors.slice(0, 20)" stripe border size="small">
+              <el-table-column prop="row" label="行号" width="70" align="center" />
+              <el-table-column prop="column" label="字段" width="120" />
+              <el-table-column prop="message" label="错误说明" />
+            </el-table>
+            <p v-if="validationErrors.length > 20" class="error-more">... 还有 {{ validationErrors.length - 20 }} 处错误</p>
+          </div>
 
-    <div v-if="uploadFileList.length || dbForm.table" class="content-card" style="margin-top: 16px">
-      <div class="content-card__title">字段映射配置</div>
-      <el-table :data="fieldPreview" stripe border>
-        <el-table-column prop="source" label="源字段" />
-        <el-table-column label="映射状态" width="120" align="center">
-          <template #default="{ row }">
-            <el-tag :type="row.mapped ? 'success' : 'danger'" size="small">
-              {{ row.mapped ? '已映射' : '未映射' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="目标标准字段">
-          <template #default="{ row }">
-            <el-select v-model="row.target" style="width: 100%">
-              <el-option label="学号" value="学号" />
-              <el-option label="姓名" value="姓名" />
-              <el-option label="课程号" value="课程号" />
-              <el-option label="分数" value="分数" />
-              <el-option label="考试时间" value="考试时间" />
-            </el-select>
-          </template>
-        </el-table-column>
-      </el-table>
+          <div class="action-bar">
+            <el-button
+              type="primary"
+              :loading="importing"
+              :disabled="!uploadFile || validationErrors.length > 0"
+              @click="handleImport"
+            >
+              确认上传
+            </el-button>
+            <el-button v-if="importResult" type="success" @click="goToManage">
+              下一步：数据管理 <el-icon><Right /></el-icon>
+            </el-button>
+          </div>
 
-      <div style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 12px">
-        <el-button type="primary" :loading="importing" @click="handleImport">开始导入</el-button>
-        <el-button v-if="importResult" type="success" @click="goToClean">
-          下一步：数据清洗 <el-icon><Right /></el-icon>
-        </el-button>
-      </div>
+          <el-result v-if="importResult" icon="success" title="上传完成" style="margin-top: 16px">
+            <template #sub-title>
+              文件 <strong>{{ importResult.fileName }}</strong> 已成功导入
+            </template>
+          </el-result>
+        </div>
+      </el-col>
+    </el-row>
 
-      <el-result v-if="importResult" icon="success" title="导入完成" style="margin-top: 16px">
-        <template #sub-title>
-          文件 <strong>{{ importResult.fileName }}</strong> —
-          成功导入 <strong>{{ importResult.successCount }}</strong> 条，
-          失败 <strong style="color: #ef4444">{{ importResult.failCount }}</strong> 条
-        </template>
-      </el-result>
-    </div>
-
-    <!-- 导入历史 -->
     <div class="content-card">
-      <div class="content-card__title">导入历史记录</div>
-      <el-table :data="importHistory" stripe border highlight-current-row @row-click="selectHistoryLog">
-        <el-table-column prop="fileName" label="文件名/数据表" min-width="200">
+      <div class="content-card__title">上传历史</div>
+      <el-table :data="importHistory" stripe border>
+        <el-table-column prop="fileName" label="文件名" min-width="200">
           <template #default="{ row }">
             <el-icon style="vertical-align: -2px"><Document /></el-icon>
             {{ row.fileName }}
           </template>
         </el-table-column>
-        <el-table-column prop="importType" label="导入类型" width="110">
-          <template #default="{ row }">
-            {{ importTypeOptions.find(o => o.value === row.importType)?.label }}
-          </template>
+        <el-table-column prop="dataSource" label="格式" width="80">
+          <template #default="{ row }">{{ row.dataSource === 'excel' ? 'Excel' : 'Txt' }}</template>
         </el-table-column>
-        <el-table-column prop="dataSource" label="数据来源" width="100">
-          <template #default="{ row }">
-            {{ row.dataSource === 'database' ? '数据库' : row.dataSource === 'excel' ? 'Excel' : 'Txt' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="导入结果" width="160">
-          <template #default="{ row }">
-            成功 {{ row.successCount }} / 失败 {{ row.failCount }}
-          </template>
-        </el-table-column>
+        <el-table-column prop="successCount" label="成功条数" width="100" align="center" />
         <el-table-column prop="operatorName" label="操作人" width="100" />
-        <el-table-column prop="importTime" label="导入时间" width="170" />
+        <el-table-column prop="importTime" label="上传时间" width="170" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
             <el-tag :type="statusMap[row.status]?.type" size="small">{{ statusMap[row.status]?.label }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click.stop="selectHistoryLog(row)">选中</el-button>
-            <el-button type="success" link size="small" @click.stop="() => { selectHistoryLog(row); goToClean() }">清洗</el-button>
-            <el-button type="info" link size="small" @click.stop="goToManage">管理</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -295,15 +253,52 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
 </template>
 
 <style scoped lang="scss">
-.import-tabs {
-  border-radius: 12px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+.type-desc {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
 
-  .tab-label {
+.download-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.upload-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.error-list {
+  margin-top: 16px;
+
+  .error-title {
     display: flex;
     align-items: center;
     gap: 6px;
+    color: #ef4444;
+    font-size: 14px;
+    margin-bottom: 8px;
   }
+
+  .error-more {
+    font-size: 12px;
+    color: #94a3b8;
+    margin-top: 8px;
+  }
+}
+
+.action-bar {
+  margin-top: 16px;
+  display: flex;
+  gap: 12px;
 }
 </style>

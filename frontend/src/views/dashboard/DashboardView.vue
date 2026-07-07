@@ -1,6 +1,6 @@
 <!--
   综合数据看板页面
-  展示核心教学指标概览，支持学期/院系/年级筛选
+  面向计算机学院单课程/单班级学情概览
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
@@ -8,35 +8,41 @@ import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { dashboardStats, departmentOptions, gradeOptions, semesterOptions, dashboardFilterFactors } from '@/mock'
+import { dashboardStats, gradeOptions, semesterOptions, dashboardFilterFactors, courses } from '@/mock'
 
 const router = useRouter()
 
 const filters = ref({
   semester: '2025-2026-1',
-  department: '',
+  courseId: 1,
+  classId: 1,
   grade: '',
 })
 
-/** 根据筛选条件计算数据缩放系数 */
+const csCourses = computed(() => courses.filter((c) => c.deptId === 1))
+const csClasses = [
+  { label: '计科2401', value: 1 },
+  { label: '计科2402', value: 2 },
+  { label: '软工2401', value: 3 },
+]
+
 const filterFactor = computed(() => {
-  const deptFactor = dashboardFilterFactors.department[filters.value.department || ''] ?? 1
   const gradeFactor = dashboardFilterFactors.grade[filters.value.grade || ''] ?? 1
   const semFactor = dashboardFilterFactors.semester[filters.value.semester || ''] ?? 1
-  return deptFactor * gradeFactor * semFactor
+  return gradeFactor * semFactor * 0.35
 })
 
 const statCards = computed(() => {
   const f = filterFactor.value
   return [
-    { title: '学生总数', value: Math.round(dashboardStats.studentCount * f), icon: 'User', color: '#2563eb', trend: 2.3 },
-    { title: '课程总数', value: Math.round(dashboardStats.courseCount * f), icon: 'Notebook', color: '#6366f1', trend: 1.5 },
-    { title: '教师总数', value: Math.round(dashboardStats.teacherCount * f), icon: 'Avatar', color: '#8b5cf6', trend: 0.8 },
-    { title: '整体及格率', value: +(dashboardStats.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
+    { title: '班级学生数', value: Math.round(42 * f * 3), icon: 'User', color: '#2563eb', trend: 0 },
+    { title: '当前课程', value: csCourses.value.find((c) => c.id === filters.value.courseId)?.courseName || '—', icon: 'Notebook', color: '#6366f1' },
+    { title: '课程及格率', value: +(dashboardStats.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
     { title: '优秀率', value: +(dashboardStats.excellentRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'Star', color: '#f59e0b', trend: 1.8 },
     { title: '平均出勤率', value: +(dashboardStats.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
-    { title: '预警学生', value: Math.max(1, Math.round(dashboardStats.warningCount * f)), icon: 'Bell', color: '#ef4444', trend: -12, link: '/analysis/warning' },
-    { title: '优秀教师', value: Math.round(dashboardStats.excellentTeacherCount * f), icon: 'Trophy', color: '#ec4899' },
+    { title: '预警学生', value: Math.max(1, Math.round(12 * f)), icon: 'Bell', color: '#ef4444', trend: -12, link: '/analysis/warning' },
+    { title: '知识点薄弱项', value: 4, icon: 'Grid', color: '#8b5cf6', link: '/analysis/knowledge' },
+    { title: 'AI 练习完成率', value: 78.5, unit: '%', icon: 'EditPen', color: '#ec4899', link: '/quiz/manage' },
   ]
 })
 
@@ -53,60 +59,42 @@ const scorePieOption = computed<EChartsOption>(() => {
       itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
       label: { show: false },
       data: [
-        { name: '优秀 (90+)', value: Math.round(667 * f) },
-        { name: '良好 (80-89)', value: Math.round(854 * f) },
-        { name: '中等 (70-79)', value: Math.round(712 * f) },
-        { name: '合格 (60-69)', value: Math.round(398 * f) },
-        { name: '不合格 (<60)', value: Math.round(215 * f) },
+        { name: '优秀 (90+)', value: Math.round(12 * f) },
+        { name: '良好 (80-89)', value: Math.round(15 * f) },
+        { name: '中等 (70-79)', value: Math.round(10 * f) },
+        { name: '合格 (60-69)', value: Math.round(4 * f) },
+        { name: '不合格 (<60)', value: Math.round(3 * f) },
       ],
     }],
   }
 })
 
-const deptBarOption = computed<EChartsOption>(() => {
-  const allDepts = [
-    { name: '计算机学院', rate: 89.2, code: 'CS' },
-    { name: '数学学院', rate: 85.6, code: 'MATH' },
-    { name: '外国语学院', rate: 91.3, code: 'LANG' },
-    { name: '经管学院', rate: 83.8, code: 'ECON' },
-    { name: '物理学院', rate: 87.1, code: 'PHYS' },
-  ]
-  const filtered = filters.value.department
-    ? allDepts.filter((d) => d.code === filters.value.department)
-    : allDepts
-  const semAdjust = (dashboardFilterFactors.semester[filters.value.semester] ?? 1) * 0.02
-
-  return {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 50, right: 20, top: 30, bottom: 30 },
-    xAxis: {
-      type: 'category',
-      data: filtered.map((d) => d.name),
-      axisLabel: { color: '#64748b' },
-    },
-    yAxis: {
-      type: 'value',
-      max: 100,
-      axisLabel: { color: '#64748b', formatter: '{value}%' },
-    },
-    series: [{
-      type: 'bar',
-      data: filtered.map((d) => +(d.rate * (1 + semAdjust)).toFixed(1)),
-      barWidth: 32,
-      itemStyle: {
-        borderRadius: [6, 6, 0, 0],
-        color: {
-          type: 'linear',
-          x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [
-            { offset: 0, color: '#2563eb' },
-            { offset: 1, color: '#93c5fd' },
-          ],
-        },
+const knowledgeBarOption = computed<EChartsOption>(() => ({
+  tooltip: { trigger: 'axis' },
+  grid: { left: 100, right: 20, top: 30, bottom: 30 },
+  xAxis: {
+    type: 'value',
+    max: 100,
+    axisLabel: { color: '#64748b', formatter: '{value}%' },
+  },
+  yAxis: {
+    type: 'category',
+    data: ['面向对象', '异常处理', '文件IO', '控制结构', '函数定义', '数组操作'],
+    axisLabel: { color: '#64748b' },
+  },
+  series: [{
+    type: 'bar',
+    data: [62, 66, 70, 78, 82, 85],
+    barWidth: 16,
+    itemStyle: {
+      borderRadius: [0, 4, 4, 0],
+      color: (params: { dataIndex: number }) => {
+        const val = [62, 66, 70, 78, 82, 85][params.dataIndex]!
+        return val < 70 ? '#ef4444' : val < 80 ? '#f59e0b' : '#10b981'
       },
-    }],
-  }
-})
+    },
+  }],
+}))
 
 const trendLineOption = computed<EChartsOption>(() => {
   const semFactor = dashboardFilterFactors.semester[filters.value.semester] ?? 1
@@ -156,15 +144,18 @@ function handleStatClick(item: { link?: string }): void {
   <div class="page-container dashboard-page">
     <div class="content-card">
       <div class="filter-bar">
-        <span class="filter-label">数据筛选：</span>
+        <span class="filter-label">计算机学院 · </span>
         <el-select v-model="filters.semester" placeholder="选择学期" style="width: 220px">
           <el-option v-for="item in semesterOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-select v-model="filters.department" placeholder="选择院系" clearable style="width: 160px">
-          <el-option v-for="item in departmentOptions" :key="item.value" :label="item.label" :value="item.value" />
+        <el-select v-model="filters.courseId" placeholder="选择课程" style="width: 160px">
+          <el-option v-for="c in csCourses" :key="c.id" :label="c.courseName" :value="c.id" />
         </el-select>
-        <el-select v-model="filters.grade" placeholder="选择年级" clearable style="width: 140px">
-          <el-option v-for="item in gradeOptions" :key="item.value" :label="item.label" :value="item.value" />
+        <el-select v-model="filters.classId" placeholder="选择班级" style="width: 140px">
+          <el-option v-for="c in csClasses" :key="c.value" :label="c.label" :value="c.value" />
+        </el-select>
+        <el-select v-model="filters.grade" placeholder="选择年级" clearable style="width: 120px">
+          <el-option v-for="item in gradeOptions.filter(g => g.value)" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </div>
     </div>
@@ -182,19 +173,19 @@ function handleStatClick(item: { link?: string }): void {
     <el-row :gutter="16">
       <el-col :xs="24" :lg="8">
         <div class="content-card">
-          <div class="content-card__title">成绩等级分布</div>
+          <div class="content-card__title">班级成绩等级分布</div>
           <BaseChart :option="scorePieOption" height="320px" />
         </div>
       </el-col>
       <el-col :xs="24" :lg="8">
         <div class="content-card">
-          <div class="content-card__title">各院系及格率对比</div>
-          <BaseChart :option="deptBarOption" height="320px" />
+          <div class="content-card__title">课程知识点掌握度</div>
+          <BaseChart :option="knowledgeBarOption" height="320px" />
         </div>
       </el-col>
       <el-col :xs="24" :lg="8">
         <div class="content-card">
-          <div class="content-card__title">质量指标趋势</div>
+          <div class="content-card__title">课程质量趋势</div>
           <BaseChart :option="trendLineOption" height="320px" />
         </div>
       </el-col>

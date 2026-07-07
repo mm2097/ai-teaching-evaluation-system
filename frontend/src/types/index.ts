@@ -3,10 +3,10 @@
  */
 
 /** 用户角色枚举 */
-export type UserRole = 'admin' | 'manager' | 'teacher' | 'student'
+export type UserRole = 'admin' | 'teacher' | 'student'
 
 /** 分析/评价对象类型（对应 t_analysis_result.target_type） */
-export type TargetType = 'student' | 'class' | 'course' | 'teacher'
+export type TargetType = 'student' | 'class'
 
 /** 数据导入类型（对应 sys_data_import_log.import_type） */
 export type ImportType = 'student' | 'course' | 'score' | 'attendance' | 'assignment'
@@ -142,25 +142,80 @@ export interface AnalysisQuery {
   deptId?: number
   majorId?: number
   classId?: number
+  keyword?: string
 }
 
-/** 学情画像数据 */
+/** 学情画像数据（单课程维度） */
 export interface StudentProfileData {
   studentId: number
   studentNo: string
   studentName: string
   className: string
+  courseName: string
   tags: string[]
   radarValues: number[]
   dimensionScores: { name: string; score: number; desc: string }[]
-  strengths: string
-  weaknesses: string
+  strongPoints: string
+  weakPoints: string
+}
+
+/** 数据模板类型 */
+export type DataTemplateType = 'score' | 'attendance' | 'assignment' | 'qa'
+
+/** 文件校验错误 */
+export interface ValidationError {
+  row: number
+  column: string
+  message: string
+}
+
+/** 题目类型 */
+export type QuestionType = 'single' | 'multiple' | 'fill' | 'short'
+
+/** AI 练习题 */
+export interface QuizQuestion {
+  id: number
+  type: QuestionType
+  content: string
+  options?: string[]
+  answer: string | string[]
+  knowledgePoint: string
+  score: number
+}
+
+/** 练习发布记录 */
+export interface QuizAssignment {
+  id: number
+  title: string
+  courseId: number
+  courseName: string
+  classId: number
+  className: string
+  teacherName: string
+  knowledgePoints: string[]
+  questionCount: number
+  totalScore: number
+  status: 'draft' | 'published' | 'closed'
+  publishTime?: string
+  deadline?: string
+  questions: QuizQuestion[]
+}
+
+/** 学生答题记录 */
+export interface QuizSubmission {
+  id: number
+  assignmentId: number
+  studentId: number
+  studentName: string
+  score: number
+  totalScore: number
+  submitTime: string
+  answers: Record<number, string | string[]>
 }
 
 /** 角色中文名称映射 */
 export const RoleLabels: Record<UserRole, string> = {
   admin: '系统管理员',
-  manager: '教学管理者',
   teacher: '任课教师',
   student: '学生用户',
 }

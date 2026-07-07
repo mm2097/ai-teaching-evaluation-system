@@ -1,11 +1,10 @@
 <!--
   AI 分析筛选栏
-  根据用户角色展示不同的 target_type 及级联筛选条件
+  单课程/单班级维度筛选，支持学生模糊搜索
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref } from 'vue'
 import { targetTypeOptions } from '@/api/analysis'
-import { departmentOptions } from '@/mock'
 import type { TargetType } from '@/types'
 
 const props = defineProps<{
@@ -18,6 +17,7 @@ const props = defineProps<{
   showCourseFilter: boolean
   showTargetTypeFilter: boolean
   showStudentPicker: boolean
+  enableStudentSearch?: boolean
   deptId?: number
   classId?: number
   courseId?: number
@@ -34,15 +34,21 @@ const emit = defineEmits<{
   'update:classId': [value: number | undefined]
   'update:courseId': [value: number | undefined]
   'update:targetId': [value: number | undefined]
+  'student-search': [keyword: string]
 }>()
 
-const filteredTargetTypes = computed(() =>
-  targetTypeOptions.filter((o) => props.allowedTargetTypes.includes(o.value)),
+const studentSearchLoading = ref(false)
+
+const filteredTargetTypes = targetTypeOptions.filter((o) =>
+  props.allowedTargetTypes.includes(o.value),
 )
 
-const deptSelectOptions = computed(() =>
-  departmentOptions.filter((d) => d.value !== ''),
-)
+async function handleStudentSearch(keyword: string): Promise<void> {
+  if (!props.enableStudentSearch) return
+  studentSearchLoading.value = true
+  emit('student-search', keyword)
+  studentSearchLoading.value = false
+}
 </script>
 
 <template>
@@ -77,23 +83,7 @@ const deptSelectOptions = computed(() =>
     </el-select>
 
     <el-select
-      v-if="showDeptFilter"
-      :model-value="deptId"
-      placeholder="院系"
-      clearable
-      style="width: 160px"
-      @update:model-value="emit('update:deptId', $event)"
-    >
-      <el-option
-        v-for="opt in deptSelectOptions"
-        :key="opt.id"
-        :label="opt.label"
-        :value="opt.id"
-      />
-    </el-select>
-
-    <el-select
-      v-if="showClassFilter && targetType !== 'teacher'"
+      v-if="showClassFilter"
       :model-value="classId"
       placeholder="班级"
       clearable
@@ -125,7 +115,26 @@ const deptSelectOptions = computed(() =>
     </el-select>
 
     <el-select
-      v-if="showStudentPicker"
+      v-if="showStudentPicker && enableStudentSearch"
+      :model-value="targetId"
+      placeholder="搜索学生（姓名/学号）"
+      filterable
+      remote
+      :remote-method="handleStudentSearch"
+      :loading="studentSearchLoading"
+      style="width: 240px"
+      @update:model-value="emit('update:targetId', $event)"
+    >
+      <el-option
+        v-for="opt in targetOptions"
+        :key="opt.value"
+        :label="opt.label"
+        :value="opt.value"
+      />
+    </el-select>
+
+    <el-select
+      v-else-if="showStudentPicker"
       :model-value="targetId"
       placeholder="选择学生"
       style="width: 200px"
@@ -143,6 +152,6 @@ const deptSelectOptions = computed(() =>
 
 <style scoped lang="scss">
 .analysis-filter {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 </style>

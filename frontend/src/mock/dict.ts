@@ -5,23 +5,17 @@ import type { ClassInfo, Course, Department, Major, Semester, Student, StudentPr
 
 export const departments: Department[] = [
   { id: 1, deptCode: 'CS', deptName: '计算机学院' },
-  { id: 2, deptCode: 'MATH', deptName: '数学学院' },
-  { id: 3, deptCode: 'LANG', deptName: '外国语学院' },
-  { id: 4, deptCode: 'ECON', deptName: '经济管理学院' },
 ]
 
 export const majors: Major[] = [
   { id: 1, majorCode: 'CS01', majorName: '计算机科学与技术', deptId: 1 },
   { id: 2, majorCode: 'SE01', majorName: '软件工程', deptId: 1 },
-  { id: 3, majorCode: 'MATH01', majorName: '数学与应用数学', deptId: 2 },
-  { id: 4, majorCode: 'ECON01', majorName: '工商管理', deptId: 4 },
 ]
 
 export const classes: ClassInfo[] = [
   { id: 1, classCode: 'CS2401', className: '计科2401', majorId: 1, deptId: 1, grade: '2024' },
   { id: 2, classCode: 'CS2402', className: '计科2402', majorId: 1, deptId: 1, grade: '2024' },
   { id: 3, classCode: 'SE2401', className: '软工2401', majorId: 2, deptId: 1, grade: '2024' },
-  { id: 4, classCode: 'MATH2401', className: '数学2401', majorId: 3, deptId: 2, grade: '2024' },
 ]
 
 export const semesters: Semester[] = [
@@ -32,7 +26,6 @@ export const semesters: Semester[] = [
 
 export const teachers: Teacher[] = [
   { id: 1, teacherNo: 'T001', teacherName: '王教授', deptId: 1 },
-  { id: 2, teacherNo: 'T002', teacherName: '李副教授', deptId: 2 },
   { id: 3, teacherNo: 'T003', teacherName: '张讲师', deptId: 1 },
 ]
 
@@ -40,7 +33,8 @@ export const courses: Course[] = [
   { id: 1, courseNo: 'CS101', courseName: '数据结构', deptId: 1, teacherId: 1, semesterId: 1 },
   { id: 2, courseNo: 'CS102', courseName: '操作系统', deptId: 1, teacherId: 1, semesterId: 1 },
   { id: 3, courseNo: 'CS103', courseName: '计算机网络', deptId: 1, teacherId: 3, semesterId: 1 },
-  { id: 4, courseNo: 'MATH201', courseName: '高等数学', deptId: 2, teacherId: 2, semesterId: 1 },
+  { id: 4, courseNo: 'CS104', courseName: 'Java程序设计', deptId: 1, teacherId: 1, semesterId: 1 },
+  { id: 5, courseNo: 'CS105', courseName: '数据库原理', deptId: 1, teacherId: 3, semesterId: 1 },
 ]
 
 export const students: Student[] = [
@@ -61,10 +55,9 @@ export const semesterOptions = semesters.map((s) => ({
   id: s.id,
 }))
 
-/** 院系下拉选项 */
+/** 院系下拉选项（仅计算机学院） */
 export const departmentOptions = [
-  { label: '全部院系', value: '', id: 0 },
-  ...departments.map((d) => ({ label: d.deptName, value: d.deptCode, id: d.id })),
+  { label: '计算机学院', value: 'CS', id: 1 },
 ]
 
 /** 年级下拉选项 */
@@ -92,70 +85,66 @@ export const dataTypeLabels: Record<string, string> = {
   assignment: '作业',
 }
 
-/** 各学生学情画像数据 */
+/** 各学生学情画像数据（单课程维度） */
 export const studentProfiles: StudentProfileData[] = [
   {
     studentId: 1,
     studentNo: '2024001001',
     studentName: '陈同学',
     className: '计科2401',
+    courseName: '数据结构',
     tags: ['成绩优秀', '进步明显', '考勤良好', '作业积极'],
     radarValues: [85, 72, 88, 76, 80],
     dimensionScores: [
-      { name: '学业水平', score: 85, desc: '各科目加权平均分处于班级前 20%' },
+      { name: '学业水平', score: 85, desc: '本课程成绩 92 分，处于班级前 20%' },
       { name: '学习态度', score: 72, desc: '出勤率 88%，作业提交率 92%' },
-      { name: '学习进步', score: 88, desc: '近三次考试平均分提升 12 分' },
+      { name: '学习进步', score: 88, desc: '近三次测验平均分提升 12 分' },
       { name: '知识掌握', score: 76, desc: '核心知识点平均掌握度 76%' },
-      { name: '课堂参与', score: 80, desc: '课堂互动频次高于班级均值' },
+      { name: '课堂参与', score: 80, desc: '课堂问答正确率 85%，高于班级均值' },
     ],
-    strengths: '数据结构 (92分)、计算机网络 (88分)',
-    weaknesses: '操作系统 (68分)、编译原理 (72分)',
+    strongPoints: '链表操作 (95%)、二叉树遍历 (92%)、栈与队列 (88%)',
+    weakPoints: '面向对象 (65%)、异常处理 (72%)',
   },
   {
     studentId: 2,
     studentNo: '2024001002',
     studentName: '刘同学',
     className: '计科2401',
+    courseName: '数据结构',
     tags: ['态度良好', '需加强练习'],
     radarValues: [70, 78, 65, 68, 72],
     dimensionScores: [
-      { name: '学业水平', score: 70, desc: '各科目加权平均分处于班级中游' },
+      { name: '学业水平', score: 70, desc: '本课程成绩 78 分，处于班级中游' },
       { name: '学习态度', score: 78, desc: '出勤率 92%，作业提交率 85%' },
-      { name: '学习进步', score: 65, desc: '近三次考试平均分波动较小' },
+      { name: '学习进步', score: 65, desc: '近三次测验平均分波动较小' },
       { name: '知识掌握', score: 68, desc: '核心知识点平均掌握度 68%' },
-      { name: '课堂参与', score: 72, desc: '课堂互动频次接近班级均值' },
+      { name: '课堂参与', score: 72, desc: '课堂问答正确率 70%，接近班级均值' },
     ],
-    strengths: '计算机网络 (82分)',
-    weaknesses: '数据结构 (72分)、操作系统 (65分)',
+    strongPoints: '控制结构 (82%)、数组操作 (80%)',
+    weakPoints: '面向对象 (58%)、文件IO (62%)、异常处理 (65%)',
   },
   {
     studentId: 3,
     studentNo: '2024001003',
     studentName: '赵同学',
     className: '计科2401',
+    courseName: '数据结构',
     tags: ['成绩优秀', '知识扎实'],
     radarValues: [90, 85, 82, 88, 86],
     dimensionScores: [
-      { name: '学业水平', score: 90, desc: '各科目加权平均分处于班级前 5%' },
+      { name: '学业水平', score: 90, desc: '本课程成绩 95 分，处于班级前 5%' },
       { name: '学习态度', score: 85, desc: '出勤率 95%，作业提交率 98%' },
-      { name: '学习进步', score: 82, desc: '近三次考试平均分稳步提升' },
+      { name: '学习进步', score: 82, desc: '近三次测验平均分稳步提升' },
       { name: '知识掌握', score: 88, desc: '核心知识点平均掌握度 88%' },
-      { name: '课堂参与', score: 86, desc: '课堂互动频次显著高于班级均值' },
+      { name: '课堂参与', score: 86, desc: '课堂问答正确率 92%，显著高于班级均值' },
     ],
-    strengths: '数据结构 (95分)、操作系统 (90分)',
-    weaknesses: '暂无显著薄弱项',
+    strongPoints: '链表操作 (98%)、二叉树遍历 (95%)、栈与队列 (90%)',
+    weakPoints: '暂无显著薄弱项',
   },
 ]
 
-/** 看板按院系/年级的统计系数（用于筛选联动演示） */
+/** 看板按年级/学期的统计系数 */
 export const dashboardFilterFactors = {
-  department: {
-    '': 1,
-    CS: 0.42,
-    MATH: 0.22,
-    LANG: 0.18,
-    ECON: 0.18,
-  } as Record<string, number>,
   grade: {
     '': 1,
     '2024': 0.55,

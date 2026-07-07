@@ -12,9 +12,9 @@ import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
 const scope = useAnalysisScope('class')
 const {
-  allowedTargetTypes, targetType, semesterId, deptId, classId, courseId, targetId,
+  allowedTargetTypes, targetType, semesterId, classId, courseId, targetId,
   semesterOptions, classOptions, courseOptions, targetOptions,
-  showDeptFilter, showClassFilter, showCourseFilter, showTargetTypeFilter, showStudentPicker,
+  showClassFilter, showCourseFilter, showTargetTypeFilter, showStudentPicker,
   queryParams,
 } = scope
 
@@ -71,16 +71,14 @@ const predictions = [
 ]
 
 const classFeatures = [
-  { title: '整体水平', content: '班级平均分 78.6，高于年级均值 3.2 分，整体表现良好' },
+  { title: '整体水平', content: '本课程班级平均分 78.6，整体表现良好' },
   { title: '分化程度', content: '标准差 12.8，存在一定程度的两极分化，需关注低分群体' },
-  { title: '偏科现象', content: '操作系统科目平均分偏低 (65.3)，为该班主要薄弱项' },
+  { title: '薄弱知识点', content: '面向对象、异常处理掌握度偏低，建议加强针对性练习' },
 ]
 
-const chartTitle = computed(() => {
-  if (targetType.value === 'student') return '个人成绩趋势'
-  if (targetType.value === 'course') return '课程成绩趋势'
-  return '班级成绩趋势'
-})
+const chartTitle = computed(() =>
+  targetType.value === 'student' ? '个人成绩趋势' : '本课程班级成绩趋势',
+)
 </script>
 
 <template>
@@ -89,13 +87,12 @@ const chartTitle = computed(() => {
       <AnalysisFilterBar
         v-model:target-type="targetType"
         v-model:semester-id="semesterId"
-        v-model:dept-id="deptId"
         v-model:class-id="classId"
         v-model:course-id="courseId"
         v-model:target-id="targetId"
         :allowed-target-types="allowedTargetTypes"
         :semester-options="semesterOptions"
-        :show-dept-filter="showDeptFilter"
+        :show-dept-filter="false"
         :show-class-filter="showClassFilter"
         :show-course-filter="showCourseFilter"
         :show-target-type-filter="showTargetTypeFilter"

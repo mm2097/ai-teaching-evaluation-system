@@ -1,6 +1,6 @@
 <!--
   学生学情画像分析页面
-  展示多维度学情雷达图、标签与优劣势分析
+  单课程维度学情雷达图、标签与知识点优劣势
 -->
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
@@ -17,20 +17,20 @@ const {
   allowedTargetTypes,
   targetType,
   semesterId,
-  deptId,
   classId,
   courseId,
   targetId,
+  studentKeyword,
   semesterOptions,
   classOptions,
   courseOptions,
   targetOptions,
-  showDeptFilter,
   showClassFilter,
   showCourseFilter,
   showTargetTypeFilter,
   showStudentPicker,
   queryParams,
+  loadStudentOptions,
 } = scope
 
 const profileData = ref<StudentProfileData | null>(null)
@@ -47,7 +47,7 @@ watch(() => queryParams.value, loadProfile, { deep: true, immediate: true })
 const studentName = computed(() => profileData.value?.studentName || '加载中...')
 const studentInfo = computed(() =>
   profileData.value
-    ? `学号：${profileData.value.studentNo} · ${profileData.value.className}`
+    ? `学号：${profileData.value.studentNo} · ${profileData.value.className} · ${profileData.value.courseName}`
     : '',
 )
 
@@ -77,6 +77,11 @@ const radarOption = computed<EChartsOption>(() => ({
 
 const dimensionScores = computed(() => profileData.value?.dimensionScores || [])
 const studentTags = computed(() => profileData.value?.tags || [])
+
+async function handleStudentSearch(keyword: string): Promise<void> {
+  studentKeyword.value = keyword
+  await loadStudentOptions(keyword)
+}
 </script>
 
 <template>
@@ -85,20 +90,21 @@ const studentTags = computed(() => profileData.value?.tags || [])
       <AnalysisFilterBar
         v-model:target-type="targetType"
         v-model:semester-id="semesterId"
-        v-model:dept-id="deptId"
         v-model:class-id="classId"
         v-model:course-id="courseId"
         v-model:target-id="targetId"
         :allowed-target-types="allowedTargetTypes"
         :semester-options="semesterOptions"
-        :show-dept-filter="showDeptFilter"
+        :show-dept-filter="false"
         :show-class-filter="showClassFilter"
         :show-course-filter="showCourseFilter"
         :show-target-type-filter="showTargetTypeFilter"
         :show-student-picker="showStudentPicker"
+        :enable-student-search="true"
         :class-options="classOptions"
         :course-options="courseOptions"
         :target-options="targetOptions"
+        @student-search="handleStudentSearch"
       />
     </div>
 
@@ -120,12 +126,12 @@ const studentTags = computed(() => profileData.value?.tags || [])
           <el-divider />
           <div class="strength-weakness">
             <div class="sw-item success">
-              <h4>优势科目</h4>
-              <p>{{ profileData?.strengths || '-' }}</p>
+              <h4>优势知识点</h4>
+              <p>{{ profileData?.strongPoints || '-' }}</p>
             </div>
             <div class="sw-item danger">
-              <h4>薄弱科目</h4>
-              <p>{{ profileData?.weaknesses || '-' }}</p>
+              <h4>薄弱知识点</h4>
+              <p>{{ profileData?.weakPoints || '-' }}</p>
             </div>
           </div>
         </div>
@@ -133,7 +139,7 @@ const studentTags = computed(() => profileData.value?.tags || [])
 
       <el-col :xs="24" :lg="8">
         <div class="content-card">
-          <div class="content-card__title">多维度学情雷达图</div>
+          <div class="content-card__title">本课程学情雷达图</div>
           <BaseChart :option="radarOption" height="340px" />
         </div>
       </el-col>

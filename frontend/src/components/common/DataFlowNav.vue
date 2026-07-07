@@ -1,22 +1,20 @@
 <!--
   数据采集流程导航条
-  在「多源数据接入 → 数据清洗 → 数据管理」页面间提供跳转与当前文件名展示
+  在「模板上传 → 数据管理」页面间提供跳转
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowRight, Document, Connection } from '@element-plus/icons-vue'
+import { ArrowRight, Document } from '@element-plus/icons-vue'
 import { useDataFlowStore } from '@/stores/dataFlow'
-import { dataTypeLabels, importTypeOptions } from '@/mock'
 
 const route = useRoute()
 const router = useRouter()
 const dataFlowStore = useDataFlowStore()
 
 const steps = [
-  { path: '/data/import', title: '多源数据接入', step: 1 },
-  { path: '/data/clean', title: '数据清洗', step: 2 },
-  { path: '/data/manage', title: '数据管理', step: 3 },
+  { path: '/data/import', title: '模板上传', step: 1 },
+  { path: '/data/manage', title: '数据管理', step: 2 },
 ]
 
 const currentStep = computed(() => {
@@ -25,11 +23,6 @@ const currentStep = computed(() => {
 })
 
 const currentLog = computed(() => dataFlowStore.currentImportLog)
-
-const importTypeLabel = computed(() => {
-  if (!currentLog.value) return ''
-  return importTypeOptions.find((o) => o.value === currentLog.value!.importType)?.label || currentLog.value.importType
-})
 
 function goTo(path: string): void {
   router.push(path)
@@ -56,17 +49,10 @@ function goTo(path: string): void {
       <el-icon><Document /></el-icon>
       <span class="context-label">当前数据文件：</span>
       <el-tag type="primary" effect="plain">{{ currentLog.fileName }}</el-tag>
-      <el-tag size="small">{{ importTypeLabel }}</el-tag>
-      <el-tag size="small" type="info">
-        <el-icon style="vertical-align: -2px"><Connection /></el-icon>
-        {{ currentLog.dataSource === 'database' ? '数据库' : currentLog.dataSource === 'excel' ? 'Excel' : 'Txt' }}
-      </el-tag>
-      <span class="context-stat">
-        成功 {{ currentLog.successCount }} / 失败 {{ currentLog.failCount }}
-      </span>
+      <span class="context-stat">成功 {{ currentLog.successCount }} 条</span>
     </div>
     <div v-else class="flow-context empty">
-      <span>尚未选择导入任务，请先在「多源数据接入」完成数据导入</span>
+      <span>尚未上传数据，请先在「模板上传」下载模板并上传文件</span>
     </div>
   </div>
 </template>

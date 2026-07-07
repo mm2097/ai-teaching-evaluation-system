@@ -3,15 +3,22 @@
   展示清洗流程与数据质量报告
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Right } from '@element-plus/icons-vue'
+import DataFlowNav from '@/components/common/DataFlowNav.vue'
+import { useDataFlowStore } from '@/stores/dataFlow'
 import { delay } from '@/utils/auth'
 
-/** 清洗任务执行状态 */
-const cleaning = ref(false)
-const cleaned = ref(false)
+const router = useRouter()
+const dataFlowStore = useDataFlowStore()
 
-/** 清洗步骤进度 */
+const cleaning = ref(false)
+const cleaned = ref(dataFlowStore.cleaningCompleted)
+
+const sourceFileName = computed(() => dataFlowStore.currentImportLog?.fileName || '未关联导入文件')
+
 const steps = ref([
   { title: '重复数据检测', desc: '基于学号、课程号去重', status: 'wait', count: 0 },
   { title: '缺失值处理', desc: '标记并填充关键字段缺失', status: 'wait', count: 0 },
@@ -19,30 +26,31 @@ const steps = ref([
   { title: '异常值识别', desc: '识别超范围成绩与异常考勤', status: 'wait', count: 0 },
 ])
 
-/** 异常数据清单 */
 const anomalyList = ref([
-  { id: 1, type: '成绩异常', field: '分数', value: '105', reason: '分数超出合理范围 (0-100)', studentId: '2024001012' },
-  { id: 2, type: '缺失值', field: '学号', value: '空', reason: '关键字段缺失', studentId: '-' },
-  { id: 3, type: '重复记录', field: '学号+课程号', value: '2024001001+CS101', reason: '存在重复导入记录', studentId: '2024001001' },
-  { id: 4, type: '格式错误', field: '考试时间', value: '2025/13/32', reason: '日期格式无效', studentId: '2024001023' },
+  { id: 1, type: '成绩异常', field: '分数', value: '105', reason: '分数超出合理范围 (0-100)', studentId: '2024001012', sourceFile: sourceFileName.value },
+  { id: 2, type: '缺失值', field: '学号', value: '空', reason: '关键字段缺失', studentId: '-', sourceFile: sourceFileName.value },
+  { id: 3, type: '重复记录', field: '学号+课程号', value: '2024001001+CS101', reason: '存在重复导入记录', studentId: '2024001001', sourceFile: sourceFileName.value },
+  { id: 4, type: '格式错误', field: '考试时间', value: '2025/13/32', reason: '日期格式无效', studentId: '2024001023', sourceFile: sourceFileName.value },
 ])
 
-/** 数据质量报告 */
-const qualityReport = ref({
-  totalRecords: 9868,
+const qualityReport = computed(() => ({
+  totalRecords: dataFlowStore.currentImportLog?.successCount || 9868,
   duplicateRemoved: 45,
   missingMarked: 23,
   formatFixed: 156,
   anomalyDetected: 18,
   qualityScore: 96.8,
-})
+}))
 
-/**
- * 执行数据清洗流程
- */
 async function startCleaning(): Promise<void> {
+  if (!dataFlowStore.currentImportLog) {
+    ElMessage.warning('请先在「多源数据接入」选择或完成一次数据导入')
+    return
+  }
+
   cleaning.value = true
   cleaned.value = false
+  steps.value.forEach((s) => { s.status = 'wait'; s.count = 0 })
 
   const results = [45, 23, 156, 18]
   for (let i = 0; i < steps.value.length; i++) {
@@ -54,15 +62,35 @@ async function startCleaning(): Promise<void> {
 
   cleaning.value = false
   cleaned.value = true
+  dataFlowStore.markCleaningCompleted()
   ElMessage.success('数据清洗完成！')
+}
+
+function goToManage(): void {
+  router.push('/data/manage')
 }
 </script>
 
 <template>
   <div class="page-container">
-    <!-- 清洗操作区 -->
+    <DataFlowNav />
+
     <div class="content-card">
       <div class="content-card__title">数据清洗流程</div>
+      <el-alert
+        v-if="dataFlowStore.currentImportLog"
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+      >
+        正在清洗来源文件：<strong>{{ sourceFileName }}</strong>
+        （{{ dataFlowStore.currentImportLog.successCount }} 条记录）
+      </el-alert>
+      <el-alert v-else type="warning" :closable="false" show-icon style="margin-bottom: 16px">
+        尚未关联导入文件，请返回「多源数据接入」完成导入或从历史记录中选择
+      </el-alert>
+
       <el-steps :active="cleaned ? 4 : (cleaning ? -1 : 0)" finish-status="success" align-center>
         <el-step
           v-for="step in steps"
@@ -73,13 +101,15 @@ async function startCleaning(): Promise<void> {
         />
       </el-steps>
       <div style="text-align: center; margin-top: 24px">
-        <el-button type="primary" size="large" :loading="cleaning" @click="startCleaning">
+        <el-button type="primary" size="large" :loading="cleaning" :disabled="!dataFlowStore.currentImportLog" @click="startCleaning">
           {{ cleaning ? '清洗中...' : '开始清洗' }}
+        </el-button>
+        <el-button v-if="cleaned" type="success" size="large" @click="goToManage">
+          下一步：数据管理 <el-icon><Right /></el-icon>
         </el-button>
       </div>
     </div>
 
-    <!-- 数据质量报告 -->
     <div v-if="cleaned" class="content-card">
       <div class="content-card__title">数据质量报告</div>
       <el-row :gutter="16">
@@ -104,10 +134,10 @@ async function startCleaning(): Promise<void> {
       </el-row>
     </div>
 
-    <!-- 异常数据清单 -->
     <div class="content-card">
       <div class="content-card__title">异常数据清单</div>
       <el-table :data="anomalyList" stripe border>
+        <el-table-column prop="sourceFile" label="来源文件" width="200" show-overflow-tooltip />
         <el-table-column prop="type" label="异常类型" width="120">
           <template #default="{ row }">
             <el-tag size="small" :type="row.type === '成绩异常' ? 'danger' : 'warning'">{{ row.type }}</el-tag>

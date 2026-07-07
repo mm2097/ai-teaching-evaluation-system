@@ -6,26 +6,29 @@
 import { ref, computed } from 'vue'
 import { systemLogList } from '@/mock'
 
-/** 筛选条件 */
 const filters = ref({
   username: '',
   type: '',
-  dateRange: [] as string[],
+  dateRange: [] as [Date, Date] | [],
 })
 
-/** 日志类型选项 */
 const logTypes = ['登录', '数据操作', '查询', '导出', '配置修改']
 
-/** 筛选后的日志 */
 const filteredLogs = computed(() => {
   return systemLogList.filter((log) => {
     if (filters.value.username && !log.username.includes(filters.value.username)) return false
     if (filters.value.type && log.type !== filters.value.type) return false
+    if (filters.value.dateRange && filters.value.dateRange.length === 2) {
+      const logDate = new Date(log.time.replace(/-/g, '/'))
+      const [start, end] = filters.value.dateRange
+      const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+      const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59)
+      if (logDate < startDay || logDate > endDay) return false
+    }
     return true
   })
 })
 
-/** 日志类型 Tag 颜色映射 */
 function logTypeTag(type: string): 'success' | 'primary' | 'warning' | 'info' | 'danger' {
   const map: Record<string, 'success' | 'primary' | 'warning' | 'info' | 'danger'> = {
     登录: 'success',

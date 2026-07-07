@@ -15,6 +15,17 @@ export interface UserInfo {
   avatar?: string
 }
 
+/** 系统用户(用户管理页面用) */
+export interface SystemUser {
+  id: number
+  username: string
+  name: string
+  role: UserRole
+  department: string
+  status: boolean
+  createTime: string
+}
+
 /** 角色中文名称映射 */
 export const RoleLabels: Record<UserRole, string> = {
   admin: '系统管理员',

@@ -13,7 +13,7 @@ import argparse
 from sqlmodel import Session, SQLModel
 
 from app.core.database import engine, init_db
-# from app.models import User  # ← 写好 User model 后,在这里取消注释
+from app.models import User
 
 
 def reset() -> None:
@@ -27,21 +27,21 @@ def seed() -> None:
     """灌入演示数据。"""
     init_db()  # 表不存在时自动创建
     with Session(engine) as session:
-        # ====== 在这里插入演示数据 ======
-        #
-        # 示例:假设你定义了 User model
-        #
-        # from app.models import User
-        # session.add(User(username="teacher01", password="123456", name="张老师", role="teacher"))
-        # session.add(User(username="admin",     password="123456", name="管理员",  role="admin"))
-        # session.commit()
-        #
-        # 插入完后可以查一下:
-        # users = session.exec(select(User)).all()
-        # print(f"  共 {len(users)} 个用户")
-        #
-        # ====== 结束 ======
-        pass
+        # ====== 演示数据 ======
+        users = [
+            User(username="admin", password="123456", name="张管理", role="admin", department="信息中心", status=True),
+            User(username="manager", password="123456", name="李教务", role="manager", department="教务处", status=True),
+            User(username="teacher", password="123456", name="王教授", role="teacher", department="计算机学院", status=True),
+            User(username="teacher2", password="123456", name="李副教授", role="teacher", department="数学学院", status=False),
+            User(username="student", password="123456", name="陈同学", role="student", department="计算机学院", status=True),
+        ]
+        session.add_all(users)
+        session.commit()
+
+        # 确认一下
+        from sqlmodel import select
+        all_users = session.exec(select(User)).all()
+        print(f"  共 {len(all_users)} 个用户: {[u.username for u in all_users]}")
     print("[seed] 演示数据已灌入")
 
 

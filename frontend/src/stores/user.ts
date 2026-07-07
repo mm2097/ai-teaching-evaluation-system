@@ -6,8 +6,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { UserInfo, UserRole } from '@/types'
 import { RoleLabels } from '@/types'
-import { mockUsers } from '@/mock'
-import { clearAuth, delay, getStoredUser, getToken, setStoredUser, setToken } from '@/utils/auth'
+import { authApi } from '@/api/auth'
+import { clearAuth, getStoredUser, getToken, setStoredUser, setToken } from '@/utils/auth'
 import { filterMenusByRole, menuList } from '@/config/menu'
 
 export const useUserStore = defineStore('user', () => {
@@ -38,17 +38,15 @@ export const useUserStore = defineStore('user', () => {
    * @param password 密码
    */
   async function login(username: string, password: string): Promise<boolean> {
-    await delay(600)
-    const user = mockUsers.find(
-      (u) => u.username === username && u.password === password,
-    )
-    if (!user) return false
-
-    const { password: _, ...info } = user
-    userInfo.value = info
-    setToken(`mock-token-${info.id}`)
-    setStoredUser(JSON.stringify(info))
-    return true
+    try {
+      const { token, user: info } = await authApi.login(username, password)
+      userInfo.value = info
+      setToken(token)
+      setStoredUser(JSON.stringify(info))
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**

@@ -12,6 +12,11 @@ venv/
 logs/
 *.log
 
+# Database (SQLite 本地数据文件)
+*.db
+*.sqlite
+*.sqlite3
+
 # Env
 .env
 .env.local

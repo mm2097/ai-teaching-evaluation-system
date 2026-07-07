@@ -46,9 +46,8 @@ async function handleLogin(): Promise<void> {
       ElMessage.success('登录成功，欢迎回来！')
       const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
-    } else {
-      ElMessage.error('账号或密码错误，请重试')
     }
+    // 登录失败时,具体错误信息由 axios 拦截器统一弹出(后端返回 detail)
   } finally {
     loading.value = false
   }

@@ -1,0 +1,39 @@
+/**
+ * 全局 SCSS 变量定义
+ * 统一色彩、间距、圆角等设计令牌，保证界面风格一致
+ */
+
+// 品牌主色 - 科技蓝
+$primary-color: #2563eb;
+$primary-light: #3b82f6;
+$primary-dark: #1d4ed8;
+
+// 功能色
+$success-color: #10b981;
+$warning-color: #f59e0b;
+$danger-color: #ef4444;
+$info-color: #6366f1;
+
+// 中性色
+$text-primary: #1e293b;
+$text-regular: #475569;
+$text-secondary: #94a3b8;
+$border-color: #e2e8f0;
+$bg-page: #f1f5f9;
+$bg-card: #ffffff;
+
+// 侧边栏
+$sidebar-bg: #0f172a;
+$sidebar-text: #cbd5e1;
+$sidebar-active: #2563eb;
+
+// 布局尺寸
+$header-height: 60px;
+$sidebar-width: 240px;
+$sidebar-collapsed-width: 64px;
+
+// 圆角与阴影
+$radius-base: 8px;
+$radius-lg: 12px;
+$shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08), 0 4px 12px rgba(15, 23, 42, 0.04);
+$shadow-hover: 0 4px 16px rgba(37, 99, 235, 0.12);

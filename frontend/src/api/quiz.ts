@@ -69,8 +69,14 @@ export async function saveQuizAssignment(
     if (assignment.id) {
       const idx = quizAssignments.findIndex((a) => a.id === assignment.id)
       if (idx >= 0) {
-        quizAssignments[idx] = { ...quizAssignments[idx]!, ...assignment } as QuizAssignment
-        return quizAssignments[idx]!
+        const updated: QuizAssignment = {
+          ...quizAssignments[idx]!,
+          ...assignment,
+          questionCount: assignment.questions.length,
+          totalScore: assignment.questions.reduce((s, q) => s + q.score, 0),
+        } as QuizAssignment
+        quizAssignments[idx] = updated
+        return updated
       }
     }
     const newAssignment: QuizAssignment = {
@@ -120,6 +126,17 @@ export async function deleteExercise(id: number): Promise<void> {
       assignment.questionCount = assignment.questions.length
       assignment.totalScore = assignment.questions.reduce((s, q) => s + q.score, 0)
     }
+    return
+  }
+  await request.delete(`/v1/exercises/${id}`)
+}
+
+/** 删除练习（仅草稿可删） */
+export async function deleteQuizAssignment(id: number): Promise<void> {
+  if (USE_MOCK) {
+    await delay(300)
+    const idx = quizAssignments.findIndex((a) => a.id === id)
+    if (idx >= 0) quizAssignments.splice(idx, 1)
     return
   }
   await request.delete(`/v1/exercises/${id}`)

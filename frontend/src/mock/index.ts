@@ -2,7 +2,7 @@
  * 模拟用户账号与业务数据
  * 演示环境使用，正式环境由后端接口提供
  */
-import type { ImportLog, TeachingDataRecord, UserInfo, WarningRecord } from '@/types'
+import type { ImportLog, TeachingDataRecord, UserInfo, UserRole, WarningRecord } from '@/types'
 export * from './dict'
 
 /** 演示账号列表 */
@@ -144,10 +144,10 @@ export const teachingDataList: TeachingDataRecord[] = [
 
 /** 系统用户列表 */
 export const systemUserList = [
-  { id: 1, username: 'admin', name: '张管理', role: 'admin', department: '信息中心', status: true, createTime: '2025-09-01' },
-  { id: 3, username: 'teacher', name: '王教授', role: 'teacher', department: '计算机学院', status: true, createTime: '2025-09-05' },
-  { id: 4, username: 'student', name: '陈同学', role: 'student', department: '计算机学院', status: true, createTime: '2025-09-10' },
-  { id: 5, username: 'teacher2', name: '张讲师', role: 'teacher', department: '计算机学院', status: true, createTime: '2025-10-01' },
+  { id: 1, username: 'admin', name: '张管理', role: 'admin' as UserRole, department: '信息中心', status: true, createTime: '2025-09-01' },
+  { id: 3, username: 'teacher', name: '王教授', role: 'teacher' as UserRole, department: '计算机学院', status: true, createTime: '2025-09-05' },
+  { id: 4, username: 'student', name: '陈同学', role: 'student' as UserRole, department: '计算机学院', status: true, createTime: '2025-09-10' },
+  { id: 5, username: 'teacher2', name: '张讲师', role: 'teacher' as UserRole, department: '计算机学院', status: true, createTime: '2025-10-01' },
 ]
 
 /** 操作日志列表 */

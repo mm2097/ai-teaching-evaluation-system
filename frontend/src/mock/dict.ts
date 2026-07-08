@@ -1,7 +1,7 @@
 /**
  * 数据字典模拟数据（对应 td_* 表）
  */
-import type { ClassInfo, Course, Department, Major, Semester, Student, StudentProfileData, Teacher } from '@/types'
+import type { ClassInfo, ClassProfileData, Course, Department, Major, Semester, Student, StudentProfileData, Teacher } from '@/types'
 
 export const departments: Department[] = [
   { id: 1, deptCode: 'CS', deptName: '计算机学院' },
@@ -788,6 +788,158 @@ export function findStudentProfile(
     return buildStudentProfileFromMastery(studentId, courseId)
   }
   return studentProfiles.find((p) => p.studentId === studentId) ?? null
+}
+
+function avg(nums: number[]): number {
+  if (!nums.length) return 0
+  return Math.round(nums.reduce((a, b) => a + b, 0) / nums.length)
+}
+
+function getScoreLevel(score: number): 'excellent' | 'good' | 'medium' | 'pass' | 'fail' {
+  if (score >= 90) return 'excellent'
+  if (score >= 80) return 'good'
+  if (score >= 70) return 'medium'
+  if (score >= 60) return 'pass'
+  return 'fail'
+}
+
+/** 构建班级学情画像（聚合班内学生画像与知识点掌握数据） */
+export function buildClassProfile(classId: number, courseId: number): ClassProfileData | null {
+  const classInfo = classes.find((c) => c.id === classId)
+  const course = courses.find((c) => c.id === courseId)
+  if (!classInfo || !course) return null
+
+  const studentsInClass = getStudentsInCourseClass(courseId, classId)
+  if (!studentsInClass.length) return null
+
+  const profiles = studentsInClass
+    .map((s) => findStudentProfile(s.id, courseId))
+    .filter(Boolean) as (StudentProfileData & { courseId: number })[]
+
+  const dimCount = profiles[0]?.dimensionScores.length ?? 5
+  const radarValues = Array.from({ length: dimCount }, (_, i) =>
+    avg(profiles.map((p) => p.radarValues[i] ?? 0)),
+  )
+
+  const dimensionNames = profiles[0]?.dimensionScores.map((d) => d.name) ?? [
+    '学业水平', '学习态度', '学习进步', '知识掌握', '课堂参与',
+  ]
+  const dimensionScores = dimensionNames.map((name, i) => {
+    const scores = profiles.map((p) => p.dimensionScores[i]?.score ?? 0)
+    const score = avg(scores)
+    const descs: Record<string, string> = {
+      学业水平: `班级平均 ${score} 分，${score >= 80 ? '整体学业表现良好' : score >= 70 ? '处于中等水平' : '需加强基础辅导'}`,
+      学习态度: `出勤与作业提交综合评估均分 ${score}，${score >= 80 ? '学习态度积极' : '部分学生需督促'}`,
+      学习进步: `近阶段测验/练习得分变化均分 ${score}，${score >= 75 ? '整体呈进步趋势' : '进步幅度有限'}`,
+      知识掌握: `核心知识点平均掌握度 ${score}%`,
+      课堂参与: `课堂问答与互动参与度均分 ${score}`,
+    }
+    return { name, score, desc: descs[name] ?? `班级该维度均分 ${score}` }
+  })
+
+  const academicScores = profiles.map((p) => p.dimensionScores[0]?.score ?? avg(p.radarValues))
+  const levelBuckets = { excellent: 0, good: 0, medium: 0, pass: 0, fail: 0 }
+  academicScores.forEach((s) => { levelBuckets[getScoreLevel(s)]++ })
+
+  const levelDistribution = [
+    { label: '优秀 (90+)', count: levelBuckets.excellent, color: '#6366f1' },
+    { label: '良好 (80-89)', count: levelBuckets.good, color: '#10b981' },
+    { label: '中等 (70-79)', count: levelBuckets.medium, color: '#2563eb' },
+    { label: '合格 (60-69)', count: levelBuckets.pass, color: '#f59e0b' },
+    { label: '待提升 (<60)', count: levelBuckets.fail, color: '#ef4444' },
+  ].filter((d) => d.count > 0)
+
+  const totalProfileScore = avg(academicScores)
+  const passRate = Math.round((academicScores.filter((s) => s >= 60).length / academicScores.length) * 1000) / 10
+  const excellentRate = Math.round((academicScores.filter((s) => s >= 90).length / academicScores.length) * 1000) / 10
+
+  const heatmap = buildCourseClassHeatmap(courseId, classId)
+  const kpStats = heatmap.knowledgePoints.map((name, kpIdx) => {
+    const values = heatmap.data.filter((d) => d[0] === kpIdx).map((d) => d[2]!)
+    const rate = values.length
+      ? Math.round(values.reduce((a, b) => a + b, 0) / values.length)
+      : 0
+    return { name, rate }
+  })
+  const sortedKp = [...kpStats].sort((a, b) => b.rate - a.rate)
+  const strongKp = sortedKp.filter((p) => p.rate >= 80).slice(0, 3)
+  const weakKp = sortedKp.filter((p) => p.rate < 75).slice(-3).reverse()
+
+  const studentScores = profiles.map((p) => ({
+    studentId: p.studentId,
+    studentName: p.studentName,
+    score: p.dimensionScores[0]?.score ?? avg(p.radarValues),
+  }))
+  const topStudents = [...studentScores].sort((a, b) => b.score - a.score).slice(0, 3)
+  const attentionStudents = [...studentScores]
+    .filter((s) => s.score < 70)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, 4)
+    .map((s) => ({
+      ...s,
+      reason: s.score < 60 ? '学业水平偏低，建议一对一辅导' : '成绩接近及格线，需重点关注',
+    }))
+
+  const scoreSpread = Math.max(...academicScores) - Math.min(...academicScores)
+  const tags: string[] = []
+  if (totalProfileScore >= 85) tags.push('整体优秀')
+  else if (totalProfileScore >= 75) tags.push('整体良好')
+  else tags.push('需整体提升')
+  if (scoreSpread >= 25) tags.push('成绩分化明显')
+  else if (scoreSpread <= 15) tags.push('水平较均衡')
+  if (passRate >= 90) tags.push('及格率高')
+  if (excellentRate >= 20) tags.push('优秀率突出')
+  if (weakKp.length >= 2) tags.push('薄弱点集中')
+
+  const weakNames = weakKp.map((p) => p.name).join('、') || '暂无'
+  const aiSummary = `本班共 ${studentsInClass.length} 人在「${course.courseName}」课程中，综合学情得分 ${totalProfileScore} 分，`
+    + `及格率 ${passRate}%、优秀率 ${excellentRate}%。`
+    + `${scoreSpread >= 25 ? '班级内成绩分化较为明显，' : '班级整体水平较为均衡，'}`
+    + `${weakKp.length ? `当前薄弱知识点集中在 ${weakNames} 等模块。` : '各知识点掌握较为均衡。'}`
+
+  const teachingSuggestions: string[] = []
+  if (weakKp.length) {
+    teachingSuggestions.push(`针对 ${weakKp.map((p) => `${p.name}(${p.rate}%)`).join('、')} 安排专项练习与课堂复盘`)
+  }
+  if (attentionStudents.length) {
+    teachingSuggestions.push(`关注 ${attentionStudents.map((s) => s.studentName).join('、')} 等 ${attentionStudents.length} 名学生的跟进辅导`)
+  }
+  if (scoreSpread >= 25) {
+    teachingSuggestions.push('实施分层教学：为后进生补基础，为优等生拓展进阶内容')
+  }
+  if (totalProfileScore >= 80 && !weakKp.length) {
+    teachingSuggestions.push('保持现有教学节奏，可适当增加综合应用类项目实践')
+  }
+  if (!teachingSuggestions.length) {
+    teachingSuggestions.push('持续跟踪各维度数据变化，及时调整教学策略')
+  }
+
+  return {
+    classId,
+    className: classInfo.className,
+    courseId,
+    courseName: course.courseName,
+    majorName: classInfo.majorName ?? '',
+    studentCount: studentsInClass.length,
+    totalProfileScore,
+    passRate,
+    excellentRate,
+    warningCount: 0,
+    tags,
+    radarValues,
+    dimensionScores,
+    strongPoints: strongKp.length
+      ? strongKp.map((p) => `${p.name} (${p.rate}%)`).join('、')
+      : '各知识点掌握较均衡',
+    weakPoints: weakKp.length
+      ? weakKp.map((p) => `${p.name} (${p.rate}%)`).join('、')
+      : '暂无显著薄弱项',
+    levelDistribution,
+    topStudents,
+    attentionStudents,
+    aiSummary,
+    teachingSuggestions,
+  }
 }
 
 /** 看板按年级/学期的统计系数 */

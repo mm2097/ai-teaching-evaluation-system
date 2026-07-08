@@ -47,7 +47,6 @@ async function loadHeatmap(): Promise<void> {
   const mode = viewMode.value
   if (targetType.value !== mode) return
 
-<<<<<<< HEAD
   if (mode === 'student') {
     if (!targetId.value) {
       heatmapData.value = emptyHeatmap()
@@ -70,14 +69,6 @@ async function loadHeatmap(): Promise<void> {
     heatmapLoading.value = false
   }
 }
-=======
-watch([queryParams, viewMode], () => {
-  // 关键参数未就绪时跳过，避免无效请求
-  if (viewMode.value === 'class' && classId.value == null) return
-  if (viewMode.value === 'student' && targetId.value == null) return
-  loadHeatmap()
-}, { immediate: true })
->>>>>>> origin/lmy_branch
 
 watch(viewMode, (mode) => {
   targetType.value = mode === 'class' ? 'class' : 'student'
@@ -136,17 +127,12 @@ const heatmapOption = computed<EChartsOption>(() => {
         return `${heatmapData.value.students[y!]} · ${kp}<br/>掌握度: ${val}%`
       },
     },
-<<<<<<< HEAD
     grid: { left: isPersonal ? 90 : 80, right: 40, top: 10, bottom: 80 },
-=======
-    grid: { left: isPersonal ? 20 : 80, right: 40, top: 10, bottom: 60 },
->>>>>>> origin/lmy_branch
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,
       axisLabel: { rotate: 30, fontSize: 11 },
     },
-<<<<<<< HEAD
     yAxis: {
       type: 'category',
       data: yLabels,
@@ -154,14 +140,6 @@ const heatmapOption = computed<EChartsOption>(() => {
       inverse: Boolean(isPersonal && hasCompareRow),
       axisLabel: { fontSize: 11 },
     },
-=======
-    yAxis: isPersonal
-      ? { type: 'category', data: [''], show: false } as EChartsOption['yAxis']
-      : {
-          type: 'category',
-          data: heatmapData.value.students,
-        },
->>>>>>> origin/lmy_branch
     visualMap: {
       min: 0,
       max: 100,
@@ -173,14 +151,9 @@ const heatmapOption = computed<EChartsOption>(() => {
     },
     series: [{
       type: 'heatmap',
-<<<<<<< HEAD
       data: chartData,
       label: { show: true, fontSize: 11 },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
-=======
-      data: heatmapData.value.data,
-      label: { show: false },
->>>>>>> origin/lmy_branch
     }],
   }
 })
@@ -248,20 +221,12 @@ onMounted(async () => {
 
     <div v-loading="heatmapLoading" class="content-card">
       <div class="content-card__title">{{ heatmapTitle }}</div>
-<<<<<<< HEAD
       <p v-if="viewMode === 'student' && !targetId" class="hint-text">请先选择一名学生，查看个人知识点掌握情况。</p>
       <p v-else-if="viewMode === 'student'" class="hint-text">下方热力图第一行展示班级均值，第二行展示该学生个人掌握度，便于对比。</p>
       <BaseChart
         v-if="heatmapData.data.length"
         :option="heatmapOption"
         :height="viewMode === 'student' ? '240px' : '400px'"
-=======
-      <el-skeleton v-if="heatmapData.data.length === 0" :rows="5" animated style="padding: 20px" />
-      <BaseChart
-        v-else
-        :option="heatmapOption"
-        :height="viewMode === 'student' ? '200px' : '400px'"
->>>>>>> origin/lmy_branch
       />
     </div>
 

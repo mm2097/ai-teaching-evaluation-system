@@ -2,12 +2,7 @@
  * AI 分析 API（调用真实后端 /api/v1/analysis/*）
  */
 import request from '@/utils/request'
-import type {
-  AnalysisQuery,
-  StudentProfileData,
-  TargetType,
-  WarningRecord,
-} from '@/types'
+import type { AnalysisQuery, StudentProfileData, TargetType, WarningRecord } from '@/types'
 
 export interface KnowledgeHeatmapResult {
   knowledgePoints: string[]

@@ -7,7 +7,7 @@ import type { UserInfo, UserRole } from '@/types'
 export const authApi = {
   /** 登录，成功返回 token + 用户信息 */
   async login(username: string, password: string): Promise<{ token: string; user: UserInfo }> {
-    const res = await request.post('/login', { username, password })
+    const res = await request.post('/login', { username, password })  // → POST /api/login
     const data = res.data
     const roleMap: Record<string, UserRole> = { admin: 'admin', teacher: 'teacher', student: 'student' }
     return {
@@ -17,7 +17,7 @@ export const authApi = {
         username: data.user.username,
         name: data.user.real_name,
         role: roleMap[data.user.role_code] ?? 'student',
-        department: data.user.department ?? '',
+        department: '',
       },
     }
   },

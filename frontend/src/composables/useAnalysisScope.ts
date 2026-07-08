@@ -47,9 +47,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const courseId = ref<number | undefined>()
   const targetId = ref<number | undefined>()
   const studentList = ref<LinkedStudentOption[]>([])
-  const targetOptions = ref<{ label: string; value: number }[]>([])
   const studentLoading = ref(false)
-  const studentKeyword = ref('')
 
   const semesterOptions = ref<{ label: string; value: number }[]>([])
   const classOptions = ref<{ label: string; value: number }[]>([])
@@ -61,58 +59,70 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const showTargetTypeFilter = computed(() => role.value !== 'student')
   const showStudentPicker = computed(() => targetType.value === 'student' && role.value !== 'student')
 
-  /** 并发锁，防止 loadOptions 重入 */
-  let loadingPromise: Promise<void> | null = null
-
-  async function loadStudentOptions(keyword?: string): Promise<void> {
-    const students = await searchStudents({
-      keyword: keyword ?? studentKeyword.value,
-      classId: classId.value,
-      courseId: courseId.value,
-      teacherId: role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined,
-    })
-    targetOptions.value = students.map((s) => ({
-      label: `${s.studentName} (${s.studentNo})`,
-      value: s.id,
-    }))
-    if (!targetId.value && targetOptions.value.length) {
-      targetId.value = targetOptions.value[0]!.value
+  async function loadStudentOptions(): Promise<void> {
+    studentLoading.value = true
+    try {
+      const students = await searchStudents({
+        classId: classId.value,
+        courseId: courseId.value,
+        deptId: 1,
+        teacherId: role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined,
+      })
+      studentList.value = students.map((s) => ({
+        id: s.id,
+        studentName: s.studentName,
+        studentNo: s.studentNo,
+      }))
+      targetId.value = pickFirstStudent(studentList.value, targetId.value)
+    } finally {
+      studentLoading.value = false
     }
   }
 
-  async function loadOptions(): Promise<void> {
-    // 防止并发重入
-    if (loadingPromise) return loadingPromise
+  async function loadOptions(preserveTarget = false): Promise<void> {
+    const sems = await fetchSemesters()
+    semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
+    const currentSem = sems.find((s) => s.isCurrent)
+    if (currentSem && !preserveTarget) {
+      semesterId.value = currentSem.id
+    }
 
-    loadingPromise = (async () => {
-      const sems = await fetchSemesters()
-      semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
+    if (role.value === 'teacher') {
+      const teacherId = userStore.userInfo?.teacherId
+      const courses = await fetchCourses({ teacherId, semesterId: semesterId.value, deptId: 1 })
+      courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+      courseId.value = pickFirstOption(courseOptions.value, courseId.value)
 
-      if (role.value === 'teacher') {
-        const teacherId = userStore.userInfo?.teacherId
-        const courses = await fetchCourses({ teacherId, semesterId: semesterId.value })
-        courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-        if (!courseId.value && courseOptions.value.length) {
-          courseId.value = courseOptions.value[0]!.value
-        }
-        const classes = await fetchClasses({ deptId: 1 })
-        classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-        if (!classId.value && classOptions.value.length) {
-          classId.value = classOptions.value[0]!.value
-        }
-      } else if (role.value === 'admin') {
-        const classes = await fetchClasses({ deptId: 1 })
-        classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-        if (!classId.value && classOptions.value.length) {
-          classId.value = classOptions.value[0]!.value
-        }
-        const courses = await fetchCourses({ deptId: 1, semesterId: semesterId.value })
-        courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-        if (!courseId.value && courseOptions.value.length) {
-          courseId.value = courseOptions.value[0]!.value
-        }
-      }
+      const classes = await fetchClasses({
+        deptId: 1,
+        courseId: courseId.value,
+        teacherId,
+      })
+      classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
+      classId.value = pickFirstOption(classOptions.value, classId.value)
+    } else if (role.value === 'admin') {
+      const courses = await fetchCourses({ deptId: 1, semesterId: semesterId.value })
+      courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+      courseId.value = pickFirstOption(courseOptions.value, courseId.value)
 
+      const classes = await fetchClasses({
+        deptId: 1,
+        courseId: courseId.value,
+      })
+      classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
+      classId.value = pickFirstOption(classOptions.value, classId.value)
+    } else if (role.value === 'student') {
+      const studentClassId = userStore.userInfo?.classId
+      const courses = studentClassId
+        ? await fetchCourses({ deptId: 1, semesterId: semesterId.value, classId: studentClassId })
+        : []
+      courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+      courseId.value = pickFirstOption(courseOptions.value, courseId.value)
+      classId.value = studentClassId
+      targetId.value = userStore.userInfo?.studentId
+    }
+
+    if (!preserveTarget) {
       if (targetType.value === 'student') {
         if (role.value === 'student') {
           targetId.value = userStore.userInfo?.studentId
@@ -120,19 +130,12 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
           await loadStudentOptions()
         }
       } else if (targetType.value === 'class') {
-        targetOptions.value = classOptions.value
-        if (!targetId.value && targetOptions.value.length) {
-          targetId.value = targetOptions.value[0]!.value
-        }
+        targetId.value = classId.value
       }
-    })()
-
-    await loadingPromise
-    loadingPromise = null
+    }
   }
 
-  // 仅监听外部变化（学期切换、分析对象类型切换），不再监听 classId/courseId 避免递归
-  watch([targetType, semesterId], async () => {
+  watch(targetType, async () => {
     targetId.value = undefined
     await loadOptions()
   })
@@ -155,7 +158,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
       targetType.value = 'student'
       targetId.value = userStore.userInfo?.studentId
     }
-    await loadOptions()
+    await loadOptions(true)
   })
 
   const queryParams = computed<AnalysisQuery>(() => ({
@@ -176,7 +179,6 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
     courseId,
     targetId,
     studentList,
-    targetOptions,
     studentLoading,
     semesterOptions,
     classOptions,

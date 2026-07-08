@@ -8,13 +8,11 @@ import type { EChartsOption } from 'echarts'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { fetchGradeTrend } from '@/api/analysis'
+import { dashboardStats, gradeTrendData } from '@/mock'
+import { delay } from '@/utils/auth'
 
 const userStore = useUserStore()
 const loading = ref(true)
-
-/** 成绩趋势数据（从 API 获取） */
-const gradeTrendData = ref<{ months: string[]; avgScore: number[] }>({ months: [], avgScore: [] })
 
 /** 学生个人课程概览 */
 const courses = ref([
@@ -64,13 +62,13 @@ const scoreBarOption = computed<EChartsOption>(() => ({
 /** 成绩趋势 */
 const trendOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: gradeTrendData.value.months, axisLabel: { color: '#64748b' } },
+  xAxis: { type: 'category', data: gradeTrendData.months, axisLabel: { color: '#64748b' } },
   yAxis: { type: 'value', max: 100, name: '分数' },
   series: [{
     name: '平均分',
     type: 'line',
     smooth: true,
-    data: gradeTrendData.value.avgScore,
+    data: gradeTrendData.avgScore,
     itemStyle: { color: '#2563eb' },
     areaStyle: { color: 'rgba(37, 99, 235, 0.08)' },
   }],
@@ -78,15 +76,7 @@ const trendOption = computed<EChartsOption>(() => ({
 }))
 
 onMounted(async () => {
-  try {
-    const trend = await fetchGradeTrend({
-      targetType: 'student',
-      targetId: userStore.userInfo?.studentId || 1,
-    })
-    gradeTrendData.value = { months: trend.months || [], avgScore: trend.avgScore || [] }
-  } catch {
-    // 保持默认空数据
-  }
+  await delay(300)
   loading.value = false
 })
 </script>

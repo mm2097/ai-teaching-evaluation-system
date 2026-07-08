@@ -47,6 +47,7 @@ async function loadHeatmap(): Promise<void> {
   const mode = viewMode.value
   if (targetType.value !== mode) return
 
+<<<<<<< HEAD
   if (mode === 'student') {
     if (!targetId.value) {
       heatmapData.value = emptyHeatmap()
@@ -69,13 +70,14 @@ async function loadHeatmap(): Promise<void> {
     heatmapLoading.value = false
   }
 }
-
+=======
 watch([queryParams, viewMode], () => {
   // 关键参数未就绪时跳过，避免无效请求
   if (viewMode.value === 'class' && classId.value == null) return
   if (viewMode.value === 'student' && targetId.value == null) return
   loadHeatmap()
 }, { immediate: true })
+>>>>>>> origin/lmy_branch
 
 watch(viewMode, (mode) => {
   targetType.value = mode === 'class' ? 'class' : 'student'
@@ -105,32 +107,61 @@ const heatmapTitle = computed(() => {
 
 const heatmapOption = computed<EChartsOption>(() => {
   const isPersonal = viewMode.value === 'student'
+  const hasCompareRow = isPersonal && heatmapData.value.classAvgByKp?.length
+  const yLabels = isPersonal
+    ? (hasCompareRow ? ['班级均值', heatmapData.value.students[0] ?? '个人'] : [heatmapData.value.students[0] ?? '个人'])
+    : heatmapData.value.students
+
+  let chartData = heatmapData.value.data
+  if (isPersonal && hasCompareRow && heatmapData.value.data.length) {
+    const classRow = heatmapData.value.classAvgByKp!.map((val, kpIdx) => [kpIdx, 0, val] as number[])
+    const personalRow = heatmapData.value.data.map(([kpIdx, , val]) => [kpIdx, 1, val!] as number[])
+    chartData = [...classRow, ...personalRow]
+  }
 
   return {
     tooltip: {
       position: 'top',
       formatter: (params: unknown) => {
         const p = params as { value: number[] }
-        const [x, , val] = p.value
+        const [x, y, val] = p.value
         const kp = heatmapData.value.knowledgePoints[x!] ?? ''
+        if (isPersonal && hasCompareRow) {
+          const label = y === 0 ? '班级均值' : (heatmapData.value.students[0] ?? '个人')
+          return `${label} · ${kp}<br/>掌握度: ${val}%`
+        }
         if (isPersonal) {
           return `${kp}<br/>掌握度: ${val}%`
         }
-        return `${heatmapData.value.students[p.value[1]!]} · ${kp}<br/>掌握度: ${val}%`
+        return `${heatmapData.value.students[y!]} · ${kp}<br/>掌握度: ${val}%`
       },
     },
+<<<<<<< HEAD
+    grid: { left: isPersonal ? 90 : 80, right: 40, top: 10, bottom: 80 },
+=======
     grid: { left: isPersonal ? 20 : 80, right: 40, top: 10, bottom: 60 },
+>>>>>>> origin/lmy_branch
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,
       axisLabel: { rotate: 30, fontSize: 11 },
     },
+<<<<<<< HEAD
+    yAxis: {
+      type: 'category',
+      data: yLabels,
+      splitArea: { show: true },
+      inverse: Boolean(isPersonal && hasCompareRow),
+      axisLabel: { fontSize: 11 },
+    },
+=======
     yAxis: isPersonal
       ? { type: 'category', data: [''], show: false } as EChartsOption['yAxis']
       : {
           type: 'category',
           data: heatmapData.value.students,
         },
+>>>>>>> origin/lmy_branch
     visualMap: {
       min: 0,
       max: 100,
@@ -142,8 +173,14 @@ const heatmapOption = computed<EChartsOption>(() => {
     },
     series: [{
       type: 'heatmap',
+<<<<<<< HEAD
+      data: chartData,
+      label: { show: true, fontSize: 11 },
+      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
+=======
       data: heatmapData.value.data,
       label: { show: false },
+>>>>>>> origin/lmy_branch
     }],
   }
 })
@@ -172,6 +209,7 @@ function handleViewModeChange(mode: ViewMode): void {
 
 onMounted(async () => {
   await scope.loadOptions()
+  await loadHeatmap()
 })
 </script>
 
@@ -210,11 +248,20 @@ onMounted(async () => {
 
     <div v-loading="heatmapLoading" class="content-card">
       <div class="content-card__title">{{ heatmapTitle }}</div>
+<<<<<<< HEAD
+      <p v-if="viewMode === 'student' && !targetId" class="hint-text">请先选择一名学生，查看个人知识点掌握情况。</p>
+      <p v-else-if="viewMode === 'student'" class="hint-text">下方热力图第一行展示班级均值，第二行展示该学生个人掌握度，便于对比。</p>
+      <BaseChart
+        v-if="heatmapData.data.length"
+        :option="heatmapOption"
+        :height="viewMode === 'student' ? '240px' : '400px'"
+=======
       <el-skeleton v-if="heatmapData.data.length === 0" :rows="5" animated style="padding: 20px" />
       <BaseChart
         v-else
         :option="heatmapOption"
         :height="viewMode === 'student' ? '200px' : '400px'"
+>>>>>>> origin/lmy_branch
       />
     </div>
 

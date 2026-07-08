@@ -38,6 +38,10 @@ export const menuList: MenuItem[] = [
       { path: '/analysis/profile', title: '学情画像', icon: 'User' },
       { path: '/analysis/trend', title: '成绩趋势预测', icon: 'TrendCharts' },
       { path: '/analysis/knowledge', title: '知识点掌握度', icon: 'Grid' },
+<<<<<<< HEAD
+      { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell', roles: ['admin', 'teacher'] },
+      { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound' },
+=======
       { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell' },
     ],
   },
@@ -51,6 +55,7 @@ export const menuList: MenuItem[] = [
       { path: '/student/profile', title: '学情画像', icon: 'User' },
       { path: '/student/knowledge', title: '知识点掌握度', icon: 'Grid' },
       { path: '/student/evaluation', title: '学习评价', icon: 'Medal' },
+>>>>>>> origin/lmy_branch
     ],
   },
   {

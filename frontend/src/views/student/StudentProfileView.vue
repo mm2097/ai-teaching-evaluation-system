@@ -8,17 +8,9 @@ import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { fetchStudentProfile } from '@/api/analysis'
 import { useUserStore } from '@/stores/user'
+import { studentProfileRadar } from '@/mock'
+import { delay } from '@/utils/auth'
 import type { StudentProfileData } from '@/types'
-
-/** 雷达图默认配置（API 无数据时使用） */
-const defaultRadarIndicators = [
-  { name: '学业成绩', max: 100 },
-  { name: '学习态度', max: 100 },
-  { name: '学习进步', max: 100 },
-  { name: '知识掌握', max: 100 },
-  { name: '综合能力', max: 100 },
-]
-const defaultRadarValues = [85, 80, 75, 88, 70]
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -47,7 +39,7 @@ const studentInfo = computed(() =>
 const radarOption = computed<EChartsOption>(() => ({
   tooltip: {},
   radar: {
-    indicator: defaultRadarIndicators,
+    indicator: studentProfileRadar.indicators,
     shape: 'polygon',
     splitArea: { areaStyle: { color: ['#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1'] } },
     axisName: { color: '#64748b' },
@@ -55,7 +47,7 @@ const radarOption = computed<EChartsOption>(() => ({
   series: [{
     type: 'radar',
     data: [{
-      value: profileData.value?.radarValues || defaultRadarValues,
+      value: profileData.value?.radarValues || studentProfileRadar.values,
       name: studentName.value,
       areaStyle: { color: 'rgba(37, 99, 235, 0.2)' },
       lineStyle: { color: '#2563eb', width: 2 },

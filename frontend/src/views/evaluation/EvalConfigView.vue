@@ -1,6 +1,6 @@
 <!--
   评价体系配置页面
-  管理员自定义评价指标、权重与评分规则
+  管理员配置学生学习质量评价指标、权重与评分规则
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
@@ -13,6 +13,8 @@ const evalIndicatorConfig = [
   { id: 4, name: '知识掌握', dimension: '学生评价', weight: 15, rule: '基于知识点掌握度与 AI 练习得分' },
 ]
 
+const STUDENT_DIMENSION = '学生评价'
+
 /** 指标列表（可编辑） */
 const indicators = ref([...evalIndicatorConfig])
 
@@ -24,7 +26,7 @@ const totalWeight = computed(() => indicators.value.reduce((sum, item) => sum + 
 
 /** 编辑对话框 */
 const dialogVisible = ref(false)
-const editForm = ref({ id: 0, name: '', dimension: '', weight: 0, rule: '' })
+const editForm = ref({ id: 0, name: '', weight: 0, rule: '' })
 const isEdit = ref(false)
 
 /**
@@ -32,7 +34,7 @@ const isEdit = ref(false)
  */
 function handleAdd(): void {
   isEdit.value = false
-  editForm.value = { id: 0, name: '', dimension: '教师评价', weight: 0, rule: '' }
+  editForm.value = { id: 0, name: '', weight: 0, rule: '' }
   dialogVisible.value = true
 }
 
@@ -42,7 +44,7 @@ function handleAdd(): void {
  */
 function handleEdit(row: (typeof evalIndicatorConfig)[0]): void {
   isEdit.value = true
-  editForm.value = { ...row }
+  editForm.value = { id: row.id, name: row.name, weight: row.weight, rule: row.rule }
   dialogVisible.value = true
 }
 
@@ -58,11 +60,12 @@ function handleDelete(id: number): void {
  * 保存指标
  */
 function saveIndicator(): void {
+  const indicator = { ...editForm.value, dimension: STUDENT_DIMENSION }
   if (isEdit.value) {
     const idx = indicators.value.findIndex((item) => item.id === editForm.value.id)
-    if (idx !== -1) indicators.value[idx] = { ...editForm.value }
+    if (idx !== -1) indicators.value[idx] = indicator
   } else {
-    indicators.value.push({ ...editForm.value, id: Date.now() })
+    indicators.value.push({ ...indicator, id: Date.now() })
   }
   dialogVisible.value = false
   ElMessage.success('保存成功')
@@ -90,6 +93,7 @@ function saveScheme(): void {
             <el-option label="默认评价方案" value="default" />
             <el-option label="2025春季方案" value="2025-spring" />
           </el-select>
+          <el-tag type="info" effect="plain">学生评价</el-tag>
           <el-tag :type="totalWeight === 100 ? 'success' : 'danger'" effect="plain">
             权重合计：{{ totalWeight }}%
           </el-tag>
@@ -102,7 +106,6 @@ function saveScheme(): void {
 
       <el-table :data="indicators" stripe border>
         <el-table-column prop="name" label="指标名称" />
-        <el-table-column prop="dimension" label="所属维度" width="120" />
         <el-table-column prop="weight" label="权重 (%)" width="120" align="center">
           <template #default="{ row }">
             <el-input-number v-model="row.weight" :min="0" :max="100" size="small" />
@@ -121,13 +124,6 @@ function saveScheme(): void {
     <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑指标' : '新增指标'" width="500px">
       <el-form :model="editForm" label-width="90px">
         <el-form-item label="指标名称"><el-input v-model="editForm.name" /></el-form-item>
-        <el-form-item label="所属维度">
-          <el-select v-model="editForm.dimension" style="width: 100%">
-            <el-option label="教师评价" value="教师评价" />
-            <el-option label="学生评价" value="学生评价" />
-            <el-option label="课程评价" value="课程评价" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="权重 (%)"><el-input-number v-model="editForm.weight" :min="0" :max="100" /></el-form-item>
         <el-form-item label="评分规则"><el-input v-model="editForm.rule" type="textarea" :rows="3" /></el-form-item>
       </el-form>

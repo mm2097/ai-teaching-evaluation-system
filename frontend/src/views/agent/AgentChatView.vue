@@ -82,20 +82,21 @@ function goToQuestionBank(): void {
           />
         </el-tab-pane>
         <el-tab-pane label="智能组卷" name="exam">
-          <div v-if="courseId" class="exam-tip">
-            <span>组卷方案生成后，请前往「AI 出题」审核发布，或在「题库管理」查看已有题目。</span>
-            <div class="exam-tip__actions">
-              <el-button type="primary" link @click="goToQuestionBank">题库管理 →</el-button>
-              <el-button type="primary" link @click="goToQuizManage">AI 出题 →</el-button>
+          <div v-if="courseId" class="exam-pane">
+            <div class="exam-tip">
+              <span>组卷方案生成后，请前往「AI 出题」审核发布，或在「题库管理」查看已有题目。</span>
+              <div class="exam-tip__actions">
+                <el-button type="primary" link @click="goToQuestionBank">题库管理 →</el-button>
+                <el-button type="primary" link @click="goToQuizManage">AI 出题 →</el-button>
+              </div>
             </div>
+            <AgentChat
+              :key="`exam-${courseId}`"
+              agent-type="exam"
+              :course-id="courseId"
+              :course-name="courseName"
+            />
           </div>
-          <AgentChat
-            v-if="courseId"
-            :key="`exam-${courseId}`"
-            agent-type="exam"
-            :course-id="courseId"
-            :course-name="courseName"
-          />
         </el-tab-pane>
       </template>
     </el-tabs>
@@ -106,13 +107,16 @@ function goToQuestionBank(): void {
 .agent-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 120px);
+  height: calc(100vh - 100px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 .agent-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
   margin-bottom: 16px;
   padding: 16px 20px;
 
@@ -142,14 +146,34 @@ function goToQuestionBank(): void {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+
+  :deep(.el-tabs__header) {
+    flex-shrink: 0;
+  }
 
   :deep(.el-tabs__content) {
     flex: 1;
+    min-height: 0;
+    overflow: hidden;
   }
 
   :deep(.el-tab-pane) {
     height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
   }
+}
+
+.exam-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .exam-tip {
@@ -157,6 +181,7 @@ function goToQuestionBank(): void {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
   margin-bottom: 12px;
   padding: 10px 14px;
   background: #eff6ff;
@@ -164,6 +189,10 @@ function goToQuestionBank(): void {
   border-radius: 8px;
   font-size: 13px;
   color: #475569;
+
+  span {
+    min-width: 0;
+  }
 
   &__actions {
     display: flex;

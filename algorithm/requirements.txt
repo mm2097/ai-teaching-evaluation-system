@@ -1,3 +1,17 @@
-# pandas
-# numpy
-# scikit-learn
+# ===== AI 出题算法服务依赖 =====
+# Web 框架
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# LLM 调用（通义千问 OpenAI 兼容模式，同一 SDK 可切 DeepSeek/智谱/OpenAI）
+openai>=1.30
+
+# 数据校验与配置
+pydantic>=2.6
+pydantic-settings>=2.2
+
+# 日志
+loguru>=0.7
+
+# 环境变量加载
+python-dotenv>=1.0

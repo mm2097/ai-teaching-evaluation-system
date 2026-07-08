@@ -1,0 +1,47 @@
+[
+  {
+    "type": "single_choice",
+    "knowledge_point": "二叉搜索树",
+    "difficulty": "medium",
+    "stem": "对一棵二叉搜索树进行中序遍历，得到的结点访问序列是（）。",
+    "options": [
+      {"key": "A", "text": "递增有序序列"},
+      {"key": "B", "text": "递减有序序列"},
+      {"key": "C", "text": "无序序列"},
+      {"key": "D", "text": "只包含叶子结点的序列"}
+    ],
+    "answer": "A",
+    "explanation": "二叉搜索树满足左子树值 < 根值 < 右子树值，中序遍历按 左→根→右 顺序访问，结果为递增有序序列。"
+  },
+  {
+    "type": "multi_choice",
+    "knowledge_point": "红黑树",
+    "difficulty": "hard",
+    "stem": "关于红黑树的性质，下列说法正确的是（）。",
+    "options": [
+      {"key": "A", "text": "每个结点要么是红色要么是黑色"},
+      {"key": "B", "text": "根结点是红色"},
+      {"key": "C", "text": "红色结点的子结点必须是黑色"},
+      {"key": "D", "text": "从任一结点到其所有叶子结点的路径上，黑色结点数目相同"}
+    ],
+    "answer": "ACD",
+    "explanation": "红黑树性质：每个结点非红即黑（A对）；根结点必须是黑色（B错）；红结点的子结点必须是黑，即不能有连续两个红结点（C对）；从任一结点到叶子路径的黑结点数相同（D对）。故选 ACD。"
+  },
+  {
+    "type": "judge",
+    "knowledge_point": "哈希表",
+    "difficulty": "easy",
+    "stem": "哈希表的平均查找长度仅取决于哈希函数的选择，与冲突处理方法无关。",
+    "answer": "false",
+    "explanation": "哈希表的平均查找长度同时取决于哈希函数和冲突处理方法（如链地址法、开放定址法），不同冲突处理方法的查找效率差异显著。"
+  },
+  {
+    "type": "fill_blank",
+    "knowledge_point": "链表",
+    "difficulty": "easy",
+    "stem": "在单链表中，若要删除指针 p 所指结点的后继结点，需要执行的操作是 q = p->next; p->next = ________。",
+    "answer": "q->next",
+    "answer_list": ["q->next", "q.next"],
+    "explanation": "删除后继结点时，需先把 p 的 next 指针指向后继的后继，即 q->next（q 为 p 的原后继），再释放 q。"
+  }
+]

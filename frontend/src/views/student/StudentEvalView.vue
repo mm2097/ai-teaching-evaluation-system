@@ -7,8 +7,15 @@ import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { studentEvalList, evalIndicatorConfig } from '@/mock'
-import { delay, scoreToGrade, evalGradeType } from '@/utils/auth'
+import { evalGradeType } from '@/utils/auth'
+
+/** 评价指标体系配置 */
+const evalIndicatorConfig = [
+  { id: 'academic', name: '学业成绩', weight: 40, rule: '基于各次作业、测验、考试的加权平均分' },
+  { id: 'attitude', name: '学习态度', weight: 25, rule: '综合出勤率、作业提交率、课堂参与度' },
+  { id: 'progress', name: '学习进步', weight: 20, rule: '对比近三次测验成绩的变化趋势' },
+  { id: 'mastery', name: '知识掌握', weight: 15, rule: '基于知识点测评的掌握率统计' },
+]
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -53,8 +60,7 @@ const barOption = computed<EChartsOption>(() => ({
   }],
 }))
 
-onMounted(async () => {
-  await delay(300)
+onMounted(() => {
   loading.value = false
 })
 </script>

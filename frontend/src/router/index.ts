@@ -20,12 +20,14 @@ const router = createRouter({
       component: () => import('@/components/layout/AppLayout.vue'),
       redirect: '/dashboard',
       children: [
+        // ---- 看板 ----
         {
           path: 'dashboard',
           name: 'Dashboard',
           component: () => import('@/views/dashboard/DashboardView.vue'),
           meta: { title: '综合看板' },
         },
+        // ---- 数据管理 ----
         {
           path: 'data/import',
           name: 'DataImport',
@@ -38,23 +40,24 @@ const router = createRouter({
           component: () => import('@/views/data/DataManageView.vue'),
           meta: { title: '数据管理', roles: ['admin', 'teacher'] },
         },
+        // ---- AI 分析 ----
         {
           path: 'analysis/profile',
           name: 'StudentProfile',
           component: () => import('@/views/analysis/StudentProfileView.vue'),
-          meta: { title: '学情画像' },
+          meta: { title: '学情画像', roles: ['admin', 'teacher'] },
         },
         {
           path: 'analysis/trend',
           name: 'GradeTrend',
           component: () => import('@/views/analysis/GradeTrendView.vue'),
-          meta: { title: '成绩趋势预测' },
+          meta: { title: '成绩趋势预测', roles: ['admin', 'teacher'] },
         },
         {
           path: 'analysis/knowledge',
           name: 'Knowledge',
           component: () => import('@/views/analysis/KnowledgeView.vue'),
-          meta: { title: '知识点掌握度' },
+          meta: { title: '知识点掌握度', roles: ['admin', 'teacher'] },
         },
         {
           path: 'analysis/warning',
@@ -62,6 +65,7 @@ const router = createRouter({
           component: () => import('@/views/analysis/WarningView.vue'),
           meta: { title: '异常学情预警', roles: ['admin', 'teacher'] },
         },
+        // ---- AI 练习 ----
         {
           path: 'agent/chat',
           name: 'AgentChat',
@@ -92,6 +96,7 @@ const router = createRouter({
           component: () => import('@/views/quiz/QuizAnswerView.vue'),
           meta: { title: '在线答题', roles: ['student'] },
         },
+        // ---- 评价 ----
         {
           path: 'evaluation/config',
           name: 'EvalConfig',
@@ -104,12 +109,14 @@ const router = createRouter({
           component: () => import('@/views/evaluation/StudentEvalView.vue'),
           meta: { title: '学生学习质量', roles: ['admin', 'teacher'] },
         },
+        // ---- 报告 ----
         {
           path: 'report/center',
           name: 'ReportCenter',
           component: () => import('@/views/report/ReportCenterView.vue'),
           meta: { title: '报告生成导出' },
         },
+        // ---- 系统管理 ----
         {
           path: 'system/user',
           name: 'UserManage',
@@ -127,6 +134,55 @@ const router = createRouter({
           name: 'ParamConfig',
           component: () => import('@/views/system/ParamConfigView.vue'),
           meta: { title: '基础参数配置', roles: ['admin'] },
+        },
+        // ---- 学生端独立页面 ----
+        {
+          path: 'student/dashboard',
+          name: 'StudentDashboard',
+          component: () => import('@/views/student/StudentDashboard.vue'),
+          meta: { title: '我的学习', roles: ['student'] },
+        },
+        {
+          path: 'student/profile',
+          name: 'StudentProfileView',
+          component: () => import('@/views/student/StudentProfileView.vue'),
+          meta: { title: '个人学情画像', roles: ['student'] },
+        },
+        {
+          path: 'student/knowledge',
+          name: 'StudentKnowledge',
+          component: () => import('@/views/student/StudentKnowledgeView.vue'),
+          meta: { title: '知识点掌握度', roles: ['student'] },
+        },
+        {
+          path: 'student/evaluation',
+          name: 'StudentEvaluation',
+          component: () => import('@/views/student/StudentEvalView.vue'),
+          meta: { title: '学习评价', roles: ['student'] },
+        },
+        {
+          path: 'student/quiz-list',
+          name: 'QuizTaskList',
+          component: () => import('@/views/student/QuizTaskList.vue'),
+          meta: { title: '答题任务', roles: ['student'] },
+        },
+        {
+          path: 'student/quiz-result',
+          name: 'QuizResult',
+          component: () => import('@/views/student/QuizResultView.vue'),
+          meta: { title: '答题结果', roles: ['student'] },
+        },
+        {
+          path: 'student/grade-archive',
+          name: 'GradeArchive',
+          component: () => import('@/views/student/GradeArchiveView.vue'),
+          meta: { title: '成绩档案', roles: ['student'] },
+        },
+        {
+          path: 'student/error-book',
+          name: 'ErrorBook',
+          component: () => import('@/views/student/ErrorBookView.vue'),
+          meta: { title: '错题本', roles: ['student'] },
         },
       ],
     },
@@ -157,7 +213,8 @@ router.beforeEach((to) => {
       userStore.restoreSession()
     }
     if (userStore.userInfo && !roles.includes(userStore.userInfo.role)) {
-      return '/dashboard'
+      const defaultPath = userStore.userInfo.role === 'student' ? '/student/dashboard' : '/dashboard'
+      return defaultPath
     }
   }
 

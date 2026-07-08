@@ -51,11 +51,10 @@ onBeforeUnmount(() => {
   chartInstance.value?.dispose()
 })
 
-/** 监听配置变化，动态更新图表 */
+/** 监听配置变化，动态更新图表（浅监听，option 来自 computed 每次会返回新引用） */
 watch(
   () => props.option,
   () => renderChart(),
-  { deep: true },
 )
 </script>
 

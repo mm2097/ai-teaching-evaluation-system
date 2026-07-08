@@ -43,7 +43,9 @@ async function handleLogin(): Promise<void> {
     const success = await userStore.login(loginForm.username, loginForm.password)
     if (success) {
       ElMessage.success('登录成功，欢迎回来！')
-      const redirect = (route.query.redirect as string) || '/dashboard'
+      const role = userStore.userInfo?.role
+      const defaultPath = role === 'student' ? '/student/dashboard' : '/dashboard'
+      const redirect = (route.query.redirect as string) || defaultPath
       router.push(redirect)
     }
     // 登录失败时，具体错误信息由 userStore 统一弹出

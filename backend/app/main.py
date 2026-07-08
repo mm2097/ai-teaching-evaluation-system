@@ -15,6 +15,7 @@ from app.api.v1.analysis import router as analysis_router
 from app.api.v1.logs import router as logs_router
 from app.api.v1.evaluations import router as eval_router
 from app.api.v1.attendance import router as attendance_router
+from app.api.v1.teaching_data import router as teaching_data_router
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -37,7 +38,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,3 +56,4 @@ app.include_router(analysis_router, prefix="/api/v1", tags=["学情分析"])
 app.include_router(logs_router, prefix="/api/v1", tags=["系统日志"])
 app.include_router(eval_router, prefix="/api/v1", tags=["评价管理"])
 app.include_router(attendance_router, prefix="/api/v1", tags=["考勤管理"])
+app.include_router(teaching_data_router, prefix="/api/v1", tags=["教学数据"])

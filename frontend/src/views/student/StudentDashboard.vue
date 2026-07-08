@@ -8,8 +8,7 @@ import type { EChartsOption } from 'echarts'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { dashboardStats, gradeTrendData } from '@/mock'
-import { delay } from '@/utils/auth'
+import request from '@/utils/request'
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -59,16 +58,20 @@ const scoreBarOption = computed<EChartsOption>(() => ({
   grid: { left: 50, right: 20, top: 40, bottom: 30 },
 }))
 
+/** 成绩趋势数据 */
+const trendMonths = ref<string[]>([])
+const trendAvgScore = ref<number[]>([])
+
 /** 成绩趋势 */
 const trendOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: gradeTrendData.months, axisLabel: { color: '#64748b' } },
+  xAxis: { type: 'category', data: trendMonths.value, axisLabel: { color: '#64748b' } },
   yAxis: { type: 'value', max: 100, name: '分数' },
   series: [{
     name: '平均分',
     type: 'line',
     smooth: true,
-    data: gradeTrendData.avgScore,
+    data: trendAvgScore.value,
     itemStyle: { color: '#2563eb' },
     areaStyle: { color: 'rgba(37, 99, 235, 0.08)' },
   }],
@@ -76,7 +79,17 @@ const trendOption = computed<EChartsOption>(() => ({
 }))
 
 onMounted(async () => {
-  await delay(300)
+  try {
+    const studentId = userStore.userInfo?.studentId
+    // 加载成绩趋势
+    const trendRes = await request.get('/v1/dashboard/grade-trend', {
+      params: { student_id: studentId, dept_id: 1 },
+    })
+    if (trendRes.data?.labels) {
+      trendMonths.value = trendRes.data.labels
+      trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
+    }
+  } catch { /* empty */ }
   loading.value = false
 })
 </script>

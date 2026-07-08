@@ -113,25 +113,10 @@ export const warningRecords: WarningRecord[] = [
   { id: 5, studentId: '2024001089', studentName: '钱七', className: '软工2401', classId: 3, deptId: 1, courseId: 3, courseName: '计算机网络', semesterId: 1, type: '综合异常', level: '中', reason: '考勤与成绩同时出现异常', warningTime: '2026-03-11', status: 2 },
 ]
 
-/** 教师评价模拟数据（与 mock 教师列表一致） */
-export const teacherEvalList = [
-  { id: 1, targetName: '王教授', targetType: 'teacher', totalScore: 92.5, grade: '优秀' as const, dimensions: [{ name: '教学效果', score: 95, weight: 35 }, { name: '教学投入', score: 90, weight: 25 }, { name: '学生反馈', score: 93, weight: 25 }, { name: '教学规范', score: 91, weight: 15 }], rank: 1 },
-  { id: 2, targetName: '张讲师', targetType: 'teacher', totalScore: 78.6, grade: '中等' as const, dimensions: [{ name: '教学效果', score: 76, weight: 35 }, { name: '教学投入', score: 80, weight: 25 }, { name: '学生反馈', score: 78, weight: 25 }, { name: '教学规范', score: 82, weight: 15 }], rank: 2 },
-]
-
 /** 学生评价模拟数据 */
 export const studentEvalList = [
   { id: 1, targetName: '陈同学', targetType: 'student', totalScore: 88.5, grade: '优秀' as const, dimensions: [{ name: '学业成绩', score: 90, weight: 40 }, { name: '学习态度', score: 85, weight: 25 }, { name: '学习进步', score: 92, weight: 20 }, { name: '知识掌握', score: 86, weight: 15 }] },
   { id: 2, targetName: '刘同学', targetType: 'student', totalScore: 72.3, grade: '中等' as const, dimensions: [{ name: '学业成绩', score: 70, weight: 40 }, { name: '学习态度', score: 75, weight: 25 }, { name: '学习进步', score: 68, weight: 20 }, { name: '知识掌握', score: 78, weight: 15 }] },
-]
-
-/** 课程评价模拟数据 */
-export const courseEvalList = [
-  { id: 1, targetName: '数据结构', targetType: 'course', totalScore: 91.2, grade: '优秀' as const, dimensions: [{ name: '考核质量', score: 92, weight: 30 }, { name: '学生参与', score: 88, weight: 25 }, { name: '成绩合理', score: 93, weight: 25 }, { name: '教学效果', score: 90, weight: 20 }], rank: 1 },
-  { id: 2, targetName: '操作系统', targetType: 'course', totalScore: 84.6, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 85, weight: 30 }, { name: '学生参与', score: 82, weight: 25 }, { name: '成绩合理', score: 86, weight: 25 }, { name: '教学效果', score: 84, weight: 20 }], rank: 2 },
-  { id: 3, targetName: '计算机网络', targetType: 'course', totalScore: 79.3, grade: '中等' as const, dimensions: [{ name: '考核质量', score: 78, weight: 30 }, { name: '学生参与', score: 80, weight: 25 }, { name: '成绩合理', score: 79, weight: 25 }, { name: '教学效果', score: 81, weight: 20 }], rank: 3 },
-  { id: 4, targetName: 'Java程序设计', targetType: 'course', totalScore: 86.8, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 87, weight: 30 }, { name: '学生参与', score: 85, weight: 25 }, { name: '成绩合理', score: 88, weight: 25 }, { name: '教学效果', score: 86, weight: 20 }], rank: 4 },
-  { id: 5, targetName: '数据库原理', targetType: 'course', totalScore: 82.1, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 83, weight: 30 }, { name: '学生参与', score: 80, weight: 25 }, { name: '成绩合理', score: 82, weight: 25 }, { name: '教学效果', score: 83, weight: 20 }], rank: 5 },
 ]
 
 /** 数据导入日志 */

@@ -169,6 +169,73 @@ export interface StudentProfileData {
   weakPoints: string
 }
 
+/** 班级学情画像数据（单课程维度） */
+export interface ClassProfileData {
+  classId: number
+  className: string
+  courseId: number
+  courseName: string
+  majorName: string
+  studentCount: number
+  totalProfileScore: number
+  passRate: number
+  excellentRate: number
+  warningCount: number
+  tags: string[]
+  radarValues: number[]
+  dimensionScores: { name: string; score: number; desc: string }[]
+  strongPoints: string
+  weakPoints: string
+  levelDistribution: { label: string; count: number; color: string }[]
+  topStudents: { studentId: number; studentName: string; score: number }[]
+  attentionStudents: { studentId: number; studentName: string; score: number; reason: string }[]
+  aiSummary: string
+  teachingSuggestions: string[]
+}
+
+/** 成绩趋势数据（班级维度） */
+export interface GradeTrendData {
+  months: string[]
+  avgScore: number[]
+  passRate: number[]
+  maxScore: number[]
+  minScore: number[]
+}
+
+/** 成绩趋势数据（学生个人维度） */
+export interface StudentGradeTrendData {
+  months: string[]
+  scores: number[]
+  classAvgScores: number[]
+}
+
+/** 成绩预测条目 */
+export interface GradePredictionItem {
+  name: string
+  current: number
+  predicted: string
+  trend: '上升' | '下滑' | '稳定'
+  confidence: number
+}
+
+/** 学生个人成绩预测 */
+export interface StudentGradePrediction {
+  studentId: number
+  studentName: string
+  studentNo: string
+  className: string
+  courseName: string
+  current: number
+  predicted: string
+  trend: '上升' | '下滑' | '稳定'
+  confidence: number
+  classRank: number
+  classSize: number
+  vsClassAvg: number
+  analysisItems: { title: string; content: string }[]
+  suggestion: string
+}
+
 /** 数据模板类型 */
 export type DataTemplateType = 'score' | 'attendance' | 'assignment' | 'qa'
 

@@ -255,8 +255,8 @@ function renderToolResult(call: AgentToolCall): string {
 .agent-chat {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 520px;
+  flex: 1;
+  min-height: 0;
   background: #fff;
   border-radius: 12px;
   border: 1px solid #e2e8f0;
@@ -265,7 +265,9 @@ function renderToolResult(call: AgentToolCall): string {
 
 .agent-chat__body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 20px;
 }
 
@@ -305,6 +307,7 @@ function renderToolResult(call: AgentToolCall): string {
   display: flex;
   gap: 12px;
   margin-bottom: 20px;
+  min-width: 0;
 
   &.user {
     flex-direction: row-reverse;
@@ -342,10 +345,13 @@ function renderToolResult(call: AgentToolCall): string {
 
 .message__bubble {
   max-width: 75%;
+  min-width: 0;
   padding: 12px 16px;
   border-radius: 12px;
   font-size: 14px;
   line-height: 1.7;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .message__content.streaming::after {
@@ -369,6 +375,8 @@ function renderToolResult(call: AgentToolCall): string {
   padding: 10px 12px;
   margin-bottom: 8px;
   font-size: 13px;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .tool-call-header {
@@ -377,11 +385,15 @@ function renderToolResult(call: AgentToolCall): string {
   gap: 8px;
   cursor: pointer;
   color: #475569;
+  min-width: 0;
 
   span {
     flex: 1;
+    min-width: 0;
     font-family: monospace;
     font-size: 12px;
+    overflow-wrap: anywhere;
+    word-break: break-all;
   }
 }
 
@@ -422,9 +434,11 @@ function renderToolResult(call: AgentToolCall): string {
   padding: 16px;
   border-top: 1px solid #e2e8f0;
   background: #fafafa;
+  flex-shrink: 0;
 
   .el-button {
     align-self: flex-end;
+    flex-shrink: 0;
   }
 }
 </style>

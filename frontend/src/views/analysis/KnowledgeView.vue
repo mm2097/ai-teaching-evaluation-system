@@ -131,7 +131,6 @@ const heatmapOption = computed<EChartsOption>(() => {
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,
-      splitArea: { show: true },
       axisLabel: { rotate: 30, fontSize: 11 },
     },
     yAxis: {

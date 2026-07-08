@@ -1,35 +1,29 @@
 /**
- * AI 服务 API
- * 对齐 AI算法_需求与开发文档 第 7 章
+ * AI 能力 API（预留，需要 AI 服务对接）
  */
 import request from '@/utils/request'
-import { delay } from '@/utils/auth'
-import { mockGenerateExercises, mockAiReport } from '@/mock/ai'
-import type { AiReportResult, GenerateExerciseParams, GenerateExerciseResult } from '@/types'
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
-
-/** AI 生成练习题 */
-export async function generateExercises(params: GenerateExerciseParams): Promise<GenerateExerciseResult> {
-  if (USE_MOCK) {
-    await delay(1500)
-    return mockGenerateExercises(params)
-  }
-
-  const { data } = await request.post<GenerateExerciseResult>('/v1/ai/exercises/generate', params)
-  return data
+export interface AIQuestionParams {
+  knowledgePoint: string
+  count: number
+  types: string[]
 }
 
-/** AI 生成报告结论与建议 */
-export async function generateAiReport(params: {
-  courseId: number
-  scope?: 'class' | 'student'
-}): Promise<AiReportResult> {
-  if (USE_MOCK) {
-    await delay(2000)
-    return { ...mockAiReport }
-  }
+export interface GeneratedQuestion {
+  content: string
+  type: string
+  options?: string[]
+  answer: string
+  knowledgePoint: string
+  difficulty: string
+}
 
-  const { data } = await request.post<AiReportResult>('/v1/ai/report/generate', params)
-  return data
+/** 生成练习题（当前返回空，后续接入 AI 服务） */
+export async function generateExercises(_params: AIQuestionParams): Promise<GeneratedQuestion[]> {
+  return []
+}
+
+/** 生成 AI 分析报告（当前返回空，后续接入 AI 服务） */
+export async function generateAiReport(_studentId: string, _courseName: string): Promise<string> {
+  return 'AI 分析服务对接中，敬请期待...'
 }

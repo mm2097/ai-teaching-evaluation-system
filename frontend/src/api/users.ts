@@ -1,18 +1,14 @@
 /**
- * 用户管理 API（模拟后端 /api/users 接口）
+ * 用户管理 API（调用真实后端 /api/users）
  */
-import { delay } from '@/utils/auth'
-import { systemUserList } from '@/mock'
 import type { SystemUser, UserRole } from '@/types'
-
-/** 内存中的用户列表，支持演示 CRUD */
-const users: SystemUser[] = systemUserList.map((u) => ({ ...u }))
+import request from '@/utils/request'
 
 export const userApi = {
   /** 列出全部用户 */
   async list(): Promise<SystemUser[]> {
-    await delay(300)
-    return [...users]
+    const res = await request.get('/users')
+    return (res.data as any[]).map(mapUser)
   },
 
   /** 创建用户（默认密码 123456） */
@@ -23,21 +19,15 @@ export const userApi = {
     department: string
     status: boolean
   }): Promise<SystemUser> {
-    await delay(500)
-    if (users.some((u) => u.username === data.username)) {
-      throw new Error('账号已存在')
-    }
-    const newUser: SystemUser = {
-      id: Date.now(),
+    const roleMap: Record<UserRole, number> = { admin: 1, teacher: 2, student: 3 }
+    const res = await request.post('/users', {
       username: data.username,
-      name: data.name,
-      role: data.role,
-      department: data.department,
-      status: data.status,
-      createTime: new Date().toISOString().slice(0, 10),
-    }
-    users.unshift(newUser)
-    return { ...newUser }
+      password: '123456',
+      real_name: data.name,
+      role_id: roleMap[data.role],
+      status: data.status ? 1 : 0,
+    })
+    return mapUser(res.data)
   },
 
   /** 更新用户（只传要改的字段） */
@@ -45,18 +35,33 @@ export const userApi = {
     id: number,
     data: Partial<{ name: string; role: UserRole; department: string; status: boolean; password: string }>,
   ): Promise<SystemUser> {
-    await delay(300)
-    const idx = users.findIndex((u) => u.id === id)
-    if (idx < 0) throw new Error('用户不存在')
-    users[idx] = { ...users[idx]!, ...data }
-    return { ...users[idx]! }
+    const payload: Record<string, any> = {}
+    if (data.name !== undefined) payload.real_name = data.name
+    if (data.role !== undefined) {
+      const roleMap: Record<UserRole, number> = { admin: 1, teacher: 2, student: 3 }
+      payload.role_id = roleMap[data.role]
+    }
+    if (data.status !== undefined) payload.status = data.status ? 1 : 0
+    if (data.password !== undefined) payload.password = data.password
+    const res = await request.put(`/users/${id}`, payload)
+    return mapUser(res.data)
   },
 
   /** 删除用户 */
   async remove(id: number): Promise<void> {
-    await delay(300)
-    const idx = users.findIndex((u) => u.id === id)
-    if (idx < 0) throw new Error('用户不存在')
-    users.splice(idx, 1)
+    await request.delete(`/users/${id}`)
   },
+}
+
+function mapUser(raw: any): SystemUser {
+  const roleMap: Record<number, UserRole> = { 1: 'admin', 2: 'teacher', 3: 'student' }
+  return {
+    id: raw.user_id,
+    username: raw.username,
+    name: raw.real_name,
+    role: roleMap[raw.role_id] ?? 'student',
+    department: '',
+    status: raw.status === 1,
+    createTime: raw.create_time?.slice(0, 10) ?? '',
+  }
 }

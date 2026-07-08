@@ -16,7 +16,6 @@ import {
   deleteQuestion,
 } from '@/api/questionBank'
 import { fetchCourses } from '@/api/dict'
-import { getKnowledgePointsByCourse } from '@/mock/dict'
 import { useUserStore } from '@/stores/user'
 import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type {
@@ -108,9 +107,8 @@ onMounted(async () => {
 })
 
 function syncKnowledgePoints(): void {
-  if (filters.value.courseId) {
-    knowledgePointOptions.value = getKnowledgePointsByCourse(filters.value.courseId)
-  }
+  // Knowledge points will be loaded from the backend when available
+  knowledgePointOptions.value = []
 }
 
 watch(() => filters.value.courseId, () => {

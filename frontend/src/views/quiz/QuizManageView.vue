@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, Edit, Promotion, Collection, View, CircleClose, FolderAdd, Delete } from '@element-plus/icons-vue'
+import { MagicStick, Edit, Promotion, Collection, View, CircleClose, FolderAdd } from '@element-plus/icons-vue'
 import QuestionFormDialog from '@/components/quiz/QuestionFormDialog.vue'
 import {
   fetchQuizAssignments,
@@ -13,14 +13,12 @@ import {
   saveQuizAssignment,
   publishQuizAssignment,
   closeQuizAssignment,
-  deleteQuizAssignment,
 } from '@/api/quiz'
 import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank } from '@/api/questionBank'
 import { fetchCourses, fetchClasses } from '@/api/dict'
-import { getKnowledgePointsByCourse } from '@/mock/dict'
 import { useUserStore } from '@/stores/user'
 import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
-import type { DifficultyLevel, ExerciseStatus, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
+import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
 
@@ -28,8 +26,6 @@ const createMode = ref<'ai' | 'bank'>('ai')
 const courseOptions = ref<{ label: string; value: number }[]>([])
 const classOptions = ref<{ label: string; value: number }[]>([])
 const assignmentList = ref<QuizAssignment[]>([])
-const listStatusFilter = ref<ExerciseStatus | ''>('')
-const editingAssignmentId = ref<number | null>(null)
 
 const form = ref({
   courseId: undefined as number | undefined,
@@ -61,12 +57,11 @@ async function loadClassOptions(): Promise<void> {
 }
 
 function syncKnowledgePoints(): void {
-  if (form.value.courseId) {
-    knowledgePointOptions.value = getKnowledgePointsByCourse(form.value.courseId)
-    form.value.knowledgePoints = form.value.knowledgePoints.filter((kp) =>
-      knowledgePointOptions.value.includes(kp),
-    )
-  }
+  // Knowledge points will be loaded from the backend when available
+  knowledgePointOptions.value = []
+  form.value.knowledgePoints = form.value.knowledgePoints.filter((kp) =>
+    knowledgePointOptions.value.includes(kp),
+  )
 }
 
 async function loadBankQuestions(): Promise<void> {
@@ -82,11 +77,6 @@ async function loadBankQuestions(): Promise<void> {
   }
 }
 
-async function reloadAssignments(): Promise<void> {
-  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
-  assignmentList.value = await fetchQuizAssignments({ teacherId })
-}
-
 onMounted(async () => {
   const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
   const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
@@ -96,7 +86,7 @@ onMounted(async () => {
   await loadClassOptions()
   syncKnowledgePoints()
   await loadBankQuestions()
-  await reloadAssignments()
+  assignmentList.value = await fetchQuizAssignments({ teacherId })
 })
 
 const questionTypeOptions = [
@@ -225,45 +215,6 @@ function getAddableToBankQuestions(): QuizQuestion[] {
 
 const notBankedCount = computed(() => getAddableToBankQuestions().length)
 
-const filteredAssignmentList = computed(() => {
-  if (!listStatusFilter.value) return assignmentList.value
-  return assignmentList.value.filter((a) => a.status === listStatusFilter.value)
-})
-
-const editingAssignmentTitle = computed(() => {
-  if (!editingAssignmentId.value) return ''
-  return assignmentList.value.find((a) => a.id === editingAssignmentId.value)?.title || ''
-})
-
-function buildAssignmentPayload() {
-  const course = courseOptions.value.find((c) => c.value === form.value.courseId)
-  const cls = classOptions.value.find((c) => c.value === form.value.classId)
-  return {
-    id: editingAssignmentId.value ?? undefined,
-    title: form.value.title || `${course?.label} - 专项练习`,
-    courseId: form.value.courseId!,
-    courseName: course?.label || '',
-    classId: form.value.classId!,
-    className: cls?.label || '',
-    teacherName: userStore.userInfo?.name || '任课教师',
-    knowledgePoints: form.value.knowledgePoints,
-    status: 'draft' as const,
-    questions: previewQuestions.value,
-  }
-}
-
-function clearPreviewState(): void {
-  editingAssignmentId.value = null
-  previewQuestions.value = []
-  generateMeta.value = null
-  bankSelectedIds.value = []
-}
-
-function cancelEditDraft(): void {
-  clearPreviewState()
-  form.value.title = ''
-}
-
 async function handleAddAllToBank(): Promise<void> {
   if (!form.value.courseId || !previewQuestions.value.length) return
   const toAdd = getAddableToBankQuestions()
@@ -302,11 +253,21 @@ async function handleSaveDraft(): Promise<void> {
     ElMessage.warning('请先生成或选择题目')
     return
   }
-  const isUpdate = editingAssignmentId.value != null
-  const saved = await saveQuizAssignment(buildAssignmentPayload())
-  editingAssignmentId.value = saved.id
-  await reloadAssignments()
-  ElMessage.success(`练习「${saved.title}」已${isUpdate ? '更新' : '保存'}为草稿`)
+  const course = courseOptions.value.find((c) => c.value === form.value.courseId)
+  const cls = classOptions.value.find((c) => c.value === form.value.classId)
+  const saved = await saveQuizAssignment({
+    title: form.value.title || `${course?.label} - 专项练习`,
+    courseId: form.value.courseId!,
+    courseName: course?.label || '',
+    classId: form.value.classId!,
+    className: cls?.label || '',
+    teacherName: userStore.userInfo?.name || '任课教师',
+    knowledgePoints: form.value.knowledgePoints,
+    status: 'draft',
+    questions: previewQuestions.value,
+  })
+  assignmentList.value = await fetchQuizAssignments()
+  ElMessage.success(`练习「${saved.title}」已保存为草稿`)
 }
 
 async function handlePublish(): Promise<void> {
@@ -314,16 +275,24 @@ async function handlePublish(): Promise<void> {
     ElMessage.warning('请先生成或选择题目')
     return
   }
+  const course = courseOptions.value.find((c) => c.value === form.value.courseId)
   const cls = classOptions.value.find((c) => c.value === form.value.classId)
-  const title = form.value.title || buildAssignmentPayload().title
-  await ElMessageBox.confirm(`确定发布练习「${title}」给 ${cls?.label || '所选班级'}？`, '发布确认', {
-    type: 'info',
+  const saved = await saveQuizAssignment({
+    title: form.value.title || `${course?.label} - 专项练习`,
+    courseId: form.value.courseId!,
+    courseName: course?.label || '',
+    classId: form.value.classId!,
+    className: cls?.label || '',
+    teacherName: userStore.userInfo?.name || '任课教师',
+    knowledgePoints: form.value.knowledgePoints,
+    status: 'draft',
+    questions: previewQuestions.value,
   })
-  const saved = await saveQuizAssignment(buildAssignmentPayload())
   await publishQuizAssignment(saved.id)
-  await reloadAssignments()
-  clearPreviewState()
-  form.value.title = ''
+  assignmentList.value = await fetchQuizAssignments()
+  previewQuestions.value = []
+  generateMeta.value = null
+  bankSelectedIds.value = []
   ElMessage.success('练习已发布，学生可在「在线答题」中作答')
 }
 
@@ -332,51 +301,8 @@ async function handleCloseAssignment(row: QuizAssignment): Promise<void> {
     type: 'warning',
   })
   await closeQuizAssignment(row.id)
-  await reloadAssignments()
+  assignmentList.value = await fetchQuizAssignments()
   ElMessage.success('练习已关闭')
-}
-
-async function editDraft(row: QuizAssignment): Promise<void> {
-  if (row.status !== 'draft') return
-  editingAssignmentId.value = row.id
-  form.value.courseId = row.courseId
-  form.value.classId = row.classId
-  form.value.title = row.title
-  form.value.knowledgePoints = [...row.knowledgePoints]
-  previewQuestions.value = row.questions.map((q) => ({ ...q }))
-  generateMeta.value = null
-  await loadClassOptions()
-  syncKnowledgePoints()
-  await refreshBankedStatus()
-  ElMessage.info(`已加载草稿「${row.title}」，可在预览区继续编辑`)
-}
-
-async function handlePublishFromList(row: QuizAssignment): Promise<void> {
-  if (row.status !== 'draft') return
-  await ElMessageBox.confirm(`确定发布练习「${row.title}」给 ${row.className}？`, '发布确认', {
-    type: 'info',
-  })
-  await publishQuizAssignment(row.id)
-  if (editingAssignmentId.value === row.id) {
-    clearPreviewState()
-    form.value.title = ''
-  }
-  await reloadAssignments()
-  ElMessage.success('练习已发布，学生可在「在线答题」中作答')
-}
-
-async function handleDeleteDraft(row: QuizAssignment): Promise<void> {
-  if (row.status !== 'draft') return
-  await ElMessageBox.confirm(`确定删除草稿「${row.title}」？此操作不可恢复。`, '删除确认', {
-    type: 'warning',
-  })
-  await deleteQuizAssignment(row.id)
-  if (editingAssignmentId.value === row.id) {
-    clearPreviewState()
-    form.value.title = ''
-  }
-  await reloadAssignments()
-  ElMessage.success('草稿已删除')
 }
 
 function viewAssignment(row: QuizAssignment): void {
@@ -499,9 +425,6 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
           <div class="content-card__title">
             题目预览
             <span v-if="previewQuestions.length" class="q-count">共 {{ previewQuestions.length }} 题</span>
-            <el-tag v-if="editingAssignmentId" size="small" type="warning" style="margin-left: 8px">
-              编辑草稿：{{ editingAssignmentTitle }}
-            </el-tag>
             <el-tag v-if="generateMeta" size="small" type="info" style="margin-left: 8px">
               {{ generateMeta.model }} · {{ generateMeta.elapsedMs }}ms
             </el-tag>
@@ -555,24 +478,16 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
             >
               全部加入题库（{{ notBankedCount }}）
             </el-button>
-            <el-button @click="handleSaveDraft">{{ editingAssignmentId ? '更新草稿' : '保存草稿' }}</el-button>
+            <el-button @click="handleSaveDraft">保存草稿</el-button>
             <el-button type="success" :icon="Promotion" @click="handlePublish">发布给班级</el-button>
-            <el-button v-if="editingAssignmentId" @click="cancelEditDraft">取消编辑</el-button>
           </div>
         </div>
       </el-col>
     </el-row>
 
     <div class="content-card" style="margin-top: 16px">
-      <div class="list-header">
-        <div class="content-card__title">练习列表</div>
-        <el-select v-model="listStatusFilter" placeholder="全部状态" clearable style="width: 120px">
-          <el-option label="草稿" value="draft" />
-          <el-option label="已发布" value="published" />
-          <el-option label="已关闭" value="closed" />
-        </el-select>
-      </div>
-      <el-table :data="filteredAssignmentList" stripe border>
+      <div class="content-card__title">练习列表</div>
+      <el-table :data="assignmentList" stripe border>
         <el-table-column prop="title" label="练习标题" min-width="200" />
         <el-table-column prop="courseName" label="课程" width="140" />
         <el-table-column prop="className" label="班级" width="110" />
@@ -586,18 +501,9 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
         <el-table-column prop="publishTime" label="发布时间" width="170">
           <template #default="{ row }">{{ row.publishTime || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+        <el-table-column label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="viewAssignment(row)">详情</el-button>
-            <template v-if="row.status === 'draft'">
-              <el-button type="primary" link size="small" :icon="Edit" @click="editDraft(row)">继续编辑</el-button>
-              <el-button type="success" link size="small" :icon="Promotion" @click="handlePublishFromList(row)">
-                发布
-              </el-button>
-              <el-button type="danger" link size="small" :icon="Delete" @click="handleDeleteDraft(row)">
-                删除
-              </el-button>
-            </template>
             <el-button
               v-if="row.status === 'published'"
               type="warning"
@@ -692,16 +598,5 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
   font-size: 13px;
   color: #64748b;
   margin-bottom: 16px;
-}
-
-.list-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-
-  .content-card__title {
-    margin-bottom: 0;
-  }
 }
 </style>

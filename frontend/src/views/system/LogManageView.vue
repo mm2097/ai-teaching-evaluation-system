@@ -3,8 +3,8 @@
   记录并查询用户操作日志
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { systemLogList } from '@/mock'
+import { ref, computed, onMounted } from 'vue'
+import request from '@/utils/request'
 
 const filters = ref({
   username: '',
@@ -13,9 +13,17 @@ const filters = ref({
 })
 
 const logTypes = ['登录', '数据操作', '查询', '导出', '配置修改']
+const logs = ref<any[]>([])
+
+onMounted(async () => {
+  try {
+    const res = await request.get('/v1/logs')
+    logs.value = res.data.list ?? res.data
+  } catch { logs.value = [] }
+})
 
 const filteredLogs = computed(() => {
-  return systemLogList.filter((log) => {
+  return logs.value.filter((log) => {
     if (filters.value.username && !log.username.includes(filters.value.username)) return false
     if (filters.value.type && log.type !== filters.value.type) return false
     if (filters.value.dateRange && filters.value.dateRange.length === 2) {

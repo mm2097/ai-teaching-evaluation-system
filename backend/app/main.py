@@ -6,6 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.auth import router as auth_router
 from app.api.v1.health import router as health_router
 from app.api.v1.users import router as users_router
+from app.api.v1.courses import router as courses_router
+from app.api.v1.students import router as students_router
+from app.api.v1.scores import router as scores_router
+from app.api.v1.dicts import router as dicts_router
+from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.analysis import router as analysis_router
+from app.api.v1.logs import router as logs_router
+from app.api.v1.evaluations import router as eval_router
+from app.api.v1.attendance import router as attendance_router
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -35,5 +44,14 @@ app.add_middleware(
 )
 
 app.include_router(health_router, prefix="/api", tags=["健康检查"])
-app.include_router(users_router, prefix="/api", tags=["用户管理"])
 app.include_router(auth_router, prefix="/api", tags=["认证"])
+app.include_router(users_router, prefix="/api", tags=["用户管理"])
+app.include_router(courses_router, prefix="/api/v1", tags=["课程管理"])
+app.include_router(students_router, prefix="/api/v1", tags=["学生管理"])
+app.include_router(scores_router, prefix="/api/v1", tags=["成绩管理"])
+app.include_router(dicts_router, prefix="/api/v1", tags=["字典"])
+app.include_router(dashboard_router, prefix="/api/v1", tags=["看板"])
+app.include_router(analysis_router, prefix="/api/v1", tags=["学情分析"])
+app.include_router(logs_router, prefix="/api/v1", tags=["系统日志"])
+app.include_router(eval_router, prefix="/api/v1", tags=["评价管理"])
+app.include_router(attendance_router, prefix="/api/v1", tags=["考勤管理"])

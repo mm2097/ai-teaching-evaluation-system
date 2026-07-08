@@ -3,17 +3,28 @@
   维护学期、院系、预警阈值等业务参数
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { departmentOptions, semesterOptions } from '@/mock'
+import { fetchSemesters, fetchDepartments } from '@/api/dict'
 
 /** 当前配置 Tab */
 const activeTab = ref('basic')
 
 /** 基础数据 */
+const semesterOptions = ref<{ label: string; value: string }[]>([])
+const departmentOptions = ref<{ label: string; value: number }[]>([])
+
 const basicData = ref({
-  semesters: [...semesterOptions],
-  departments: departmentOptions.filter((d) => d.value),
+  semesters: [] as { label: string; value: string }[],
+  departments: [] as { label: string; value: number }[],
+})
+
+onMounted(async () => {
+  const [sems, depts] = await Promise.all([fetchSemesters(), fetchDepartments()])
+  semesterOptions.value = sems.map(s => ({ label: s.semesterName, value: s.semesterCode }))
+  departmentOptions.value = depts.map(d => ({ label: d.deptName, value: d.id }))
+  basicData.value.semesters = [...semesterOptions.value]
+  basicData.value.departments = [...departmentOptions.value]
 })
 
 /** 预警阈值配置 */

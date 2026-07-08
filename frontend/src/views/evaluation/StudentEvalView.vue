@@ -3,32 +3,46 @@
   展示学生综合评价与班级分布
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { studentEvalList } from '@/mock'
 import { evalGradeType } from '@/utils/auth'
+import request from '@/utils/request'
+
+const studentEvalList = ref<any[]>([])
+
+onMounted(async () => {
+  try {
+    const res = await request.get('/v1/evaluations')
+    studentEvalList.value = res.data
+  } catch { studentEvalList.value = [] }
+})
 
 /** 评价等级分布饼图 */
-const pieOption = computed<EChartsOption>(() => ({
-  tooltip: { trigger: 'item' },
-  legend: { bottom: 0 },
-  color: ['#10b981', '#2563eb', '#f59e0b', '#94a3b8', '#ef4444'],
-  series: [{
-    type: 'pie',
-    radius: ['40%', '65%'],
-    center: ['50%', '45%'],
-    itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-    label: { formatter: '{b}\n{d}%' },
-    data: [
-      { name: '优秀', value: 28 },
-      { name: '良好', value: 35 },
-      { name: '中等', value: 22 },
-      { name: '合格', value: 10 },
-      { name: '不合格', value: 5 },
-    ],
-  }],
-}))
+const pieOption = computed<EChartsOption>(() => {
+  const gradeCount: Record<string, number> = {}
+  for (const item of studentEvalList.value) {
+    const g = item.grade || '未知'
+    gradeCount[g] = (gradeCount[g] || 0) + 1
+  }
+  const gradeNames = ['优秀', '良好', '中等', '合格', '不合格']
+  const data = gradeNames
+    .map((name) => ({ name, value: gradeCount[name] || 0 }))
+    .filter((d) => d.value > 0)
+  return {
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0 },
+    color: ['#10b981', '#2563eb', '#f59e0b', '#94a3b8', '#ef4444'],
+    series: [{
+      type: 'pie',
+      radius: ['40%', '65%'],
+      center: ['50%', '45%'],
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+      label: { formatter: '{b}\n{d}%' },
+      data,
+    }],
+  }
+})
 </script>
 
 <template>

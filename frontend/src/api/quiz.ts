@@ -1,170 +1,243 @@
 /**
- * AI 出题与在线答题 API（模拟）
+ * AI 出题与在线答题 API
+ * 对齐 AI算法_需求与开发文档 第 7 章
  */
+import request from '@/utils/request'
 import { delay } from '@/utils/auth'
 import { quizAssignments, quizSubmissions } from '@/mock/quiz'
-import type { QuizAssignment, QuizQuestion, QuizSubmission } from '@/types'
+import { generateExercises } from '@/api/ai'
+import { calcQuizScore, judgeAnswer } from '@/utils/exerciseJudge'
+import type {
+  ExerciseStatus,
+  ExerciseType,
+  GenerateExerciseParams,
+  GenerateExerciseResult,
+  QuizAssignment,
+  QuizQuestion,
+  QuizSubmission,
+} from '@/types'
+
+const USE_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
 
 export interface GenerateQuizParams {
   courseId: number
   classId: number
   knowledgePoints: string[]
-  questionTypes: string[]
+  questionTypes: ExerciseType[]
   questionCount: number
+  difficulty: GenerateExerciseParams['difficulty']
+  extraRequirements?: string
 }
-
-const aiQuestionPool: Omit<QuizQuestion, 'id'>[] = [
-  {
-    type: 'single',
-    content: '哈希表查找的平均时间复杂度是？',
-    options: ['O(1)', 'O(n)', 'O(log n)', 'O(n²)'],
-    answer: 'O(1)',
-    knowledgePoint: '哈希表',
-    score: 10,
-  },
-  {
-    type: 'single',
-    content: 'TCP 三次握手的第一步是？',
-    options: ['SYN', 'ACK', 'FIN', 'RST'],
-    answer: 'SYN',
-    knowledgePoint: 'TCP协议',
-    score: 10,
-  },
-  {
-    type: 'multiple',
-    content: '面向对象的三大特性包括？（多选）',
-    options: ['封装', '继承', '多态', '递归'],
-    answer: ['封装', '继承', '多态'],
-    knowledgePoint: '面向对象',
-    score: 10,
-  },
-  {
-    type: 'fill',
-    content: '栈的特点是 _____ 出栈。',
-    answer: '后进先出',
-    knowledgePoint: '栈与队列',
-    score: 10,
-  },
-  {
-    type: 'short',
-    content: '简述二分查找的前提条件。',
-    answer: '数据必须有序',
-    knowledgePoint: '查找算法',
-    score: 10,
-  },
-]
 
 /** 获取练习列表 */
 export async function fetchQuizAssignments(params?: {
   teacherId?: number
   courseId?: number
-  status?: string
+  status?: ExerciseStatus | string
 }): Promise<QuizAssignment[]> {
-  await delay(300)
-  return quizAssignments.filter((a) => {
-    if (params?.courseId && a.courseId !== params.courseId) return false
-    if (params?.status && a.status !== params.status) return false
-    return true
-  })
+  if (USE_MOCK) {
+    await delay(300)
+    return quizAssignments.filter((a) => {
+      if (params?.courseId && a.courseId !== params.courseId) return false
+      if (params?.status && a.status !== params.status) return false
+      return true
+    })
+  }
+
+  const { data } = await request.get<QuizAssignment[]>('/v1/exercises', { params })
+  return data
 }
 
 /** AI 生成练习题 */
-export async function generateQuizQuestions(params: GenerateQuizParams): Promise<QuizQuestion[]> {
-  await delay(1500)
-  const filtered = aiQuestionPool.filter(
-    (q) => !params.knowledgePoints.length || params.knowledgePoints.includes(q.knowledgePoint),
-  )
-  const pool = filtered.length ? filtered : aiQuestionPool
-  return pool.slice(0, params.questionCount).map((q, idx) => ({
-    ...q,
-    id: Date.now() + idx,
-  }))
+export async function generateQuizQuestions(params: GenerateQuizParams): Promise<GenerateExerciseResult> {
+  return generateExercises({
+    courseId: params.courseId,
+    knowledgePoints: params.knowledgePoints,
+    questionTypes: params.questionTypes,
+    count: params.questionCount,
+    difficulty: params.difficulty,
+    extraRequirements: params.extraRequirements,
+  })
 }
 
 /** 创建/更新练习 */
-export async function saveQuizAssignment(assignment: Partial<QuizAssignment> & { questions: QuizQuestion[] }): Promise<QuizAssignment> {
-  await delay(500)
-  if (assignment.id) {
-    const idx = quizAssignments.findIndex((a) => a.id === assignment.id)
-    if (idx >= 0) {
-      quizAssignments[idx] = { ...quizAssignments[idx]!, ...assignment } as QuizAssignment
-      return quizAssignments[idx]!
+export async function saveQuizAssignment(
+  assignment: Partial<QuizAssignment> & { questions: QuizQuestion[] },
+): Promise<QuizAssignment> {
+  if (USE_MOCK) {
+    await delay(500)
+    if (assignment.id) {
+      const idx = quizAssignments.findIndex((a) => a.id === assignment.id)
+      if (idx >= 0) {
+        quizAssignments[idx] = { ...quizAssignments[idx]!, ...assignment } as QuizAssignment
+        return quizAssignments[idx]!
+      }
     }
+    const newAssignment: QuizAssignment = {
+      id: Date.now(),
+      title: assignment.title || '未命名练习',
+      courseId: assignment.courseId || 1,
+      courseName: assignment.courseName || '数据结构与算法',
+      classId: assignment.classId || 1,
+      className: assignment.className || '计科2401',
+      teacherName: assignment.teacherName || '王教授',
+      knowledgePoints: assignment.knowledgePoints || [],
+      questionCount: assignment.questions.length,
+      totalScore: assignment.questions.reduce((s, q) => s + q.score, 0),
+      status: assignment.status || 'draft',
+      questions: assignment.questions,
+    }
+    quizAssignments.unshift(newAssignment)
+    return newAssignment
   }
-  const newAssignment: QuizAssignment = {
-    id: Date.now(),
-    title: assignment.title || '未命名练习',
-    courseId: assignment.courseId || 1,
-    courseName: assignment.courseName || '数据结构',
-    classId: assignment.classId || 1,
-    className: assignment.className || '计科2401',
-    teacherName: assignment.teacherName || '王教授',
-    knowledgePoints: assignment.knowledgePoints || [],
-    questionCount: assignment.questions.length,
-    totalScore: assignment.questions.reduce((s, q) => s + q.score, 0),
-    status: assignment.status || 'draft',
-    questions: assignment.questions,
-  }
-  quizAssignments.unshift(newAssignment)
-  return newAssignment
+
+  const { data } = await request.post<QuizAssignment>('/v1/exercises', assignment)
+  return data
 }
 
-/** 发布练习 */
-export async function publishQuizAssignment(id: number): Promise<void> {
-  await delay(300)
-  const assignment = quizAssignments.find((a) => a.id === id)
-  if (assignment) {
-    assignment.status = 'published'
-    assignment.publishTime = new Date().toLocaleString('zh-CN', { hour12: false })
+/** 更新单题 */
+export async function updateExercise(id: number, question: Partial<QuizQuestion>): Promise<void> {
+  if (USE_MOCK) {
+    await delay(200)
+    for (const assignment of quizAssignments) {
+      const idx = assignment.questions.findIndex((q) => q.id === id)
+      if (idx >= 0) {
+        assignment.questions[idx] = { ...assignment.questions[idx]!, ...question }
+        return
+      }
+    }
+    return
   }
+  await request.put(`/v1/exercises/${id}`, question)
+}
+
+/** 删除单题 */
+export async function deleteExercise(id: number): Promise<void> {
+  if (USE_MOCK) {
+    await delay(200)
+    for (const assignment of quizAssignments) {
+      assignment.questions = assignment.questions.filter((q) => q.id !== id)
+      assignment.questionCount = assignment.questions.length
+      assignment.totalScore = assignment.questions.reduce((s, q) => s + q.score, 0)
+    }
+    return
+  }
+  await request.delete(`/v1/exercises/${id}`)
+}
+
+/** 批量发布练习 */
+export async function publishQuizAssignment(id: number): Promise<void> {
+  if (USE_MOCK) {
+    await delay(300)
+    const assignment = quizAssignments.find((a) => a.id === id)
+    if (assignment) {
+      assignment.status = 'published'
+      assignment.publishTime = new Date().toLocaleString('zh-CN', { hour12: false })
+    }
+    return
+  }
+  await request.post('/v1/exercises/publish', { exercise_ids: [id] })
+}
+
+/** 关闭练习（停止学生作答） */
+export async function closeQuizAssignment(id: number): Promise<void> {
+  if (USE_MOCK) {
+    await delay(300)
+    const assignment = quizAssignments.find((a) => a.id === id)
+    if (assignment) assignment.status = 'closed'
+    return
+  }
+  await request.post(`/v1/exercises/assignments/${id}/close`)
 }
 
 /** 获取学生可答练习 */
 export async function fetchStudentQuizzes(studentId: number): Promise<QuizAssignment[]> {
-  await delay(300)
-  return quizAssignments.filter((a) => a.status === 'published')
+  if (USE_MOCK) {
+    await delay(300)
+    const { students, isStudentEnrolled } = await import('@/mock/dict')
+    const student = students.find((s) => s.id === studentId)
+    return quizAssignments.filter(
+      (a) => a.status === 'published' && student && isStudentEnrolled(student.id, a.courseId),
+    )
+  }
+
+  const { data } = await request.get<QuizAssignment[]>('/v1/exercises', {
+    params: { status: 'published' },
+  })
+  return data
 }
 
-/** 提交答题 */
+/** 提交单题答案并判分 */
+export async function submitExerciseAnswer(
+  exerciseId: number,
+  answer: string | boolean,
+): Promise<{ correct: boolean; score: number; knowledgeMasteryUpdated: boolean }> {
+  if (USE_MOCK) {
+    await delay(300)
+    for (const assignment of quizAssignments) {
+      const question = assignment.questions.find((q) => q.id === exerciseId)
+      if (question) {
+        const correct = judgeAnswer(question, answer)
+        return { correct, score: correct ? question.score : 0, knowledgeMasteryUpdated: true }
+      }
+    }
+    throw new Error('题目不存在')
+  }
+
+  const { data } = await request.post<{ correct: boolean; score: number; knowledge_mastery_updated: boolean }>(
+    `/v1/exercises/${exerciseId}/answer`,
+    { answer },
+  )
+  return {
+    correct: data.correct,
+    score: data.score,
+    knowledgeMasteryUpdated: data.knowledge_mastery_updated,
+  }
+}
+
+/** 提交整卷答题 */
 export async function submitQuizAnswers(
   assignmentId: number,
   studentId: number,
   studentName: string,
-  answers: Record<number, string | string[]>,
+  answers: Record<number, string | boolean>,
 ): Promise<QuizSubmission> {
-  await delay(800)
-  const assignment = quizAssignments.find((a) => a.id === assignmentId)
-  if (!assignment) throw new Error('练习不存在')
+  if (USE_MOCK) {
+    await delay(800)
+    const assignment = quizAssignments.find((a) => a.id === assignmentId)
+    if (!assignment) throw new Error('练习不存在')
 
-  let score = 0
-  assignment.questions.forEach((q) => {
-    const ans = answers[q.id]
-    if (Array.isArray(q.answer)) {
-      const userAns = Array.isArray(ans) ? ans.sort().join(',') : ''
-      const correct = [...q.answer].sort().join(',')
-      if (userAns === correct) score += q.score
-    } else if (String(ans).trim() === String(q.answer).trim()) {
-      score += q.score
+    const score = calcQuizScore(assignment.questions, answers)
+    const submission: QuizSubmission = {
+      id: Date.now(),
+      assignmentId,
+      studentId,
+      studentName,
+      score,
+      totalScore: assignment.totalScore,
+      submitTime: new Date().toLocaleString('zh-CN', { hour12: false }),
+      answers,
     }
-  })
-
-  const submission: QuizSubmission = {
-    id: Date.now(),
-    assignmentId,
-    studentId,
-    studentName,
-    score,
-    totalScore: assignment.totalScore,
-    submitTime: new Date().toLocaleString('zh-CN', { hour12: false }),
-    answers,
+    quizSubmissions.push(submission)
+    return submission
   }
-  quizSubmissions.push(submission)
-  return submission
+
+  const { data } = await request.post<QuizSubmission>(`/v1/exercises/assignments/${assignmentId}/submit`, {
+    answers,
+  })
+  return data
 }
 
 /** 获取提交记录 */
 export async function fetchQuizSubmissions(assignmentId?: number): Promise<QuizSubmission[]> {
-  await delay(200)
-  if (!assignmentId) return [...quizSubmissions]
-  return quizSubmissions.filter((s) => s.assignmentId === assignmentId)
+  if (USE_MOCK) {
+    await delay(200)
+    if (!assignmentId) return [...quizSubmissions]
+    return quizSubmissions.filter((s) => s.assignmentId === assignmentId)
+  }
+
+  const { data } = await request.get<QuizSubmission[]>('/v1/exercises/submissions', {
+    params: { assignment_id: assignmentId },
+  })
+  return data
 }

@@ -1,13 +1,14 @@
 <!--
   报告生成与导出中心
-  面向单课程/单班级的学情报告
+  统计指标由后端计算，分析结论与建议由 LLM 生成
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, View } from '@element-plus/icons-vue'
-import { delay } from '@/utils/auth'
+import { generateAiReport } from '@/api/ai'
 import { semesterOptions, courses, classes } from '@/mock'
+import type { AiReportResult } from '@/types'
 
 const reportTypes = [
   { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', icon: 'Reading' },
@@ -26,6 +27,7 @@ const genParams = ref({
 
 const generating = ref(false)
 const previewVisible = ref(false)
+const reportData = ref<AiReportResult | null>(null)
 
 const csCourses = courses.filter((c) => c.deptId === 1)
 const csClasses = classes.filter((c) => c.deptId === 1)
@@ -38,24 +40,37 @@ const historyReports = ref([
 
 async function generateReport(): Promise<void> {
   generating.value = true
-  await delay(2000)
-  generating.value = false
-  const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
-  historyReports.value.unshift({
-    id: Date.now(),
-    name: typeName,
-    type: typeName.slice(0, 4),
-    time: new Date().toLocaleString('zh-CN'),
-    format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
-  })
-  ElMessage.success('报告生成成功！')
+  try {
+    reportData.value = await generateAiReport({ courseId: genParams.value.courseId, scope: 'class' })
+    const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
+    historyReports.value.unshift({
+      id: Date.now(),
+      name: typeName,
+      type: typeName.slice(0, 4),
+      time: new Date().toLocaleString('zh-CN'),
+      format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
+    })
+    ElMessage.success('报告生成成功！')
+  } catch {
+    ElMessage.error('报告生成失败，核心指标仍可查看')
+  } finally {
+    generating.value = false
+  }
 }
 
 function previewReport(): void {
+  if (!reportData.value) {
+    ElMessage.info('请先生成报告')
+    return
+  }
   previewVisible.value = true
 }
 
 function exportReport(): void {
+  if (!reportData.value) {
+    ElMessage.info('请先生成报告')
+    return
+  }
   ElMessage.success(`报告已导出为 ${genParams.value.format.toUpperCase()} 格式`)
 }
 </script>
@@ -140,26 +155,38 @@ function exportReport(): void {
       </el-col>
     </el-row>
 
-    <el-dialog v-model="previewVisible" title="报告预览" width="700px" top="5vh">
-      <div class="report-preview">
+    <el-dialog v-model="previewVisible" title="报告预览" width="720px" top="5vh">
+      <div v-if="reportData" class="report-preview">
         <h2 style="text-align: center; margin-bottom: 20px">计算机学院学情分析报告</h2>
+
         <h3>一、核心指标概览</h3>
-        <p>本报告基于 2025-2026 学年第一学期数据生成，面向计算机学院单课程/单班级维度。</p>
+        <p>本报告基于统计数据生成，面向计算机学院单课程/单班级维度。</p>
         <el-descriptions :column="2" border style="margin: 16px 0">
-          <el-descriptions-item label="课程及格率">87.6%</el-descriptions-item>
-          <el-descriptions-item label="优秀率">23.4%</el-descriptions-item>
-          <el-descriptions-item label="平均出勤率">92.3%</el-descriptions-item>
-          <el-descriptions-item label="预警学生">12 人</el-descriptions-item>
+          <el-descriptions-item label="班级人数">{{ reportData.metrics.classSize }} 人</el-descriptions-item>
+          <el-descriptions-item label="平均成绩">{{ reportData.metrics.avgScore }}</el-descriptions-item>
+          <el-descriptions-item label="及格率">{{ (reportData.metrics.passRate * 100).toFixed(1) }}%</el-descriptions-item>
+          <el-descriptions-item label="平均出勤率">{{ (reportData.metrics.attendanceRate * 100).toFixed(1) }}%</el-descriptions-item>
+          <el-descriptions-item label="预警学生">{{ reportData.metrics.warningCount }} 人</el-descriptions-item>
+          <el-descriptions-item label="成绩趋势">{{ reportData.trend }}</el-descriptions-item>
         </el-descriptions>
-        <h3>二、分析结论</h3>
-        <p>数据结构课程整体学情良好，面向对象和异常处理为班级薄弱知识点。</p>
-        <h3>三、优化建议</h3>
+
+        <h3>二、薄弱知识点</h3>
+        <el-table :data="reportData.weakKnowledgePoints" size="small" border style="margin-bottom: 16px">
+          <el-table-column prop="name" label="知识点" />
+          <el-table-column prop="correctRate" label="正确率" width="120">
+            <template #default="{ row }">{{ (row.correctRate * 100).toFixed(0) }}%</template>
+          </el-table-column>
+        </el-table>
+
+        <h3>三、分析结论 <el-tag size="small" type="warning">AI 生成</el-tag></h3>
+        <p>{{ reportData.conclusion }}</p>
+
+        <h3>四、教学优化建议 <el-tag size="small" type="warning">AI 生成</el-tag></h3>
         <ol>
-          <li>加强薄弱知识点（面向对象、异常处理）的针对性辅导</li>
-          <li>对预警学生实施一对一学业帮扶</li>
-          <li>通过 AI 练习巩固薄弱知识点</li>
+          <li v-for="(item, idx) in reportData.suggestions" :key="idx">{{ item }}</li>
         </ol>
       </div>
+      <el-empty v-else description="暂无报告数据" />
     </el-dialog>
   </div>
 </template>

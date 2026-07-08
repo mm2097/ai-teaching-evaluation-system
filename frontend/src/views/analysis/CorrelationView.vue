@@ -12,7 +12,7 @@ import { useAnalysisScope } from '@/composables/useAnalysisScope'
 const scope = useAnalysisScope('class')
 const {
   allowedTargetTypes, targetType, semesterId, classId, courseId, targetId,
-  semesterOptions, classOptions, courseOptions, targetOptions,
+  semesterOptions, classOptions, courseOptions,
   showClassFilter, showCourseFilter, showTargetTypeFilter,
 } = scope
 
@@ -83,7 +83,6 @@ const scatterOption = computed<EChartsOption>(() => ({
         :show-student-picker="false"
         :class-options="classOptions"
         :course-options="courseOptions"
-        :target-options="targetOptions"
       />
     </div>
 

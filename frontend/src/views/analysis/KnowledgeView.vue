@@ -3,79 +3,144 @@
   以热力图为核心，支持班级整体 / 学生个人视角切换
 -->
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
-import { fetchKnowledgeHeatmap } from '@/api/analysis'
+import { fetchKnowledgeHeatmap, computeClassKnowledgeStats, type KnowledgeHeatmapResult } from '@/api/analysis'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
+import { useUserStore } from '@/stores/user'
 
 type ViewMode = 'class' | 'student'
 
-const viewMode = ref<ViewMode>('class')
+const userStore = useUserStore()
+const canViewClass = computed(() => userStore.userInfo?.role !== 'student')
+
+const viewMode = ref<ViewMode>(userStore.userInfo?.role === 'student' ? 'student' : 'class')
+const heatmapLoading = ref(false)
 
 const scope = useAnalysisScope('class')
 const {
-  targetType, semesterId, classId, courseId, targetId, studentKeyword,
-  semesterOptions, classOptions, courseOptions, targetOptions,
-  showClassFilter, showCourseFilter, showStudentPicker,
-  queryParams, loadStudentOptions,
+  targetType, semesterId, classId, courseId, targetId,
+  studentList, studentLoading,
+  semesterOptions, classOptions, courseOptions,
+  showClassFilter, showCourseFilter,
+  queryParams,
 } = scope
 
-const heatmapData = ref({
-  knowledgePoints: [] as string[],
-  students: [] as string[],
-  data: [] as number[][],
+const emptyHeatmap = (): KnowledgeHeatmapResult => ({
+  knowledgePoints: [],
+  students: [],
+  data: [],
+})
+
+const heatmapData = ref<KnowledgeHeatmapResult>(emptyHeatmap())
+
+const classStats = computed(() => {
+  if (viewMode.value === 'class' && heatmapData.value.data.length) {
+    return computeClassKnowledgeStats(heatmapData.value)
+  }
+  return null
 })
 
 async function loadHeatmap(): Promise<void> {
-  const params = {
-    ...queryParams.value,
-    analysisType: '知识点掌握度',
-    targetType: viewMode.value === 'class' ? 'class' as const : 'student' as const,
-    targetId: viewMode.value === 'student' ? targetId.value : classId.value,
-  }
-  heatmapData.value = await fetchKnowledgeHeatmap(params)
-}
+  const mode = viewMode.value
+  if (targetType.value !== mode) return
 
-watch([queryParams, viewMode, targetId, classId], loadHeatmap, { deep: true, immediate: true })
+  if (mode === 'student') {
+    if (!targetId.value) {
+      heatmapData.value = emptyHeatmap()
+      return
+    }
+  } else if (!classId.value) {
+    return
+  }
+
+  heatmapLoading.value = true
+  try {
+    const params = {
+      ...queryParams.value,
+      analysisType: '知识点掌握度',
+      targetType: viewMode.value,
+      targetId: viewMode.value === 'student' ? targetId.value : classId.value,
+    }
+    heatmapData.value = await fetchKnowledgeHeatmap(params)
+  } finally {
+    heatmapLoading.value = false
+  }
+}
 
 watch(viewMode, (mode) => {
   targetType.value = mode === 'class' ? 'class' : 'student'
+}, { immediate: true })
+
+watch(
+  [semesterId, classId, courseId, targetId, viewMode],
+  () => { /* 选项变化时不自动查询，需点击查询按钮 */ },
+)
+
+async function handleQuery(): Promise<void> {
+  await loadHeatmap()
+}
+
+const selectedStudentName = computed(() => {
+  if (viewMode.value !== 'student' || !targetId.value) return ''
+  const student = studentList.value.find((s) => s.id === targetId.value)
+  return student?.studentName ?? heatmapData.value.students[0] ?? ''
 })
 
-const heatmapTitle = computed(() =>
-  viewMode.value === 'class' ? '班级知识点掌握度热力图' : '学生个人知识点掌握度热力图',
-)
+const heatmapTitle = computed(() => {
+  if (viewMode.value === 'class') return '班级知识点掌握度热力图'
+  return selectedStudentName.value
+    ? `${selectedStudentName.value} · 个人知识点掌握度`
+    : '学生个人知识点掌握度热力图'
+})
 
 const heatmapOption = computed<EChartsOption>(() => {
   const isPersonal = viewMode.value === 'student'
+  const hasCompareRow = isPersonal && heatmapData.value.classAvgByKp?.length
+  const yLabels = isPersonal
+    ? (hasCompareRow ? ['班级均值', heatmapData.value.students[0] ?? '个人'] : [heatmapData.value.students[0] ?? '个人'])
+    : heatmapData.value.students
+
+  let chartData = heatmapData.value.data
+  if (isPersonal && hasCompareRow && heatmapData.value.data.length) {
+    const classRow = heatmapData.value.classAvgByKp!.map((val, kpIdx) => [kpIdx, 0, val] as number[])
+    const personalRow = heatmapData.value.data.map(([kpIdx, , val]) => [kpIdx, 1, val!] as number[])
+    chartData = [...classRow, ...personalRow]
+  }
+
   return {
     tooltip: {
       position: 'top',
       formatter: (params: unknown) => {
         const p = params as { value: number[] }
         const [x, y, val] = p.value
-        if (isPersonal) {
-          return `${heatmapData.value.knowledgePoints[x!]}<br/>掌握度: ${val}%`
+        const kp = heatmapData.value.knowledgePoints[x!] ?? ''
+        if (isPersonal && hasCompareRow) {
+          const label = y === 0 ? '班级均值' : (heatmapData.value.students[0] ?? '个人')
+          return `${label} · ${kp}<br/>掌握度: ${val}%`
         }
-        return `${heatmapData.value.students[y!]} - ${heatmapData.value.knowledgePoints[x!]}<br/>掌握度: ${val}%`
+        if (isPersonal) {
+          return `${kp}<br/>掌握度: ${val}%`
+        }
+        return `${heatmapData.value.students[y!]} · ${kp}<br/>掌握度: ${val}%`
       },
     },
-    grid: { left: isPersonal ? 20 : 80, right: 40, top: 10, bottom: 80 },
+    grid: { left: isPersonal ? 90 : 80, right: 40, top: 10, bottom: 80 },
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,
       splitArea: { show: true },
       axisLabel: { rotate: 30, fontSize: 11 },
     },
-    yAxis: isPersonal
-      ? { show: false }
-      : {
-          type: 'category',
-          data: heatmapData.value.students,
-          splitArea: { show: true },
-        },
+    yAxis: {
+      type: 'category',
+      data: yLabels,
+      splitArea: { show: true },
+      inverse: Boolean(isPersonal && hasCompareRow),
+      axisLabel: { fontSize: 11 },
+    },
     visualMap: {
       min: 0,
       max: 100,
@@ -87,7 +152,7 @@ const heatmapOption = computed<EChartsOption>(() => {
     },
     series: [{
       type: 'heatmap',
-      data: heatmapData.value.data,
+      data: chartData,
       label: { show: true, fontSize: 11 },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
     }],
@@ -97,26 +162,29 @@ const heatmapOption = computed<EChartsOption>(() => {
 const weakPoints = computed(() => {
   if (viewMode.value === 'student' && heatmapData.value.data.length) {
     return heatmapData.value.data
-      .map(([x, , val]) => ({
-        name: heatmapData.value.knowledgePoints[x!]!,
-        rate: val!,
-        level: val! < 60 ? '严重' : val! < 75 ? '中等' : '轻微',
-      }))
+      .map(([x, , val]) => {
+        const classAvg = heatmapData.value.classAvgByKp?.[x!]
+        return {
+          name: heatmapData.value.knowledgePoints[x!]!,
+          rate: val!,
+          classRate: classAvg,
+          level: val! < 60 ? '严重' as const : val! < 75 ? '中等' as const : '轻微' as const,
+        }
+      })
       .filter((p) => p.rate < 75)
       .sort((a, b) => a.rate - b.rate)
   }
-  return [
-    { name: '面向对象', rate: 62, weakCount: 18, level: '严重' },
-    { name: '异常处理', rate: 66, weakCount: 15, level: '中等' },
-    { name: '文件IO', rate: 70, weakCount: 12, level: '中等' },
-    { name: '控制结构', rate: 78, weakCount: 8, level: '轻微' },
-  ]
+  return classStats.value?.weakPoints ?? []
 })
 
-async function handleStudentSearch(keyword: string): Promise<void> {
-  studentKeyword.value = keyword
-  await loadStudentOptions(keyword)
+function handleViewModeChange(mode: ViewMode): void {
+  viewMode.value = mode
 }
+
+onMounted(async () => {
+  await scope.loadOptions()
+  await loadHeatmap()
+})
 </script>
 
 <template>
@@ -124,8 +192,8 @@ async function handleStudentSearch(keyword: string): Promise<void> {
     <div class="content-card">
       <div class="view-mode-bar">
         <span class="mode-label">分析视角：</span>
-        <el-radio-group v-model="viewMode" size="default">
-          <el-radio-button value="class">班级整体</el-radio-button>
+        <el-radio-group :model-value="viewMode" size="default" @update:model-value="handleViewModeChange">
+          <el-radio-button v-if="canViewClass" value="class">班级整体</el-radio-button>
           <el-radio-button value="student">学生个人</el-radio-button>
         </el-radio-group>
       </div>
@@ -142,31 +210,50 @@ async function handleStudentSearch(keyword: string): Promise<void> {
         :show-class-filter="showClassFilter"
         :show-course-filter="showCourseFilter"
         :show-target-type-filter="false"
-        :show-student-picker="viewMode === 'student'"
+        :show-student-picker="viewMode === 'student' && canViewClass"
+        :student-list="studentList"
+        :student-loading="studentLoading"
         :class-options="classOptions"
         :course-options="courseOptions"
-        :target-options="targetOptions"
-        :enable-student-search="viewMode === 'student'"
-        @student-search="handleStudentSearch"
+        :show-query-button="true"
+        @query="handleQuery"
       />
     </div>
 
-    <div class="content-card">
+    <div v-loading="heatmapLoading" class="content-card">
       <div class="content-card__title">{{ heatmapTitle }}</div>
-      <BaseChart :option="heatmapOption" :height="viewMode === 'student' ? '200px' : '400px'" />
+      <p v-if="viewMode === 'student' && !targetId" class="hint-text">请先选择一名学生，查看个人知识点掌握情况。</p>
+      <p v-else-if="viewMode === 'student'" class="hint-text">下方热力图第一行展示班级均值，第二行展示该学生个人掌握度，便于对比。</p>
+      <BaseChart
+        v-if="heatmapData.data.length"
+        :option="heatmapOption"
+        :height="viewMode === 'student' ? '240px' : '400px'"
+      />
     </div>
 
     <el-row :gutter="16">
       <el-col :span="viewMode === 'class' ? 12 : 24">
         <div class="content-card">
           <div class="content-card__title">{{ viewMode === 'class' ? '班级薄弱知识点' : '个人薄弱知识点' }}</div>
-          <el-table :data="weakPoints" stripe border>
+          <el-empty v-if="!weakPoints.length" description="暂无薄弱知识点" :image-size="64" />
+          <el-table v-else :data="weakPoints" stripe border>
             <el-table-column prop="name" label="知识点" />
-            <el-table-column :prop="viewMode === 'class' ? 'classRate' : 'rate'" label="掌握率" width="120" align="center">
+            <el-table-column prop="rate" label="掌握率" width="120" align="center">
               <template #default="{ row }">
-                <span :style="{ color: (row.rate ?? row.classRate) < 70 ? '#ef4444' : '#f59e0b' }">
-                  {{ row.rate ?? row.classRate }}%
+                <span :style="{ color: row.rate < 70 ? '#ef4444' : '#f59e0b' }">
+                  {{ row.rate }}%
                 </span>
+              </template>
+            </el-table-column>
+            <el-table-column
+              v-if="viewMode === 'student'"
+              prop="classRate"
+              label="班级均值"
+              width="100"
+              align="center"
+            >
+              <template #default="{ row }">
+                {{ row.classRate ?? '-' }}%
               </template>
             </el-table-column>
             <el-table-column v-if="viewMode === 'class'" prop="weakCount" label="薄弱人数" width="100" align="center" />
@@ -180,15 +267,15 @@ async function handleStudentSearch(keyword: string): Promise<void> {
           </el-table>
         </div>
       </el-col>
-      <el-col v-if="viewMode === 'class'" :span="12">
+      <el-col v-if="viewMode === 'class' && classStats" :span="12">
         <div class="content-card">
           <div class="content-card__title">班级知识点掌握度概览</div>
           <p class="hint-text">热力图颜色越绿表示掌握度越高，红色区域需重点关注。点击上方「学生个人」可查看单个学生的知识点掌握情况。</p>
           <el-descriptions :column="2" border style="margin-top: 12px">
-            <el-descriptions-item label="班级平均掌握度">76.8%</el-descriptions-item>
-            <el-descriptions-item label="最高掌握知识点">变量与表达式 (92%)</el-descriptions-item>
-            <el-descriptions-item label="最低掌握知识点">面向对象 (62%)</el-descriptions-item>
-            <el-descriptions-item label="需关注学生">18 人</el-descriptions-item>
+            <el-descriptions-item label="班级平均掌握度">{{ classStats.avgRate }}%</el-descriptions-item>
+            <el-descriptions-item label="最高掌握知识点">{{ classStats.highest.name }} ({{ classStats.highest.rate }}%)</el-descriptions-item>
+            <el-descriptions-item label="最低掌握知识点">{{ classStats.lowest.name }} ({{ classStats.lowest.rate }}%)</el-descriptions-item>
+            <el-descriptions-item label="需关注学生">{{ classStats.needAttentionCount }} 人</el-descriptions-item>
           </el-descriptions>
         </div>
       </el-col>
@@ -214,5 +301,6 @@ async function handleStudentSearch(keyword: string): Promise<void> {
   font-size: 13px;
   color: #64748b;
   line-height: 1.6;
+  margin: 0 0 8px;
 }
 </style>

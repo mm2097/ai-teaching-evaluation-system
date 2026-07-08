@@ -63,10 +63,28 @@ const router = createRouter({
           meta: { title: '异常学情预警', roles: ['admin', 'teacher'] },
         },
         {
+          path: 'agent/chat',
+          name: 'AgentChat',
+          component: () => import('@/views/agent/AgentChatView.vue'),
+          meta: { title: 'AI 智能助手' },
+        },
+        {
+          path: 'quiz/bank',
+          name: 'QuestionBank',
+          component: () => import('@/views/quiz/QuestionBankView.vue'),
+          meta: { title: '题库管理', roles: ['admin', 'teacher'] },
+        },
+        {
           path: 'quiz/manage',
           name: 'QuizManage',
           component: () => import('@/views/quiz/QuizManageView.vue'),
           meta: { title: 'AI 出题', roles: ['admin', 'teacher'] },
+        },
+        {
+          path: 'quiz/records',
+          name: 'QuizRecords',
+          component: () => import('@/views/quiz/QuizRecordsView.vue'),
+          meta: { title: '答题记录', roles: ['admin', 'teacher'] },
         },
         {
           path: 'quiz/answer',

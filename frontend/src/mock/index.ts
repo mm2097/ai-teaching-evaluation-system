@@ -2,7 +2,7 @@
  * 模拟用户账号与业务数据
  * 演示环境使用，正式环境由后端接口提供
  */
-import type { ImportLog, TeachingDataRecord, UserInfo, WarningRecord } from '@/types'
+import type { ImportLog, SystemUser, TeachingDataRecord, UserInfo, WarningRecord } from '@/types'
 export * from './dict'
 
 /** 演示账号列表 */
@@ -27,6 +27,16 @@ export const mockUsers: (UserInfo & { password: string })[] = [
     teacherId: 1,
   },
   {
+    id: 5,
+    username: 'teacher2',
+    password: '123456',
+    name: '张讲师',
+    role: 'teacher',
+    department: '计算机学院',
+    deptId: 1,
+    teacherId: 3,
+  },
+  {
     id: 4,
     username: 'student',
     password: '123456',
@@ -40,24 +50,36 @@ export const mockUsers: (UserInfo & { password: string })[] = [
   },
 ]
 
-/** 看板基础统计数据（计算机学院） */
+/** 看板基础统计数据（计算机学院，与 mock 学生规模一致） */
 export const dashboardStats = {
-  studentCount: 126,
+  studentCount: 9,
   courseCount: 5,
   teacherCount: 2,
   passRate: 87.6,
   excellentRate: 23.4,
   attendanceRate: 92.3,
-  warningCount: 12,
+  warningCount: 5,
 }
 
-/** 成绩趋势模拟数据 */
+/** 成绩趋势模拟数据（基础模板，API 层按班级/课程微调） */
 export const gradeTrendData = {
   months: ['9月', '10月', '11月', '12月', '1月', '2月'],
   avgScore: [72, 74, 76, 75, 78, 80],
   passRate: [82, 84, 85, 83, 87, 89],
   maxScore: [98, 97, 99, 96, 98, 100],
   minScore: [45, 48, 50, 47, 52, 55],
+}
+
+/** 各班级/课程成绩趋势偏移系数 */
+export const gradeTrendFactors: Record<string, number> = {
+  'class-1': 1.05,
+  'class-2': 0.92,
+  'class-3': 0.88,
+  'course-1': 1.0,
+  'course-2': 0.95,
+  'course-3': 0.9,
+  'course-4': 1.02,
+  'course-5': 0.93,
 }
 
 /** 学情画像雷达图指标 */
@@ -75,33 +97,26 @@ export const studentProfileRadar = {
 /** 学情标签 */
 export const studentTags = ['成绩优秀', '进步明显', '考勤良好', '作业积极']
 
-/** 知识点掌握度热力图数据 */
+/** @deprecated 热力图数据已改由 dict.buildCourseClassHeatmap 动态生成 */
 export const knowledgeHeatmap = {
-  knowledgePoints: ['变量与表达式', '控制结构', '函数定义', '数组操作', '面向对象', '文件IO', '异常处理', '数据结构'],
-  students: ['陈同学', '刘同学', '赵同学', '孙同学', '周同学'],
-  data: [
-    [0, 0, 92], [0, 1, 85], [0, 2, 78], [0, 3, 90], [0, 4, 65], [0, 5, 88], [0, 6, 72], [0, 7, 80],
-    [1, 0, 78], [1, 1, 82], [1, 2, 70], [1, 3, 75], [1, 4, 60], [1, 5, 68], [1, 6, 55], [1, 7, 72],
-    [2, 0, 88], [2, 1, 90], [2, 2, 85], [2, 3, 92], [2, 4, 78], [2, 5, 82], [2, 6, 70], [2, 7, 85],
-    [3, 0, 65], [3, 1, 70], [3, 2, 58], [3, 3, 62], [3, 4, 45], [3, 5, 55], [3, 6, 48], [3, 7, 60],
-    [4, 0, 95], [4, 1, 92], [4, 2, 88], [4, 3, 96], [4, 4, 82], [4, 5, 90], [4, 6, 85], [4, 7, 88],
-  ],
+  knowledgePoints: [] as string[],
+  students: [] as string[],
+  data: [] as number[][],
 }
 
-/** 预警记录模拟数据 */
+/** 预警记录模拟数据（与学生/课程/班级关系一致） */
 export const warningRecords: WarningRecord[] = [
-  { id: 1, studentId: '2024001001', studentName: '张三', className: '计科2401', classId: 1, deptId: 1, courseId: 1, courseName: '数据结构', semesterId: 1, type: '成绩下滑', level: '高', reason: '连续三次考试成绩下降超过15分', warningTime: '2026-03-15', status: 0 },
+  { id: 1, studentId: '2024001002', studentName: '刘同学', className: '计科2401', classId: 1, deptId: 1, courseId: 1, courseName: '数据结构', semesterId: 1, type: '成绩下滑', level: '高', reason: '连续三次测验成绩下降超过15分', warningTime: '2026-03-15', status: 0 },
   { id: 2, studentId: '2024001023', studentName: '李四', className: '计科2401', classId: 1, deptId: 1, courseId: 2, courseName: '操作系统', semesterId: 1, type: '缺勤异常', level: '中', reason: '本月缺勤率达到25%', warningTime: '2026-03-14', status: 0 },
   { id: 3, studentId: '2024001045', studentName: '王五', className: '计科2402', classId: 2, deptId: 1, courseId: 1, courseName: '数据结构', semesterId: 1, type: '作业未交', level: '高', reason: '连续4次作业未提交', warningTime: '2026-03-13', status: 1 },
-  { id: 4, studentId: '2024001067', studentName: '赵六', className: '软工2401', classId: 3, deptId: 1, semesterId: 1, type: '成绩下滑', level: '低', reason: '最近一次考试成绩下降8分', warningTime: '2026-03-12', status: 0 },
+  { id: 4, studentId: '2024001067', studentName: '赵六', className: '软工2401', classId: 3, deptId: 1, courseId: 3, courseName: '计算机网络', semesterId: 1, type: '成绩下滑', level: '低', reason: '最近一次考试成绩下降8分', warningTime: '2026-03-12', status: 0 },
   { id: 5, studentId: '2024001089', studentName: '钱七', className: '软工2401', classId: 3, deptId: 1, courseId: 3, courseName: '计算机网络', semesterId: 1, type: '综合异常', level: '中', reason: '考勤与成绩同时出现异常', warningTime: '2026-03-11', status: 2 },
 ]
 
-/** 教师评价模拟数据 */
+/** 教师评价模拟数据（与 mock 教师列表一致） */
 export const teacherEvalList = [
   { id: 1, targetName: '王教授', targetType: 'teacher', totalScore: 92.5, grade: '优秀' as const, dimensions: [{ name: '教学效果', score: 95, weight: 35 }, { name: '教学投入', score: 90, weight: 25 }, { name: '学生反馈', score: 93, weight: 25 }, { name: '教学规范', score: 91, weight: 15 }], rank: 1 },
-  { id: 2, targetName: '李副教授', targetType: 'teacher', totalScore: 86.2, grade: '良好' as const, dimensions: [{ name: '教学效果', score: 85, weight: 35 }, { name: '教学投入', score: 88, weight: 25 }, { name: '学生反馈', score: 86, weight: 25 }, { name: '教学规范', score: 87, weight: 15 }], rank: 2 },
-  { id: 3, targetName: '张讲师', targetType: 'teacher', totalScore: 78.6, grade: '中等' as const, dimensions: [{ name: '教学效果', score: 76, weight: 35 }, { name: '教学投入', weight: 25, score: 80 }, { name: '学生反馈', score: 78, weight: 25 }, { name: '教学规范', score: 82, weight: 15 }], rank: 3 },
+  { id: 2, targetName: '张讲师', targetType: 'teacher', totalScore: 78.6, grade: '中等' as const, dimensions: [{ name: '教学效果', score: 76, weight: 35 }, { name: '教学投入', score: 80, weight: 25 }, { name: '学生反馈', score: 78, weight: 25 }, { name: '教学规范', score: 82, weight: 15 }], rank: 2 },
 ]
 
 /** 学生评价模拟数据 */
@@ -114,6 +129,9 @@ export const studentEvalList = [
 export const courseEvalList = [
   { id: 1, targetName: '数据结构', targetType: 'course', totalScore: 91.2, grade: '优秀' as const, dimensions: [{ name: '考核质量', score: 92, weight: 30 }, { name: '学生参与', score: 88, weight: 25 }, { name: '成绩合理', score: 93, weight: 25 }, { name: '教学效果', score: 90, weight: 20 }], rank: 1 },
   { id: 2, targetName: '操作系统', targetType: 'course', totalScore: 84.6, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 85, weight: 30 }, { name: '学生参与', score: 82, weight: 25 }, { name: '成绩合理', score: 86, weight: 25 }, { name: '教学效果', score: 84, weight: 20 }], rank: 2 },
+  { id: 3, targetName: '计算机网络', targetType: 'course', totalScore: 79.3, grade: '中等' as const, dimensions: [{ name: '考核质量', score: 78, weight: 30 }, { name: '学生参与', score: 80, weight: 25 }, { name: '成绩合理', score: 79, weight: 25 }, { name: '教学效果', score: 81, weight: 20 }], rank: 3 },
+  { id: 4, targetName: 'Java程序设计', targetType: 'course', totalScore: 86.8, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 87, weight: 30 }, { name: '学生参与', score: 85, weight: 25 }, { name: '成绩合理', score: 88, weight: 25 }, { name: '教学效果', score: 86, weight: 20 }], rank: 4 },
+  { id: 5, targetName: '数据库原理', targetType: 'course', totalScore: 82.1, grade: '良好' as const, dimensions: [{ name: '考核质量', score: 83, weight: 30 }, { name: '学生参与', score: 80, weight: 25 }, { name: '成绩合理', score: 82, weight: 25 }, { name: '教学效果', score: 83, weight: 20 }], rank: 5 },
 ]
 
 /** 数据导入日志 */
@@ -143,7 +161,7 @@ export const teachingDataList: TeachingDataRecord[] = [
 ]
 
 /** 系统用户列表 */
-export const systemUserList = [
+export const systemUserList: SystemUser[] = [
   { id: 1, username: 'admin', name: '张管理', role: 'admin', department: '信息中心', status: true, createTime: '2025-09-01' },
   { id: 3, username: 'teacher', name: '王教授', role: 'teacher', department: '计算机学院', status: true, createTime: '2025-09-05' },
   { id: 4, username: 'student', name: '陈同学', role: 'student', department: '计算机学院', status: true, createTime: '2025-09-10' },

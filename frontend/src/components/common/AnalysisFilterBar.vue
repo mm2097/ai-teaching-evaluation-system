@@ -1,11 +1,11 @@
 <!--
   AI 分析筛选栏
-  单课程/单班级维度筛选，支持学生模糊搜索
+  单课程/单班级维度筛选，学生通过姓名/学号关联下拉选择
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
 import { targetTypeOptions } from '@/api/analysis'
-import type { TargetType } from '@/types'
+import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
+import type { LinkedStudentOption, TargetType } from '@/types'
 
 const props = defineProps<{
   allowedTargetTypes: TargetType[]
@@ -17,14 +17,15 @@ const props = defineProps<{
   showCourseFilter: boolean
   showTargetTypeFilter: boolean
   showStudentPicker: boolean
-  enableStudentSearch?: boolean
+  showQueryButton?: boolean
+  studentList?: LinkedStudentOption[]
+  studentLoading?: boolean
   deptId?: number
   classId?: number
   courseId?: number
   targetId?: number
   classOptions: { label: string; value: number }[]
   courseOptions: { label: string; value: number }[]
-  targetOptions: { label: string; value: number }[]
 }>()
 
 const emit = defineEmits<{
@@ -34,21 +35,12 @@ const emit = defineEmits<{
   'update:classId': [value: number | undefined]
   'update:courseId': [value: number | undefined]
   'update:targetId': [value: number | undefined]
-  'student-search': [keyword: string]
+  query: []
 }>()
-
-const studentSearchLoading = ref(false)
 
 const filteredTargetTypes = targetTypeOptions.filter((o) =>
   props.allowedTargetTypes.includes(o.value),
 )
-
-async function handleStudentSearch(keyword: string): Promise<void> {
-  if (!props.enableStudentSearch) return
-  studentSearchLoading.value = true
-  emit('student-search', keyword)
-  studentSearchLoading.value = false
-}
 </script>
 
 <template>
@@ -114,39 +106,15 @@ async function handleStudentSearch(keyword: string): Promise<void> {
       />
     </el-select>
 
-    <el-select
-      v-if="showStudentPicker && enableStudentSearch"
+    <StudentLinkedPicker
+      v-if="showStudentPicker"
       :model-value="targetId"
-      placeholder="搜索学生（姓名/学号）"
-      filterable
-      remote
-      :remote-method="handleStudentSearch"
-      :loading="studentSearchLoading"
-      style="width: 240px"
+      :students="studentList ?? []"
+      :loading="studentLoading"
       @update:model-value="emit('update:targetId', $event)"
-    >
-      <el-option
-        v-for="opt in targetOptions"
-        :key="opt.value"
-        :label="opt.label"
-        :value="opt.value"
-      />
-    </el-select>
+    />
 
-    <el-select
-      v-else-if="showStudentPicker"
-      :model-value="targetId"
-      placeholder="选择学生"
-      style="width: 200px"
-      @update:model-value="emit('update:targetId', $event)"
-    >
-      <el-option
-        v-for="opt in targetOptions"
-        :key="opt.value"
-        :label="opt.label"
-        :value="opt.value"
-      />
-    </el-select>
+    <el-button v-if="showQueryButton" type="primary" @click="emit('query')">查询</el-button>
   </div>
 </template>
 

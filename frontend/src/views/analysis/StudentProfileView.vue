@@ -3,7 +3,7 @@
   单课程维度学情雷达图、标签与知识点优劣势
 -->
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
@@ -20,29 +20,28 @@ const {
   classId,
   courseId,
   targetId,
-  studentKeyword,
+  studentList,
+  studentLoading,
   semesterOptions,
   classOptions,
   courseOptions,
-  targetOptions,
   showClassFilter,
   showCourseFilter,
   showTargetTypeFilter,
   showStudentPicker,
   queryParams,
-  loadStudentOptions,
 } = scope
 
 const profileData = ref<StudentProfileData | null>(null)
 
 async function loadProfile(): Promise<void> {
+  if (!queryParams.value.courseId) return
+  if (queryParams.value.targetType === 'student' && !queryParams.value.targetId) return
   profileData.value = await fetchStudentProfile({
     ...queryParams.value,
     analysisType: '学情画像',
   })
 }
-
-watch(() => queryParams.value, loadProfile, { deep: true, immediate: true })
 
 const studentName = computed(() => profileData.value?.studentName || '加载中...')
 const studentInfo = computed(() =>
@@ -78,10 +77,10 @@ const radarOption = computed<EChartsOption>(() => ({
 const dimensionScores = computed(() => profileData.value?.dimensionScores || [])
 const studentTags = computed(() => profileData.value?.tags || [])
 
-async function handleStudentSearch(keyword: string): Promise<void> {
-  studentKeyword.value = keyword
-  await loadStudentOptions(keyword)
-}
+onMounted(async () => {
+  await scope.loadOptions()
+  await loadProfile()
+})
 </script>
 
 <template>
@@ -100,11 +99,12 @@ async function handleStudentSearch(keyword: string): Promise<void> {
         :show-course-filter="showCourseFilter"
         :show-target-type-filter="showTargetTypeFilter"
         :show-student-picker="showStudentPicker"
-        :enable-student-search="true"
+        :student-list="studentList"
+        :student-loading="studentLoading"
         :class-options="classOptions"
         :course-options="courseOptions"
-        :target-options="targetOptions"
-        @student-search="handleStudentSearch"
+        :show-query-button="true"
+        @query="loadProfile"
       />
     </div>
 
@@ -115,131 +115,76 @@ async function handleStudentSearch(keyword: string): Promise<void> {
             <el-avatar :size="72" class="profile-avatar">{{ studentName.charAt(0) }}</el-avatar>
             <div>
               <h3>{{ studentName }}</h3>
-              <p>{{ studentInfo }}</p>
+              <p class="profile-meta">{{ studentInfo }}</p>
             </div>
           </div>
-          <div class="profile-tags">
-            <el-tag v-for="tag in studentTags" :key="tag" type="primary" effect="plain" round>
+          <div class="tag-list">
+            <el-tag v-for="tag in studentTags" :key="tag" type="primary" effect="plain" size="small">
               {{ tag }}
             </el-tag>
           </div>
-          <el-divider />
-          <div class="strength-weakness">
-            <div class="sw-item success">
-              <h4>优势知识点</h4>
-              <p>{{ profileData?.strongPoints || '-' }}</p>
-            </div>
-            <div class="sw-item danger">
-              <h4>薄弱知识点</h4>
-              <p>{{ profileData?.weakPoints || '-' }}</p>
-            </div>
-          </div>
         </div>
       </el-col>
-
-      <el-col :xs="24" :lg="8">
+      <el-col :xs="24" :lg="16">
         <div class="content-card">
-          <div class="content-card__title">本课程学情雷达图</div>
-          <BaseChart :option="radarOption" height="340px" />
-        </div>
-      </el-col>
-
-      <el-col :xs="24" :lg="8">
-        <div class="content-card">
-          <div class="content-card__title">维度得分详情</div>
-          <div v-for="dim in dimensionScores" :key="dim.name" class="dim-item">
-            <div class="dim-header">
-              <span>{{ dim.name }}</span>
-              <span class="dim-score">{{ dim.score }}分</span>
-            </div>
-            <el-progress :percentage="dim.score" :stroke-width="8" :color="dim.score >= 80 ? '#10b981' : dim.score >= 60 ? '#2563eb' : '#f59e0b'" />
-            <p class="dim-desc">{{ dim.desc }}</p>
-          </div>
+          <div class="content-card__title">学情雷达图</div>
+          <BaseChart :option="radarOption" height="360px" />
         </div>
       </el-col>
     </el-row>
+
+    <div class="content-card">
+      <div class="content-card__title">维度得分详情</div>
+      <el-table :data="dimensionScores" stripe border>
+        <el-table-column prop="name" label="维度" width="140" />
+        <el-table-column prop="score" label="得分" width="100" align="center">
+          <template #default="{ row }">
+            <el-progress
+              :percentage="row.score"
+              :stroke-width="8"
+              :color="row.score >= 80 ? '#10b981' : row.score >= 60 ? '#2563eb' : '#ef4444'"
+            />
+          </template>
+        </el-table-column>
+        <el-table-column prop="desc" label="说明" />
+      </el-table>
+    </div>
   </div>
 </template>
 
 <style scoped lang="scss">
 .profile-card {
-  .profile-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
+  height: 100%;
+}
 
-    .profile-avatar {
-      background: linear-gradient(135deg, #2563eb, #6366f1);
-      font-size: 28px;
-      color: #fff;
-    }
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
 
-    h3 {
-      font-size: 20px;
-      margin-bottom: 4px;
-    }
-
-    p {
-      color: #64748b;
-      font-size: 13px;
-    }
-  }
-
-  .profile-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 16px;
-  }
-
-  .strength-weakness {
-    .sw-item {
-      padding: 12px;
-      border-radius: 8px;
-      margin-bottom: 8px;
-
-      h4 {
-        font-size: 14px;
-        margin-bottom: 4px;
-      }
-
-      p {
-        font-size: 13px;
-        color: #64748b;
-      }
-
-      &.success {
-        background: #ecfdf5;
-        h4 { color: #10b981; }
-      }
-
-      &.danger {
-        background: #fef2f2;
-        h4 { color: #ef4444; }
-      }
-    }
+  h3 {
+    font-size: 20px;
+    color: #1e293b;
+    margin-bottom: 4px;
   }
 }
 
-.dim-item {
-  margin-bottom: 16px;
+.profile-meta {
+  font-size: 13px;
+  color: #64748b;
+}
 
-  .dim-header {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 6px;
-    font-size: 14px;
+.profile-avatar {
+  background: linear-gradient(135deg, #2563eb, #6366f1);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 600;
+}
 
-    .dim-score {
-      font-weight: 600;
-      color: #2563eb;
-    }
-  }
-
-  .dim-desc {
-    font-size: 12px;
-    color: #94a3b8;
-    margin-top: 4px;
-  }
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 </style>

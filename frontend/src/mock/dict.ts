@@ -12,10 +12,14 @@ export const majors: Major[] = [
   { id: 2, majorCode: 'SE01', majorName: '软件工程', deptId: 1 },
 ]
 
+const majorNameById = Object.fromEntries(majors.map((m) => [m.id, m.majorName]))
+
 export const classes: ClassInfo[] = [
-  { id: 1, classCode: 'CS2401', className: '计科2401', majorId: 1, deptId: 1, grade: '2024' },
-  { id: 2, classCode: 'CS2402', className: '计科2402', majorId: 1, deptId: 1, grade: '2024' },
-  { id: 3, classCode: 'SE2401', className: '软工2401', majorId: 2, deptId: 1, grade: '2024' },
+  { id: 1, classCode: 'CS2401', className: '计科2401', majorId: 1, majorName: majorNameById[1]!, deptId: 1, grade: '2024' },
+  { id: 2, classCode: 'CS2402', className: '计科2402', majorId: 1, majorName: majorNameById[1]!, deptId: 1, grade: '2024' },
+  { id: 3, classCode: 'SE2401', className: '软工2401', majorId: 2, majorName: majorNameById[2]!, deptId: 1, grade: '2024' },
+  { id: 4, classCode: 'CS2301', className: '计科2301', majorId: 1, majorName: majorNameById[1]!, deptId: 1, grade: '2023' },
+  { id: 5, classCode: 'SE2301', className: '软工2301', majorId: 2, majorName: majorNameById[2]!, deptId: 1, grade: '2023' },
 ]
 
 export const semesters: Semester[] = [
@@ -29,12 +33,42 @@ export const teachers: Teacher[] = [
   { id: 3, teacherNo: 'T003', teacherName: '张讲师', deptId: 1 },
 ]
 
+const semesterById = Object.fromEntries(semesters.map((s) => [s.id, s]))
+
+function buildCourse(
+  id: number,
+  courseNo: string,
+  courseName: string,
+  teacherId: number,
+  semesterId: number,
+): Course {
+  const sem = semesterById[semesterId]!
+  return {
+    id,
+    courseNo,
+    courseName,
+    deptId: 1,
+    teacherId,
+    semesterId,
+    semesterCode: sem.semesterCode,
+    semesterName: sem.semesterName,
+  }
+}
+
 export const courses: Course[] = [
-  { id: 1, courseNo: 'CS101', courseName: '数据结构', deptId: 1, teacherId: 1, semesterId: 1 },
-  { id: 2, courseNo: 'CS102', courseName: '操作系统', deptId: 1, teacherId: 1, semesterId: 1 },
-  { id: 3, courseNo: 'CS103', courseName: '计算机网络', deptId: 1, teacherId: 3, semesterId: 1 },
-  { id: 4, courseNo: 'CS104', courseName: 'Java程序设计', deptId: 1, teacherId: 1, semesterId: 1 },
-  { id: 5, courseNo: 'CS105', courseName: '数据库原理', deptId: 1, teacherId: 3, semesterId: 1 },
+  // 2025-2026 学年第一学期
+  buildCourse(1, 'CS101', '数据结构', 1, 1),
+  buildCourse(2, 'CS102', '操作系统', 1, 1),
+  buildCourse(3, 'CS103', '计算机网络', 3, 1),
+  buildCourse(4, 'CS104', 'Java程序设计', 1, 1),
+  buildCourse(5, 'CS105', '数据库原理', 3, 1),
+  // 2024-2025 学年第二学期
+  buildCourse(6, 'CS101', '数据结构', 1, 2),
+  buildCourse(7, 'CS102', '操作系统', 1, 2),
+  buildCourse(8, 'CS103', '计算机网络', 3, 2),
+  // 2024-2025 学年第一学期
+  buildCourse(9, 'CS104', 'Java程序设计', 1, 3),
+  buildCourse(10, 'CS105', '数据库原理', 3, 3),
 ]
 
 export const students: Student[] = [
@@ -47,6 +81,9 @@ export const students: Student[] = [
   { id: 7, studentNo: '2024001045', studentName: '王五', classId: 2, majorId: 1, deptId: 1, grade: '2024' },
   { id: 8, studentNo: '2024001067', studentName: '赵六', classId: 3, majorId: 2, deptId: 1, grade: '2024' },
   { id: 9, studentNo: '2024001089', studentName: '钱七', classId: 3, majorId: 2, deptId: 1, grade: '2024' },
+  { id: 10, studentNo: '2023001001', studentName: '吴同学', classId: 4, majorId: 1, deptId: 1, grade: '2023' },
+  { id: 11, studentNo: '2023001002', studentName: '郑同学', classId: 4, majorId: 1, deptId: 1, grade: '2023' },
+  { id: 12, studentNo: '2023001003', studentName: '冯同学', classId: 5, majorId: 2, deptId: 1, grade: '2023' },
 ]
 
 /** 各课程知识点（与课程名称对应） */
@@ -56,20 +93,64 @@ export const courseKnowledgePoints: Record<number, string[]> = {
   3: ['TCP/IP协议', '路由算法', '网络安全', 'DNS', 'HTTP协议'],
   4: ['变量与表达式', '控制结构', '面向对象', '异常处理', '文件IO', '集合框架'],
   5: ['SQL查询', '关系模型', '索引优化', '事务处理', '规范化理论'],
+  6: ['链表操作', '二叉树遍历', '栈与队列', '平衡二叉树', '排序算法', '哈希表', '图遍历'],
+  7: ['进程调度', '死锁', '内存管理', '文件系统', '虚拟内存'],
+  8: ['TCP/IP协议', '路由算法', '网络安全', 'DNS', 'HTTP协议'],
+  9: ['变量与表达式', '控制结构', '面向对象', '异常处理', '文件IO', '集合框架'],
+  10: ['SQL查询', '关系模型', '索引优化', '事务处理', '规范化理论'],
 }
 
-/** 课程-班级开设关系（某课程在哪些班级开设） */
-export const courseClassRelations: { courseId: number; classId: number }[] = [
-  { courseId: 1, classId: 1 },
-  { courseId: 1, classId: 2 },
-  { courseId: 2, classId: 1 },
-  { courseId: 3, classId: 2 },
-  { courseId: 3, classId: 3 },
-  { courseId: 4, classId: 1 },
-  { courseId: 4, classId: 3 },
-  { courseId: 5, classId: 2 },
-  { courseId: 5, classId: 3 },
+/** 课程-班级开设关系（某课程在某学期向哪些班级开设） */
+export const courseClassRelations: { courseId: number; classId: number; semesterId: number }[] = [
+  // 2025-2026-1 · 2024 级班级
+  { courseId: 1, classId: 1, semesterId: 1 },
+  { courseId: 1, classId: 2, semesterId: 1 },
+  { courseId: 1, classId: 3, semesterId: 1 },
+  { courseId: 2, classId: 1, semesterId: 1 },
+  { courseId: 2, classId: 2, semesterId: 1 },
+  { courseId: 3, classId: 2, semesterId: 1 },
+  { courseId: 3, classId: 3, semesterId: 1 },
+  { courseId: 4, classId: 1, semesterId: 1 },
+  { courseId: 4, classId: 2, semesterId: 1 },
+  { courseId: 4, classId: 3, semesterId: 1 },
+  { courseId: 5, classId: 2, semesterId: 1 },
+  { courseId: 5, classId: 3, semesterId: 1 },
+  // 2024-2025-2 · 2023 级班级
+  { courseId: 6, classId: 4, semesterId: 2 },
+  { courseId: 7, classId: 4, semesterId: 2 },
+  { courseId: 8, classId: 5, semesterId: 2 },
+  // 2024-2025-1 · 2023 级班级
+  { courseId: 9, classId: 4, semesterId: 3 },
+  { courseId: 10, classId: 5, semesterId: 3 },
 ]
+
+/** 课程-专业开设关系（由 courseClassRelations 聚合，表示某课程在某学期向哪些专业开设） */
+export const courseMajorRelations: { courseId: number; majorId: number; semesterId: number }[] = (() => {
+  const seen = new Set<string>()
+  const result: { courseId: number; majorId: number; semesterId: number }[] = []
+  courseClassRelations.forEach((rel) => {
+    const cls = classes.find((c) => c.id === rel.classId)
+    if (!cls) return
+    const key = `${rel.courseId}-${cls.majorId}-${rel.semesterId}`
+    if (seen.has(key)) return
+    seen.add(key)
+    result.push({ courseId: rel.courseId, majorId: cls.majorId, semesterId: rel.semesterId })
+  })
+  return result
+})()
+
+/** 课程选修表 course_student（对应 DB course_student） */
+export const courseStudentEnrollments: { id: number; courseId: number; studentId: number; status: number }[] =
+  students.flatMap((student) =>
+    courseClassRelations
+      .filter((rel) => rel.classId === student.classId)
+      .map((rel, idx) => ({
+        id: student.id * 100 + rel.courseId + idx,
+        courseId: rel.courseId,
+        studentId: student.id,
+        status: 1,
+      })),
+  )
 
 /** 学生知识点掌握度，key 为 `${studentId}-${courseId}`，values 与 courseKnowledgePoints 对齐 */
 export const studentKnowledgeMastery: Record<string, number[]> = {
@@ -93,7 +174,15 @@ export const studentKnowledgeMastery: Record<string, number[]> = {
   '7-3': [68, 65, 62, 70, 58],
   '8-3': [55, 52, 48, 50, 45],
   '9-3': [60, 58, 55, 62, 50],
-  // Java程序设计 CS104 · 计科2401 / 软工2401
+  // 数据结构 CS101 · 软工2401
+  '8-1': [68, 65, 62, 58, 60, 55, 52],
+  '9-1': [72, 70, 68, 62, 65, 60, 58],
+  // 操作系统 CS102 · 计科2402
+  '4-2': [70, 68, 65, 62, 60],
+  '7-2': [75, 72, 70, 68, 65],
+  // Java程序设计 CS104 · 计科2402
+  '4-4': [68, 65, 62, 58, 60, 55],
+  '7-4': [74, 70, 68, 65, 62, 60],
   '1-4': [90, 88, 85, 78, 82, 80],
   '2-4': [72, 70, 68, 62, 65, 60],
   '3-4': [88, 85, 90, 82, 80, 85],
@@ -106,17 +195,32 @@ export const studentKnowledgeMastery: Record<string, number[]> = {
   '7-5': [70, 68, 65, 72, 60],
   '8-5': [58, 55, 52, 58, 50],
   '9-5': [65, 62, 60, 58, 55],
+  // 2024-2025-2 学期 · 计科2301 / 软工2301
+  '10-6': [82, 78, 80, 75, 76, 74, 72],
+  '11-6': [76, 72, 74, 68, 70, 66, 65],
+  '10-7': [80, 76, 78, 72, 74],
+  '11-7': [72, 68, 70, 65, 62],
+  '12-8': [70, 66, 68, 62, 60],
 }
 
 /** 获取课程知识点列表 */
 export function getKnowledgePointsByCourse(courseId: number): string[] {
-  return courseKnowledgePoints[courseId] ?? []
+  if (courseKnowledgePoints[courseId]) {
+    return courseKnowledgePoints[courseId]
+  }
+  const course = courses.find((c) => c.id === courseId)
+  if (!course) return []
+  const sameNoCourse = courses.find(
+    (c) => c.courseNo === course.courseNo && courseKnowledgePoints[c.id],
+  )
+  return sameNoCourse ? (courseKnowledgePoints[sameNoCourse.id] ?? []) : []
 }
 
 /** 获取某课程开设的班级 */
 export function getClassesByCourse(courseId: number): ClassInfo[] {
+  const course = courses.find((c) => c.id === courseId)
   const classIds = courseClassRelations
-    .filter((r) => r.courseId === courseId)
+    .filter((r) => r.courseId === courseId && (!course || r.semesterId === course.semesterId))
     .map((r) => r.classId)
   return classes.filter((c) => classIds.includes(c.id))
 }
@@ -140,21 +244,20 @@ export function getCoursesByClass(classId: number): Course[] {
   return courses.filter((c) => courseIds.includes(c.id))
 }
 
-/** 获取某课程某班级的学生列表 */
+/** 获取某课程某班级的学生列表（course_student + student.class_id） */
 export function getStudentsInCourseClass(courseId: number, classId: number): Student[] {
-  const hasRelation = courseClassRelations.some(
-    (r) => r.courseId === courseId && r.classId === classId,
+  const enrolledIds = new Set(
+    courseStudentEnrollments
+      .filter((e) => e.courseId === courseId && e.status === 1)
+      .map((e) => e.studentId),
   )
-  if (!hasRelation) return []
-  return students.filter((s) => s.classId === classId)
+  return students.filter((s) => s.classId === classId && enrolledIds.has(s.id))
 }
 
 /** 判断学生是否选修某课程 */
 export function isStudentEnrolled(studentId: number, courseId: number): boolean {
-  const student = students.find((s) => s.id === studentId)
-  if (!student) return false
-  return courseClassRelations.some(
-    (r) => r.courseId === courseId && r.classId === student.classId,
+  return courseStudentEnrollments.some(
+    (e) => e.studentId === studentId && e.courseId === courseId && e.status === 1,
   )
 }
 
@@ -174,6 +277,12 @@ export const semesterOptions = semesters.map((s) => ({
 export const departmentOptions = [
   { label: '计算机学院', value: 'CS', id: 1 },
 ]
+
+/** 专业下拉选项 */
+export const majorOptions = majors.map((m) => ({
+  label: m.majorName,
+  value: m.id,
+}))
 
 /** 年级下拉选项 */
 export const gradeOptions = [
@@ -382,6 +491,171 @@ export function getCoursesByTeacher(teacherId: number, semesterId?: number): Cou
     if (semesterId && c.semesterId !== semesterId) return false
     return true
   })
+}
+
+/**
+ * 看板筛选维度关联：
+ * 学期(semesterCode) → 专业/年级/课程/班级
+ * 专业(majorId)      → courseMajorRelations + ClassInfo.majorId
+ * 年级(grade)        → ClassInfo.grade
+ * 课程(courseId)     → courseClassRelations + courseMajorRelations
+ * 班级(classId)      → courseClassRelations
+ */
+export interface DashboardFilterQuery {
+  semesterCode: string
+  majorId?: number
+  grade?: string
+  courseId?: number
+  classId?: number
+  deptId?: number
+  teacherId?: number
+}
+
+/** 学期编码转 ID */
+export function resolveSemesterId(semesterCode: string): number {
+  return semesters.find((s) => s.semesterCode === semesterCode)?.id ?? 1
+}
+
+/** 获取某学期某课程的关联班级 ID */
+function getRelationClassIds(semesterId: number, filters: {
+  courseId?: number
+  majorId?: number
+  grade?: string
+  deptId?: number
+  teacherId?: number
+}): number[] {
+  let relations = courseClassRelations.filter((r) => r.semesterId === semesterId)
+
+  if (filters.courseId) {
+    relations = relations.filter((r) => r.courseId === filters.courseId)
+  }
+
+  if (filters.teacherId) {
+    const teacherCourseIds = courses
+      .filter((c) => c.teacherId === filters.teacherId && c.semesterId === semesterId)
+      .map((c) => c.id)
+    relations = relations.filter((r) => teacherCourseIds.includes(r.courseId))
+  }
+
+  return relations
+    .map((r) => r.classId)
+    .filter((classId) => {
+      const cls = classes.find((c) => c.id === classId)
+      if (!cls) return false
+      if (filters.deptId && cls.deptId !== filters.deptId) return false
+      if (filters.majorId && cls.majorId !== filters.majorId) return false
+      if (filters.grade && cls.grade !== filters.grade) return false
+      return true
+    })
+}
+
+/** 根据专业/年级获取可用班级 ID 集合 */
+function getClassIdsByMajorGrade(majorId?: number, grade?: string, deptId?: number): number[] {
+  return classes
+    .filter((c) => {
+      if (deptId && c.deptId !== deptId) return false
+      if (majorId && c.majorId !== majorId) return false
+      if (grade && c.grade !== grade) return false
+      return true
+    })
+    .map((c) => c.id)
+}
+
+/** 看板：按学期/年级/课程/教师筛选可选专业 */
+export function getDashboardMajors(params: DashboardFilterQuery): Major[] {
+  const semesterId = resolveSemesterId(params.semesterCode)
+  const classIds = new Set(getRelationClassIds(semesterId, params))
+  const majorIds = new Set(
+    classes
+      .filter((c) => classIds.has(c.id))
+      .map((c) => c.majorId),
+  )
+  return majors.filter((m) => {
+    if (params.deptId && m.deptId !== params.deptId) return false
+    return majorIds.has(m.id)
+  })
+}
+
+/** 看板：按学期/专业/课程/教师筛选可选年级 */
+export function getDashboardGrades(params: DashboardFilterQuery): string[] {
+  const semesterId = resolveSemesterId(params.semesterCode)
+  const classIds = getRelationClassIds(semesterId, params)
+  const grades = new Set(
+    classes
+      .filter((c) => classIds.includes(c.id))
+      .map((c) => c.grade),
+  )
+  return Array.from(grades).sort((a, b) => Number(b) - Number(a))
+}
+
+/** 看板：按学期/专业/教师筛选可选课程 */
+export function getDashboardCourses(params: DashboardFilterQuery): Course[] {
+  const semesterId = resolveSemesterId(params.semesterCode)
+  let result = courses.filter((c) => {
+    if (c.semesterId !== semesterId) return false
+    if (params.deptId && c.deptId !== params.deptId) return false
+    if (params.teacherId && c.teacherId !== params.teacherId) return false
+    return true
+  })
+
+  if (params.majorId) {
+    const majorCourseIds = new Set(
+      courseMajorRelations
+        .filter((r) => r.semesterId === semesterId && r.majorId === params.majorId)
+        .map((r) => r.courseId),
+    )
+    result = result.filter((c) => majorCourseIds.has(c.id))
+  }
+
+  if (params.grade) {
+    const classIds = getClassIdsByMajorGrade(params.majorId, params.grade, params.deptId)
+    const courseIds = new Set(
+      courseClassRelations
+        .filter((r) => r.semesterId === semesterId && classIds.includes(r.classId))
+        .map((r) => r.courseId),
+    )
+    result = result.filter((c) => courseIds.has(c.id))
+  }
+
+  return result
+}
+
+/** 看板：按学期/课程/专业/年级/教师筛选可选班级 */
+export function getDashboardClasses(params: DashboardFilterQuery): ClassInfo[] {
+  const semesterId = resolveSemesterId(params.semesterCode)
+  let classIds = getClassIdsByMajorGrade(params.majorId, params.grade, params.deptId)
+
+  if (params.courseId) {
+    const course = courses.find((c) => c.id === params.courseId)
+    if (!course || course.semesterId !== semesterId) {
+      return []
+    }
+    const courseClassIds = courseClassRelations
+      .filter((r) => r.courseId === params.courseId && r.semesterId === semesterId)
+      .map((r) => r.classId)
+    classIds = classIds.filter((id) => courseClassIds.includes(id))
+  } else {
+    const semesterClassIds = new Set(
+      courseClassRelations
+        .filter((r) => r.semesterId === semesterId)
+        .map((r) => r.classId),
+    )
+    classIds = classIds.filter((id) => semesterClassIds.has(id))
+  }
+
+  if (params.teacherId) {
+    const teacherCourseIds = courses
+      .filter((c) => c.teacherId === params.teacherId && c.semesterId === semesterId)
+      .map((c) => c.id)
+    const teacherClassIds = new Set(
+      courseClassRelations
+        .filter((r) => r.semesterId === semesterId && teacherCourseIds.includes(r.courseId))
+        .map((r) => r.classId),
+    )
+    classIds = classIds.filter((id) => teacherClassIds.has(id))
+  }
+
+  return classes.filter((c) => classIds.includes(c.id))
 }
 
 /** 构建某课程某班级的知识点热力图数据 */

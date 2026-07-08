@@ -8,6 +8,10 @@ import {
   courses,
   departments,
   getClassesByTeacher,
+  getDashboardClasses,
+  getDashboardCourses,
+  getDashboardGrades,
+  getDashboardMajors,
   isStudentEnrolled,
   majors,
   semesters,
@@ -21,10 +25,44 @@ export async function fetchDepartments(): Promise<Department[]> {
   return departments
 }
 
-export async function fetchMajors(deptId?: number): Promise<Major[]> {
+export async function fetchMajors(params?: {
+  deptId?: number
+  semesterCode?: string
+  grade?: string
+  courseId?: number
+  teacherId?: number
+}): Promise<Major[]> {
   await delay(200)
-  if (!deptId) return majors
-  return majors.filter((m) => m.deptId === deptId)
+
+  if (params?.semesterCode) {
+    return getDashboardMajors({
+      semesterCode: params.semesterCode,
+      deptId: params.deptId,
+      grade: params.grade,
+      courseId: params.courseId,
+      teacherId: params.teacherId,
+    })
+  }
+
+  if (!params?.deptId) return majors
+  return majors.filter((m) => m.deptId === params.deptId)
+}
+
+export async function fetchDashboardGrades(params: {
+  semesterCode: string
+  deptId?: number
+  majorId?: number
+  courseId?: number
+  teacherId?: number
+}): Promise<string[]> {
+  await delay(200)
+  return getDashboardGrades({
+    semesterCode: params.semesterCode,
+    deptId: params.deptId,
+    majorId: params.majorId,
+    courseId: params.courseId,
+    teacherId: params.teacherId,
+  })
 }
 
 export async function fetchClasses(params?: {
@@ -33,8 +71,24 @@ export async function fetchClasses(params?: {
   grade?: string
   courseId?: number
   teacherId?: number
+  semesterCode?: string
 }): Promise<ClassInfo[]> {
   await delay(200)
+
+  if (params?.semesterCode || params?.courseId) {
+    const semesterCode = params.semesterCode
+      ?? semesters.find((s) => s.isCurrent)?.semesterCode
+      ?? '2025-2026-1'
+    return getDashboardClasses({
+      semesterCode,
+      majorId: params.majorId,
+      grade: params.grade,
+      courseId: params.courseId,
+      deptId: params.deptId,
+      teacherId: params.teacherId,
+    })
+  }
+
   let result = classes.filter((c) => {
     if (params?.deptId && c.deptId !== params.deptId) return false
     if (params?.majorId && c.majorId !== params.majorId) return false
@@ -43,8 +97,13 @@ export async function fetchClasses(params?: {
   })
 
   if (params?.courseId) {
+    const course = courses.find((c) => c.id === params.courseId)
     const classIds = courseClassRelations
-      .filter((r) => r.courseId === params.courseId)
+      .filter((r) => {
+        if (r.courseId !== params.courseId) return false
+        if (course && r.semesterId !== course.semesterId) return false
+        return true
+      })
       .map((r) => r.classId)
     result = result.filter((c) => classIds.includes(c.id))
   }
@@ -82,9 +141,27 @@ export async function fetchCourses(params?: {
   teacherId?: number
   deptId?: number
   semesterId?: number
+  semesterCode?: string
   classId?: number
+  majorId?: number
+  grade?: string
 }): Promise<Course[]> {
   await delay(200)
+
+  if (params?.semesterCode || params?.majorId || params?.grade) {
+    const semesterCode = params.semesterCode
+      ?? semesters.find((s) => s.id === params.semesterId)?.semesterCode
+      ?? semesters.find((s) => s.isCurrent)?.semesterCode
+      ?? '2025-2026-1'
+    return getDashboardCourses({
+      semesterCode,
+      majorId: params.majorId,
+      grade: params.grade,
+      deptId: params.deptId,
+      teacherId: params.teacherId,
+    })
+  }
+
   let result = courses.filter((c) => {
     if (params?.teacherId && c.teacherId !== params.teacherId) return false
     if (params?.deptId && c.deptId !== params.deptId) return false

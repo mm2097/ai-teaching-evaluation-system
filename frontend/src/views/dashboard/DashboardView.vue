@@ -1,72 +1,60 @@
 <!--
   综合数据看板页面
-  面向计算机学院单课程/单班级学情概览
+  筛选维度：学期 → 专业 → 年级 → 课程 → 专业班级
+  未查询时仅展示欢迎区与筛选栏
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
+import { DataAnalysis, Search } from '@element-plus/icons-vue'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { fetchClasses, fetchCourses } from '@/api/dict'
 import { computeClassKnowledgeStats } from '@/api/analysis'
+import { useDashboardFilter } from '@/composables/useDashboardFilter'
 import { useUserStore } from '@/stores/user'
 import {
   buildCourseClassHeatmap,
   dashboardFilterFactors,
   dashboardStats,
   getStudentsInCourseClass,
-  gradeOptions,
-  semesterOptions,
   warningRecords,
 } from '@/mock'
 
 const router = useRouter()
 const userStore = useUserStore()
 
-const filters = ref({
-  semester: '2025-2026-1',
-  courseId: 1,
-  classId: 1,
-  grade: '',
+const {
+  filters,
+  applied,
+  showDashboard,
+  majorOptions,
+  courseOptions,
+  classOptions,
+  semesterOptions,
+  gradeOptions,
+  applyFilters,
+  onSemesterChange,
+  onMajorChange,
+  onGradeChange,
+  onCourseChange,
+  optionsLoading,
+} = useDashboardFilter()
+
+const greeting = computed(() => {
+  const hour = new Date().getHours()
+  if (hour < 12) return '上午好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
 })
 
-const courseOptions = ref<{ label: string; value: number }[]>([])
-const classOptions = ref<{ label: string; value: number }[]>([])
-const applied = ref({ ...filters.value })
-
-async function loadFilterOptions(): Promise<void> {
-  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo?.teacherId : undefined
-  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
-  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-  if (!courseOptions.value.some((c) => c.value === filters.value.courseId)) {
-    filters.value.courseId = courseOptions.value[0]?.value ?? 1
-  }
-
-  const classes = await fetchClasses({ deptId: 1, courseId: filters.value.courseId, teacherId })
-  classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-  if (!classOptions.value.some((c) => c.value === filters.value.classId)) {
-    filters.value.classId = classOptions.value[0]?.value ?? 1
-  }
-}
-
-watch(() => filters.value.courseId, async (courseId) => {
-  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo?.teacherId : undefined
-  const classes = await fetchClasses({ deptId: 1, courseId, teacherId })
-  classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-  if (!classOptions.value.some((c) => c.value === filters.value.classId)) {
-    filters.value.classId = classOptions.value[0]?.value
-  }
-})
-
-function applyFilters(): void {
-  applied.value = { ...filters.value }
-}
-
-onMounted(async () => {
-  await loadFilterOptions()
-  applyFilters()
-})
+const filterSteps = [
+  { label: '学期', desc: '选择教学周期' },
+  { label: '专业', desc: '可选，按专业缩小范围' },
+  { label: '年级', desc: '可选，按入学年份' },
+  { label: '课程', desc: '定位授课课程' },
+  { label: '专业班级', desc: '确定分析班级' },
+]
 
 const filterFactor = computed(() => {
   const gradeFactor = dashboardFilterFactors.grade[applied.value.grade || ''] ?? 1
@@ -74,27 +62,40 @@ const filterFactor = computed(() => {
   return gradeFactor * semFactor
 })
 
-const classStudentCount = computed(() =>
-  getStudentsInCourseClass(applied.value.courseId, applied.value.classId).length,
-)
+const classStudentCount = computed(() => {
+  const courseId = applied.value.courseId
+  const classId = applied.value.classId
+  if (!courseId || !classId) return 0
+  return getStudentsInCourseClass(courseId, classId).length
+})
 
-const classWarningCount = computed(() =>
-  warningRecords.filter(
-    (w) => w.classId === applied.value.classId && w.courseId === applied.value.courseId,
-  ).length,
-)
+const classWarningCount = computed(() => {
+  const courseId = applied.value.courseId
+  const classId = applied.value.classId
+  if (!courseId || !classId) return 0
+  return warningRecords.filter(
+    (w) => w.classId === classId && w.courseId === courseId,
+  ).length
+})
 
 const knowledgeStats = computed(() => {
-  const heatmap = buildCourseClassHeatmap(applied.value.courseId, applied.value.classId)
+  const courseId = applied.value.courseId
+  const classId = applied.value.classId
+  if (!courseId || !classId) {
+    return { weakPoints: [], classAvgByKp: [] as number[] }
+  }
+  const heatmap = buildCourseClassHeatmap(courseId, classId)
   return computeClassKnowledgeStats(heatmap)
 })
 
 const statCards = computed(() => {
   const f = filterFactor.value
   const courseName = courseOptions.value.find((c) => c.value === applied.value.courseId)?.label || '—'
+  const className = classOptions.value.find((c) => c.value === applied.value.classId)?.label || '—'
   return [
     { title: '班级学生数', value: classStudentCount.value, icon: 'User', color: '#2563eb', trend: 0 },
     { title: '当前课程', value: courseName, icon: 'Notebook', color: '#6366f1' },
+    { title: '当前班级', value: className, icon: 'School', color: '#7c3aed' },
     { title: '课程及格率', value: +(dashboardStats.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
     { title: '优秀率', value: +(dashboardStats.excellentRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'Star', color: '#f59e0b', trend: 1.8 },
     { title: '平均出勤率', value: +(dashboardStats.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
@@ -105,9 +106,11 @@ const statCards = computed(() => {
 })
 
 const scorePieOption = computed<EChartsOption>(() => {
-  const heatmap = buildCourseClassHeatmap(applied.value.courseId, applied.value.classId)
+  const courseId = applied.value.courseId
+  const classId = applied.value.classId
+  if (!courseId || !classId) return {}
+  const heatmap = buildCourseClassHeatmap(courseId, classId)
   const buckets = [0, 0, 0, 0, 0]
-  const studentCount = heatmap.students.length
   heatmap.students.forEach((_, sIdx) => {
     const values = heatmap.data.filter((d) => d[1] === sIdx).map((d) => d[2]!)
     const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
@@ -117,9 +120,6 @@ const scorePieOption = computed<EChartsOption>(() => {
     else if (avg >= 60) buckets[1]!++
     else buckets[0]!++
   })
-  if (!studentCount) {
-    buckets.splice(0, buckets.length, 0, 0, 0, 0, 0)
-  }
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c}人 ({d}%)' },
     legend: { bottom: 0, textStyle: { color: '#64748b' } },
@@ -142,7 +142,10 @@ const scorePieOption = computed<EChartsOption>(() => {
 })
 
 const knowledgeBarOption = computed<EChartsOption>(() => {
-  const heatmap = buildCourseClassHeatmap(applied.value.courseId, applied.value.classId)
+  const courseId = applied.value.courseId
+  const classId = applied.value.classId
+  if (!courseId || !classId) return {}
+  const heatmap = buildCourseClassHeatmap(courseId, classId)
   const stats = computeClassKnowledgeStats(heatmap)
   const kpStats = heatmap.knowledgePoints
     .map((name, i) => ({ name, rate: stats.classAvgByKp[i] ?? 0 }))
@@ -150,7 +153,6 @@ const knowledgeBarOption = computed<EChartsOption>(() => {
     .slice(0, 6)
   const names = kpStats.map((p) => p.name)
   const rates = kpStats.map((p) => p.rate)
-
   return {
     tooltip: { trigger: 'axis' },
     grid: { left: 100, right: 20, top: 30, bottom: 30 },
@@ -159,11 +161,7 @@ const knowledgeBarOption = computed<EChartsOption>(() => {
       max: 100,
       axisLabel: { color: '#64748b', formatter: '{value}%' },
     },
-    yAxis: {
-      type: 'category',
-      data: names,
-      axisLabel: { color: '#64748b' },
-    },
+    yAxis: { type: 'category', data: names, axisLabel: { color: '#64748b' } },
     series: [{
       type: 'bar',
       data: rates,
@@ -225,64 +223,299 @@ function handleStatClick(item: { link?: string }): void {
 
 <template>
   <div class="page-container dashboard-page">
-    <div class="content-card">
-      <div class="filter-bar">
-        <span class="filter-label">计算机学院 · </span>
-        <el-select v-model="filters.semester" placeholder="选择学期" style="width: 220px">
-          <el-option v-for="item in semesterOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-        <el-select v-model="filters.courseId" placeholder="选择课程" style="width: 160px">
-          <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
-        </el-select>
-        <el-select v-model="filters.classId" placeholder="选择班级" style="width: 140px">
-          <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />
-        </el-select>
-        <el-select v-model="filters.grade" placeholder="选择年级" clearable style="width: 120px">
-          <el-option v-for="item in gradeOptions.filter(g => g.value)" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-        <el-button type="primary" @click="applyFilters">查询</el-button>
+    <!-- 筛选栏 -->
+    <div class="content-card filter-card">
+      <div class="filter-card__header">
+        <div class="filter-card__title">
+          <el-icon :size="18"><DataAnalysis /></el-icon>
+          <span>学情数据筛选</span>
+        </div>
+        <span class="filter-card__hint">计算机学院 · 按学期、专业、年级、课程、班级维度查询</span>
+      </div>
+      <div class="filter-bar dashboard-filter">
+        <div class="filter-item">
+          <span class="filter-item__label">学期</span>
+          <el-select
+            v-model="filters.semester"
+            placeholder="选择学期"
+            style="width: 220px"
+            @change="onSemesterChange"
+          >
+            <el-option
+              v-for="item in semesterOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </div>
+        <div class="filter-item">
+          <span class="filter-item__label">专业</span>
+          <el-select
+            v-model="filters.majorId"
+            placeholder="全部专业"
+            clearable
+            :loading="optionsLoading"
+            style="width: 180px"
+            @change="onMajorChange"
+          >
+            <el-option v-for="m in majorOptions" :key="m.value" :label="m.label" :value="m.value" />
+          </el-select>
+        </div>
+        <div class="filter-item">
+          <span class="filter-item__label">年级</span>
+          <el-select
+            v-model="filters.grade"
+            placeholder="全部年级"
+            clearable
+            :loading="optionsLoading"
+            style="width: 120px"
+            @change="onGradeChange"
+          >
+            <el-option
+              v-for="item in gradeOptions"
+              :key="item.value || 'all'"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
+        </div>
+        <div class="filter-item">
+          <span class="filter-item__label">课程</span>
+          <el-select
+            v-model="filters.courseId"
+            placeholder="选择课程"
+            clearable
+            :loading="optionsLoading"
+            style="width: 220px"
+            @change="onCourseChange"
+          >
+            <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
+        </div>
+        <div class="filter-item">
+          <span class="filter-item__label">专业班级</span>
+          <el-select
+            v-model="filters.classId"
+            :placeholder="filters.courseId != null ? '选择班级' : '请先选择课程'"
+            clearable
+            :loading="optionsLoading"
+            :disabled="filters.courseId == null"
+            style="width: 220px"
+          >
+            <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
+        </div>
+        <el-button
+          type="primary"
+          :icon="Search"
+          @click="applyFilters"
+        >
+          查询
+        </el-button>
       </div>
     </div>
 
-    <div class="stat-grid">
-      <StatCard
-        v-for="item in statCards"
-        :key="item.title"
-        v-bind="item"
-        :class="{ clickable: item.link }"
-        @click="handleStatClick(item)"
-      />
+    <!-- 欢迎区（未查询时） -->
+    <div v-if="!showDashboard" class="welcome-panel">
+      <div class="welcome-panel__hero">
+        <div class="welcome-panel__icon">
+          <el-icon :size="48"><DataAnalysis /></el-icon>
+        </div>
+        <h2 class="welcome-panel__title">
+          {{ greeting }}，{{ userStore.userInfo?.name || '老师' }}
+        </h2>
+        <p class="welcome-panel__subtitle">
+          欢迎使用 AI 数智化教学分析评价系统综合看板
+        </p>
+        <p class="welcome-panel__desc">
+          请在上方完成筛选后点击「查询」，系统将展示对应班级在选定课程下的学情概览、成绩分布与知识点掌握情况。
+        </p>
+      </div>
+      <div class="welcome-panel__steps">
+        <div v-for="(step, idx) in filterSteps" :key="step.label" class="welcome-step">
+          <div class="welcome-step__num">{{ idx + 1 }}</div>
+          <div class="welcome-step__body">
+            <div class="welcome-step__label">{{ step.label }}</div>
+            <div class="welcome-step__desc">{{ step.desc }}</div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <el-row :gutter="16">
-      <el-col :xs="24" :lg="8">
-        <div class="content-card">
-          <div class="content-card__title">班级成绩等级分布</div>
-          <BaseChart :option="scorePieOption" height="320px" />
-        </div>
-      </el-col>
-      <el-col :xs="24" :lg="8">
-        <div class="content-card">
-          <div class="content-card__title">课程知识点掌握度</div>
-          <BaseChart :option="knowledgeBarOption" height="320px" />
-        </div>
-      </el-col>
-      <el-col :xs="24" :lg="8">
-        <div class="content-card">
-          <div class="content-card__title">课程质量趋势</div>
-          <BaseChart :option="trendLineOption" height="320px" />
-        </div>
-      </el-col>
-    </el-row>
+    <!-- 看板数据区（查询后） -->
+    <template v-else>
+      <div class="stat-grid">
+        <StatCard
+          v-for="item in statCards"
+          :key="item.title"
+          v-bind="item"
+          :class="{ clickable: item.link }"
+          @click="handleStatClick(item)"
+        />
+      </div>
+
+      <el-row :gutter="16">
+        <el-col :xs="24" :lg="8">
+          <div class="content-card">
+            <div class="content-card__title">班级成绩等级分布</div>
+            <BaseChart :option="scorePieOption" height="320px" />
+          </div>
+        </el-col>
+        <el-col :xs="24" :lg="8">
+          <div class="content-card">
+            <div class="content-card__title">课程知识点掌握度</div>
+            <BaseChart :option="knowledgeBarOption" height="320px" />
+          </div>
+        </el-col>
+        <el-col :xs="24" :lg="8">
+          <div class="content-card">
+            <div class="content-card__title">课程质量趋势</div>
+            <BaseChart :option="trendLineOption" height="320px" />
+          </div>
+        </el-col>
+      </el-row>
+    </template>
   </div>
 </template>
 
 <style scoped lang="scss">
 .dashboard-page {
-  .filter-label {
-    font-size: 14px;
-    color: #64748b;
-    font-weight: 500;
+  .filter-card {
+    margin-bottom: 20px;
+
+    &__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+
+    &__title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    &__hint {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+  }
+
+  .dashboard-filter {
+    margin-bottom: 0;
+    gap: 16px;
+  }
+
+  .filter-item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    &__label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #64748b;
+      line-height: 1;
+    }
+  }
+
+  .welcome-panel {
+    background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 50%, #f0fdf4 100%);
+    border-radius: 16px;
+    padding: 48px 40px;
+    border: 1px solid rgba(37, 99, 235, 0.08);
+    box-shadow: 0 4px 24px rgba(37, 99, 235, 0.06);
+
+    &__hero {
+      text-align: center;
+      max-width: 560px;
+      margin: 0 auto 40px;
+    }
+
+    &__icon {
+      width: 88px;
+      height: 88px;
+      margin: 0 auto 20px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #2563eb, #6366f1);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(37, 99, 235, 0.3);
+    }
+
+    &__title {
+      font-size: 26px;
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 10px;
+    }
+
+    &__subtitle {
+      font-size: 15px;
+      color: #475569;
+      margin-bottom: 12px;
+    }
+
+    &__desc {
+      font-size: 14px;
+      color: #94a3b8;
+      line-height: 1.7;
+    }
+
+    &__steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 16px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+  }
+
+  .welcome-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(4px);
+
+    &__num {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    &__label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1e293b;
+      margin-bottom: 4px;
+    }
+
+    &__desc {
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.4;
+    }
   }
 
   .clickable {

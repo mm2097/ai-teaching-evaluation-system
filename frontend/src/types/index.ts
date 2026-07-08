@@ -57,6 +57,7 @@ export interface ClassInfo {
   classCode: string
   className: string
   majorId: number
+  majorName: string
   deptId: number
   grade: string
 }
@@ -103,6 +104,8 @@ export interface Course {
   deptId: number
   teacherId: number
   semesterId: number
+  semesterCode: string
+  semesterName: string
 }
 
 /** 数据导入日志（对应 sys_data_import_log） */

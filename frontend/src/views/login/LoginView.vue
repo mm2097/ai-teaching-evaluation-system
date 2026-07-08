@@ -25,7 +25,6 @@ const loading = ref(false)
 /** 演示账号列表 */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
-  { username: 'manager', role: '教学管理者' },
   { username: 'teacher', role: '任课教师' },
   { username: 'student', role: '学生用户' },
 ]
@@ -47,7 +46,7 @@ async function handleLogin(): Promise<void> {
       const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
     }
-    // 登录失败时,具体错误信息由 axios 拦截器统一弹出(后端返回 detail)
+    // 登录失败时，具体错误信息由 userStore 统一弹出
   } finally {
     loading.value = false
   }
@@ -71,13 +70,13 @@ function fillDemoAccount(username: string): void {
         <div class="banner-icon">
           <el-icon :size="48"><DataAnalysis /></el-icon>
         </div>
-        <h1>数智化教学分析评价系统</h1>
-        <p>数据驱动 · 智能分析 · 多维评价 · 科学决策</p>
+        <h1>计算机学院学情分析系统</h1>
+        <p>数据驱动 · 智能分析 · 学情评价 · 精准教学</p>
         <ul class="feature-list">
-          <li>多源教学数据统一采集与清洗</li>
+          <li>标准模板下载与格式校验上传</li>
           <li>AI 引擎驱动的学情分析与预警</li>
-          <li>教师 / 学生 / 课程多维量化评价</li>
-          <li>可视化看板与自动化报告生成</li>
+          <li>知识点热力图与学生学习质量评价</li>
+          <li>AI 出题在线答题与自动化报告</li>
         </ul>
       </div>
     </div>

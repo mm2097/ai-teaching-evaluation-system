@@ -1,12 +1,11 @@
 <!--
   AI 分析筛选栏
-  根据用户角色展示不同的 target_type 及级联筛选条件
+  单课程/单班级维度筛选，学生通过姓名/学号关联下拉选择
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
 import { targetTypeOptions } from '@/api/analysis'
-import { departmentOptions } from '@/mock'
-import type { TargetType } from '@/types'
+import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
+import type { LinkedStudentOption, TargetType } from '@/types'
 
 const props = defineProps<{
   allowedTargetTypes: TargetType[]
@@ -18,13 +17,15 @@ const props = defineProps<{
   showCourseFilter: boolean
   showTargetTypeFilter: boolean
   showStudentPicker: boolean
+  showQueryButton?: boolean
+  studentList?: LinkedStudentOption[]
+  studentLoading?: boolean
   deptId?: number
   classId?: number
   courseId?: number
   targetId?: number
   classOptions: { label: string; value: number }[]
   courseOptions: { label: string; value: number }[]
-  targetOptions: { label: string; value: number }[]
 }>()
 
 const emit = defineEmits<{
@@ -34,14 +35,11 @@ const emit = defineEmits<{
   'update:classId': [value: number | undefined]
   'update:courseId': [value: number | undefined]
   'update:targetId': [value: number | undefined]
+  query: []
 }>()
 
-const filteredTargetTypes = computed(() =>
-  targetTypeOptions.filter((o) => props.allowedTargetTypes.includes(o.value)),
-)
-
-const deptSelectOptions = computed(() =>
-  departmentOptions.filter((d) => d.value !== ''),
+const filteredTargetTypes = targetTypeOptions.filter((o) =>
+  props.allowedTargetTypes.includes(o.value),
 )
 </script>
 
@@ -77,23 +75,7 @@ const deptSelectOptions = computed(() =>
     </el-select>
 
     <el-select
-      v-if="showDeptFilter"
-      :model-value="deptId"
-      placeholder="院系"
-      clearable
-      style="width: 160px"
-      @update:model-value="emit('update:deptId', $event)"
-    >
-      <el-option
-        v-for="opt in deptSelectOptions"
-        :key="opt.id"
-        :label="opt.label"
-        :value="opt.id"
-      />
-    </el-select>
-
-    <el-select
-      v-if="showClassFilter && targetType !== 'teacher'"
+      v-if="showClassFilter"
       :model-value="classId"
       placeholder="班级"
       clearable
@@ -124,25 +106,20 @@ const deptSelectOptions = computed(() =>
       />
     </el-select>
 
-    <el-select
+    <StudentLinkedPicker
       v-if="showStudentPicker"
       :model-value="targetId"
-      placeholder="选择学生"
-      style="width: 200px"
+      :students="studentList ?? []"
+      :loading="studentLoading"
       @update:model-value="emit('update:targetId', $event)"
-    >
-      <el-option
-        v-for="opt in targetOptions"
-        :key="opt.value"
-        :label="opt.label"
-        :value="opt.value"
-      />
-    </el-select>
+    />
+
+    <el-button v-if="showQueryButton" type="primary" @click="emit('query')">查询</el-button>
   </div>
 </template>
 
 <style scoped lang="scss">
 .analysis-filter {
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 </style>

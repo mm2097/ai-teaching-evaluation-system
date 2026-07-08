@@ -3,42 +3,95 @@
   展示预警名单、等级与原因，支持筛选
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchWarnings } from '@/api/analysis'
-import { semesterOptions, departmentOptions, courses } from '@/mock'
-import { useDictCascade } from '@/composables/useDictCascade'
+import { fetchClasses, fetchCourses, searchStudents } from '@/api/dict'
+import { semesterOptions } from '@/mock'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
-import type { WarningRecord } from '@/types'
+import type { LinkedStudentOption, WarningRecord } from '@/types'
 
 const userStore = useUserStore()
-const { deptId, classId, classOptions } = useDictCascade({
-  deptId: userStore.userInfo?.deptId,
-})
+const role = computed(() => userStore.userInfo?.role || 'student')
 
 const levelFilter = ref('')
 const typeFilter = ref('')
 const semesterId = ref(1)
 const courseId = ref<number | undefined>()
+const classId = ref<number | undefined>()
 const statusFilter = ref<number | ''>('')
 
+const classOptions = ref<{ label: string; value: number }[]>([])
+const courseOptions = ref<{ label: string; value: number }[]>([])
 const warningList = ref<WarningRecord[]>([])
+const studentList = ref<LinkedStudentOption[]>([])
+const studentLoading = ref(false)
+const selectedStudentNo = ref<string | undefined>()
+
+async function loadStudentOptions(): Promise<void> {
+  studentLoading.value = true
+  try {
+    const students = await searchStudents({
+      classId: classId.value,
+      courseId: courseId.value,
+      deptId: 1,
+      teacherId: role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined,
+    })
+    studentList.value = students.map((s) => ({
+      id: s.studentNo,
+      studentName: s.studentName,
+      studentNo: s.studentNo,
+    }))
+    if (
+      selectedStudentNo.value
+      && !studentList.value.some((s) => s.id === selectedStudentNo.value)
+    ) {
+      selectedStudentNo.value = undefined
+    }
+  } finally {
+    studentLoading.value = false
+  }
+}
+
+async function loadFilterOptions(): Promise<void> {
+  const teacherId = role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined
+  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: semesterId.value })
+  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+  if (courseId.value && !courseOptions.value.some((c) => c.value === courseId.value)) {
+    courseId.value = courseOptions.value[0]?.value
+  }
+
+  const classes = await fetchClasses({ deptId: 1, courseId: courseId.value, teacherId })
+  classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
+  if (classId.value && !classOptions.value.some((c) => c.value === classId.value)) {
+    classId.value = undefined
+  }
+
+  await loadStudentOptions()
+}
 
 async function loadWarnings(): Promise<void> {
   warningList.value = await fetchWarnings({
-    deptId: deptId.value,
+    deptId: 1,
     classId: classId.value,
     semesterId: semesterId.value,
     courseId: courseId.value,
     level: levelFilter.value || undefined,
     type: typeFilter.value || undefined,
     status: statusFilter.value === '' ? undefined : statusFilter.value,
+    teacherId: role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined,
+    studentNo: selectedStudentNo.value,
   })
 }
 
-watch([deptId, classId, semesterId, courseId, levelFilter, typeFilter, statusFilter], loadWarnings)
+async function handleQuery(): Promise<void> {
+  await loadFilterOptions()
+  await loadWarnings()
+}
 
-onMounted(loadWarnings)
+onMounted(handleQuery)
 
 const filteredWarnings = computed(() => warningList.value)
 
@@ -56,14 +109,27 @@ function viewDetail(row: WarningRecord): void {
   drawerVisible.value = true
 }
 
+function markResolved(): void {
+  if (!currentWarning.value) return
+  const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+  if (idx !== -1) {
+    warningList.value[idx] = { ...warningList.value[idx]!, status: 2 }
+    currentWarning.value = warningList.value[idx]
+  }
+  ElMessage.success('已标记为已处理')
+}
+
+function sendNotice(): void {
+  if (!currentWarning.value) return
+  ElMessage.success(`已向 ${currentWarning.value.studentName} 发送预警通知（模拟）`)
+}
+
 const statusOptions = [
   { label: '待处理', value: 0 },
   { label: '处理中', value: 1 },
   { label: '已处理', value: 2 },
   { label: '已忽略', value: 3 },
 ]
-
-const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.userInfo?.role || ''))
 </script>
 
 <template>
@@ -88,15 +154,17 @@ const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.us
         <el-select v-model="semesterId" placeholder="学期" style="width: 200px">
           <el-option v-for="s in semesterOptions" :key="s.id" :label="s.label" :value="s.id!" />
         </el-select>
-        <el-select v-if="showDeptFilter" v-model="deptId" placeholder="院系" clearable style="width: 150px">
-          <el-option v-for="d in departmentOptions.filter(d => d.id)" :key="d.id" :label="d.label" :value="d.id!" />
+        <el-select v-model="courseId" placeholder="课程" clearable style="width: 150px">
+          <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
         </el-select>
         <el-select v-model="classId" placeholder="班级" clearable style="width: 140px">
           <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />
         </el-select>
-        <el-select v-model="courseId" placeholder="课程" clearable style="width: 150px">
-          <el-option v-for="c in courses" :key="c.id" :label="c.courseName" :value="c.id" />
-        </el-select>
+        <StudentLinkedPicker
+          v-model="selectedStudentNo"
+          :students="studentList"
+          :loading="studentLoading"
+        />
         <el-select v-model="levelFilter" placeholder="预警等级" clearable style="width: 120px">
           <el-option label="高" value="高" />
           <el-option label="中" value="中" />
@@ -111,6 +179,7 @@ const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.us
         <el-select v-model="statusFilter" placeholder="处理状态" clearable style="width: 120px">
           <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
+        <el-button type="primary" @click="handleQuery">查询</el-button>
       </div>
 
       <el-table :data="filteredWarnings" stripe border>
@@ -163,8 +232,8 @@ const showDeptFilter = computed(() => ['admin', 'manager'].includes(userStore.us
         <el-descriptions-item label="预警时间">{{ currentWarning?.warningTime }}</el-descriptions-item>
       </el-descriptions>
       <div style="margin-top: 20px">
-        <el-button type="primary">标记已处理</el-button>
-        <el-button>发送通知</el-button>
+        <el-button type="primary" @click="markResolved">标记已处理</el-button>
+        <el-button @click="sendNotice">发送通知</el-button>
       </div>
     </el-drawer>
   </div>

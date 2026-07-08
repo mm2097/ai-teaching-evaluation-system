@@ -3,36 +3,55 @@
   支持多条件查询、编辑、删除与导出
 -->
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Download, Delete, Document } from '@element-plus/icons-vue'
+import { Download, Delete, Document } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
+import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { teachingDataList, semesterOptions, departmentOptions, dataTypeLabels } from '@/mock'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
-import type { TeachingDataRecord } from '@/types'
+import type { LinkedStudentOption, TeachingDataRecord } from '@/types'
 
 const dataFlowStore = useDataFlowStore()
 const { deptId, majorId, classId, majorOptions, classOptions } = useDictCascade()
 
 const query = ref({
-  keyword: '',
+  courseName: '',
   semester: '',
   dataType: '' as '' | 'score' | 'attendance' | 'assignment',
   sourceFile: '',
 })
 
+const selectedStudentId = ref<string | number | undefined>()
+
 const tableData = ref<TeachingDataRecord[]>([...teachingDataList])
 const currentPage = ref(1)
 const pageSize = ref(10)
 
+const studentPickerOptions = computed<LinkedStudentOption[]>(() => {
+  const map = new Map<string, LinkedStudentOption>()
+  for (const item of tableData.value) {
+    if (deptId.value && item.deptId !== deptId.value) continue
+    if (majorId.value && item.majorId !== majorId.value) continue
+    if (classId.value && item.classId !== classId.value) continue
+    if (!map.has(item.studentId)) {
+      map.set(item.studentId, {
+        id: item.studentId,
+        studentName: item.studentName,
+        studentNo: item.studentId,
+      })
+    }
+  }
+  return [...map.values()].sort((a, b) => a.studentName.localeCompare(b.studentName, 'zh-CN'))
+})
+
 const filteredData = computed(() => {
   return tableData.value.filter((item) => {
-    if (query.value.keyword) {
-      const kw = query.value.keyword.toLowerCase()
-      if (!item.studentName.includes(kw) && !item.studentId.includes(kw) && !item.courseName.includes(kw)) {
-        return false
-      }
+    if (selectedStudentId.value && item.studentId !== selectedStudentId.value) return false
+    if (query.value.courseName) {
+      const courseKw = query.value.courseName.toLowerCase()
+      if (!item.courseName.toLowerCase().includes(courseKw)) return false
     }
     if (query.value.semester && item.semester !== query.value.semester) return false
     if (query.value.dataType && item.dataType !== query.value.dataType) return false
@@ -58,9 +77,18 @@ const sourceFileOptions = computed(() => {
   return files as string[]
 })
 
-watch([query, deptId, majorId, classId], () => {
+watch([query, deptId, majorId, classId, selectedStudentId], () => {
   currentPage.value = 1
 }, { deep: true })
+
+watch([deptId, majorId, classId], () => {
+  if (
+    selectedStudentId.value
+    && !studentPickerOptions.value.some((s) => s.id === selectedStudentId.value)
+  ) {
+    selectedStudentId.value = undefined
+  }
+})
 
 const editVisible = ref(false)
 const editForm = ref<TeachingDataRecord>({ ...teachingDataList[0]! })
@@ -113,12 +141,15 @@ function filterByCurrentFile(): void {
     <div class="content-card">
       <div class="table-toolbar">
         <div class="filter-bar" style="margin-bottom: 0">
+          <StudentLinkedPicker
+            v-model="selectedStudentId"
+            :students="studentPickerOptions"
+          />
           <el-input
-            v-model="query.keyword"
-            placeholder="搜索学号/姓名/课程"
-            :prefix-icon="Search"
+            v-model="query.courseName"
+            placeholder="课程"
             clearable
-            style="width: 200px"
+            style="width: 140px"
           />
           <el-select v-model="query.semester" placeholder="学期" clearable style="width: 200px">
             <el-option v-for="s in semesterOptions" :key="s.value" :label="s.label" :value="s.value" />

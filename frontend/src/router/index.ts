@@ -26,26 +26,18 @@ const router = createRouter({
           component: () => import('@/views/dashboard/DashboardView.vue'),
           meta: { title: '综合看板' },
         },
-        // 数据采集模块
         {
           path: 'data/import',
           name: 'DataImport',
           component: () => import('@/views/data/DataImportView.vue'),
-          meta: { title: '多源数据接入', roles: ['admin', 'manager', 'teacher'] },
-        },
-        {
-          path: 'data/clean',
-          name: 'DataClean',
-          component: () => import('@/views/data/DataCleanView.vue'),
-          meta: { title: '数据清洗', roles: ['admin', 'manager', 'teacher'] },
+          meta: { title: '模板上传', roles: ['admin', 'teacher'] },
         },
         {
           path: 'data/manage',
           name: 'DataManage',
           component: () => import('@/views/data/DataManageView.vue'),
-          meta: { title: '数据管理', roles: ['admin', 'manager', 'teacher'] },
+          meta: { title: '数据管理', roles: ['admin', 'teacher'] },
         },
-        // AI 智能分析模块
         {
           path: 'analysis/profile',
           name: 'StudentProfile',
@@ -68,15 +60,38 @@ const router = createRouter({
           path: 'analysis/warning',
           name: 'Warning',
           component: () => import('@/views/analysis/WarningView.vue'),
-          meta: { title: '异常学情预警', roles: ['admin', 'manager', 'teacher'] },
+          meta: { title: '异常学情预警', roles: ['admin', 'teacher'] },
         },
         {
-          path: 'analysis/correlation',
-          name: 'Correlation',
-          component: () => import('@/views/analysis/CorrelationView.vue'),
-          meta: { title: '教学效果关联', roles: ['admin', 'manager', 'teacher'] },
+          path: 'agent/chat',
+          name: 'AgentChat',
+          component: () => import('@/views/agent/AgentChatView.vue'),
+          meta: { title: 'AI 智能助手' },
         },
-        // 多维评价模块
+        {
+          path: 'quiz/bank',
+          name: 'QuestionBank',
+          component: () => import('@/views/quiz/QuestionBankView.vue'),
+          meta: { title: '题库管理', roles: ['admin', 'teacher'] },
+        },
+        {
+          path: 'quiz/manage',
+          name: 'QuizManage',
+          component: () => import('@/views/quiz/QuizManageView.vue'),
+          meta: { title: 'AI 出题', roles: ['admin', 'teacher'] },
+        },
+        {
+          path: 'quiz/records',
+          name: 'QuizRecords',
+          component: () => import('@/views/quiz/QuizRecordsView.vue'),
+          meta: { title: '答题记录', roles: ['admin', 'teacher'] },
+        },
+        {
+          path: 'quiz/answer',
+          name: 'QuizAnswer',
+          component: () => import('@/views/quiz/QuizAnswerView.vue'),
+          meta: { title: '在线答题', roles: ['student'] },
+        },
         {
           path: 'evaluation/config',
           name: 'EvalConfig',
@@ -84,31 +99,17 @@ const router = createRouter({
           meta: { title: '评价体系配置', roles: ['admin'] },
         },
         {
-          path: 'evaluation/teacher',
-          name: 'TeacherEval',
-          component: () => import('@/views/evaluation/TeacherEvalView.vue'),
-          meta: { title: '教师教学质量', roles: ['admin', 'manager', 'teacher'] },
-        },
-        {
           path: 'evaluation/student',
           name: 'StudentEval',
           component: () => import('@/views/evaluation/StudentEvalView.vue'),
-          meta: { title: '学生学习质量', roles: ['admin', 'manager', 'teacher'] },
+          meta: { title: '学生学习质量', roles: ['admin', 'teacher'] },
         },
-        {
-          path: 'evaluation/course',
-          name: 'CourseEval',
-          component: () => import('@/views/evaluation/CourseEvalView.vue'),
-          meta: { title: '课程建设质量', roles: ['admin', 'manager', 'teacher'] },
-        },
-        // 报告中心
         {
           path: 'report/center',
           name: 'ReportCenter',
           component: () => import('@/views/report/ReportCenterView.vue'),
           meta: { title: '报告生成导出' },
         },
-        // 系统管理模块
         {
           path: 'system/user',
           name: 'UserManage',
@@ -138,10 +139,8 @@ const router = createRouter({
 
 /** 路由前置守卫：登录校验与权限控制 */
 router.beforeEach((to) => {
-  // 动态设置页面标题
-  document.title = `${to.meta.title || '首页'} - 数智化教学分析评价系统`
+  document.title = `${to.meta.title || '首页'} - 计算机学院学情分析系统`
 
-  // 公开页面直接放行
   if (to.meta.public) {
     return true
   }
@@ -151,8 +150,7 @@ router.beforeEach((to) => {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
 
-  // 角色权限校验
-  const roles = to.meta.roles
+  const roles = to.meta.roles as string[] | undefined
   if (roles) {
     const userStore = useUserStore()
     if (!userStore.userInfo) {

@@ -1,70 +1,76 @@
 <!--
   报告生成与导出中心
-  支持多种报告类型的一键生成与导出
+  统计指标由后端计算，分析结论与建议由 LLM 生成
 -->
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, View } from '@element-plus/icons-vue'
-import { delay } from '@/utils/auth'
-import { departmentOptions, semesterOptions } from '@/mock'
+import { generateAiReport } from '@/api/ai'
+import { semesterOptions, courses, classes } from '@/mock'
+import type { AiReportResult } from '@/types'
 
-/** 报告类型列表 */
 const reportTypes = [
   { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', icon: 'Reading' },
-  { id: 2, name: '教师教学评价报告', desc: '包含教学各维度得分、排名对比、优化建议', icon: 'Avatar' },
-  { id: 3, name: '课程质量报告', desc: '包含课程建设各维度评价、同类课程对比', icon: 'Notebook' },
-  { id: 4, name: '院系教学质量总报告', desc: '包含院系整体指标、趋势分析、决策建议', icon: 'OfficeBuilding' },
+  { id: 2, name: '学生个人学情报告', desc: '包含学生雷达图、知识点掌握、学习建议', icon: 'User' },
+  { id: 3, name: '课程知识点分析报告', desc: '包含知识点热力图、薄弱项分析、改进建议', icon: 'Grid' },
+  { id: 4, name: '学生学习质量报告', desc: '包含学习质量评价得分、维度分析', icon: 'Medal' },
 ]
 
-/** 生成参数 */
 const genParams = ref({
   reportType: 1,
-  semester: '2025-1',
-  department: '',
+  semester: '2025-2026-1',
+  courseId: 1,
+  classId: 1,
   format: 'pdf',
 })
 
-/** 生成状态 */
 const generating = ref(false)
 const previewVisible = ref(false)
+const reportData = ref<AiReportResult | null>(null)
 
-/** 历史报告 */
+const csCourses = courses.filter((c) => c.deptId === 1)
+const csClasses = classes.filter((c) => c.deptId === 1)
+
 const historyReports = ref([
-  { id: 1, name: '计科2401班学情分析报告', type: '班级学情', time: '2026-03-15 10:30', format: 'PDF' },
-  { id: 2, name: '2025春季教师评价报告', type: '教师评价', time: '2026-03-14 16:00', format: 'Excel' },
-  { id: 3, name: '计算机学院质量总报告', type: '院系总报告', time: '2026-03-12 09:00', format: 'PDF' },
+  { id: 1, name: '计科2401班-数据结构学情报告', type: '班级学情', time: '2026-03-15 10:30', format: 'PDF' },
+  { id: 2, name: '陈同学-数据结构个人报告', type: '个人学情', time: '2026-03-14 16:00', format: 'PDF' },
+  { id: 3, name: '数据结构知识点分析报告', type: '知识点', time: '2026-03-12 09:00', format: 'PDF' },
 ])
 
-/**
- * 生成报告
- */
 async function generateReport(): Promise<void> {
   generating.value = true
-  await delay(2000)
-  generating.value = false
-  const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
-  historyReports.value.unshift({
-    id: Date.now(),
-    name: typeName,
-    type: typeName.slice(0, 4),
-    time: new Date().toLocaleString('zh-CN'),
-    format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
-  })
-  ElMessage.success('报告生成成功！')
+  try {
+    reportData.value = await generateAiReport({ courseId: genParams.value.courseId, scope: 'class' })
+    const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
+    historyReports.value.unshift({
+      id: Date.now(),
+      name: typeName,
+      type: typeName.slice(0, 4),
+      time: new Date().toLocaleString('zh-CN'),
+      format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
+    })
+    ElMessage.success('报告生成成功！')
+  } catch {
+    ElMessage.error('报告生成失败，核心指标仍可查看')
+  } finally {
+    generating.value = false
+  }
 }
 
-/**
- * 预览报告
- */
 function previewReport(): void {
+  if (!reportData.value) {
+    ElMessage.info('请先生成报告')
+    return
+  }
   previewVisible.value = true
 }
 
-/**
- * 导出报告
- */
 function exportReport(): void {
+  if (!reportData.value) {
+    ElMessage.info('请先生成报告')
+    return
+  }
   ElMessage.success(`报告已导出为 ${genParams.value.format.toUpperCase()} 格式`)
 }
 </script>
@@ -72,7 +78,6 @@ function exportReport(): void {
 <template>
   <div class="page-container">
     <el-row :gutter="16">
-      <!-- 报告生成区 -->
       <el-col :span="10">
         <div class="content-card">
           <div class="content-card__title">报告生成</div>
@@ -99,9 +104,14 @@ function exportReport(): void {
                 <el-option v-for="s in semesterOptions" :key="s.value" :label="s.label" :value="s.value" />
               </el-select>
             </el-form-item>
-            <el-form-item label="院系">
-              <el-select v-model="genParams.department" style="width: 100%">
-                <el-option v-for="d in departmentOptions" :key="d.value" :label="d.label" :value="d.value" />
+            <el-form-item label="课程">
+              <el-select v-model="genParams.courseId" style="width: 100%">
+                <el-option v-for="c in csCourses" :key="c.id" :label="c.courseName" :value="c.id" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="班级">
+              <el-select v-model="genParams.classId" style="width: 100%">
+                <el-option v-for="c in csClasses" :key="c.id" :label="c.className" :value="c.id" />
               </el-select>
             </el-form-item>
             <el-form-item label="导出格式">
@@ -122,7 +132,6 @@ function exportReport(): void {
         </div>
       </el-col>
 
-      <!-- 历史报告 -->
       <el-col :span="14">
         <div class="content-card">
           <div class="content-card__title">历史报告</div>
@@ -146,27 +155,38 @@ function exportReport(): void {
       </el-col>
     </el-row>
 
-    <!-- 预览对话框 -->
-    <el-dialog v-model="previewVisible" title="报告预览" width="700px" top="5vh">
-      <div class="report-preview">
-        <h2 style="text-align: center; margin-bottom: 20px">教学分析报告</h2>
+    <el-dialog v-model="previewVisible" title="报告预览" width="720px" top="5vh">
+      <div v-if="reportData" class="report-preview">
+        <h2 style="text-align: center; margin-bottom: 20px">计算机学院学情分析报告</h2>
+
         <h3>一、核心指标概览</h3>
-        <p>本报告基于 2025-2026 学年第一学期教学数据生成，涵盖学生 2846 人、课程 186 门。</p>
+        <p>本报告基于统计数据生成，面向计算机学院单课程/单班级维度。</p>
         <el-descriptions :column="2" border style="margin: 16px 0">
-          <el-descriptions-item label="整体及格率">87.6%</el-descriptions-item>
-          <el-descriptions-item label="优秀率">23.4%</el-descriptions-item>
-          <el-descriptions-item label="平均出勤率">92.3%</el-descriptions-item>
-          <el-descriptions-item label="预警学生">47 人</el-descriptions-item>
+          <el-descriptions-item label="班级人数">{{ reportData.metrics.classSize }} 人</el-descriptions-item>
+          <el-descriptions-item label="平均成绩">{{ reportData.metrics.avgScore }}</el-descriptions-item>
+          <el-descriptions-item label="及格率">{{ (reportData.metrics.passRate * 100).toFixed(1) }}%</el-descriptions-item>
+          <el-descriptions-item label="平均出勤率">{{ (reportData.metrics.attendanceRate * 100).toFixed(1) }}%</el-descriptions-item>
+          <el-descriptions-item label="预警学生">{{ reportData.metrics.warningCount }} 人</el-descriptions-item>
+          <el-descriptions-item label="成绩趋势">{{ reportData.trend }}</el-descriptions-item>
         </el-descriptions>
-        <h3>二、分析结论</h3>
-        <p>整体教学质量良好，计算机学院表现突出。需重点关注操作系统课程的教改。</p>
-        <h3>三、优化建议</h3>
+
+        <h3>二、薄弱知识点</h3>
+        <el-table :data="reportData.weakKnowledgePoints" size="small" border style="margin-bottom: 16px">
+          <el-table-column prop="name" label="知识点" />
+          <el-table-column prop="correctRate" label="正确率" width="120">
+            <template #default="{ row }">{{ (row.correctRate * 100).toFixed(0) }}%</template>
+          </el-table-column>
+        </el-table>
+
+        <h3>三、分析结论 <el-tag size="small" type="warning">AI 生成</el-tag></h3>
+        <p>{{ reportData.conclusion }}</p>
+
+        <h3>四、教学优化建议 <el-tag size="small" type="warning">AI 生成</el-tag></h3>
         <ol>
-          <li>加强薄弱知识点（面向对象、异常处理）的针对性辅导</li>
-          <li>对 47 名预警学生实施一对一学业帮扶</li>
-          <li>推广作业批改反馈优秀的教学经验</li>
+          <li v-for="(item, idx) in reportData.suggestions" :key="idx">{{ item }}</li>
         </ol>
       </div>
+      <el-empty v-else description="暂无报告数据" />
     </el-dialog>
   </div>
 </template>

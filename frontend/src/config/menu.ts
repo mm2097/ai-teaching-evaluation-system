@@ -10,6 +10,14 @@ export const menuList: MenuItem[] = [
     path: '/dashboard',
     title: '综合看板',
     icon: 'Odometer',
+    roles: ['admin', 'teacher'],
+  },
+  // ---- 学生端 ----
+  {
+    path: '/student/dashboard',
+    title: '我的学习',
+    icon: 'HomeFilled',
+    roles: ['student'],
   },
   {
     path: '/data',
@@ -25,12 +33,25 @@ export const menuList: MenuItem[] = [
     path: '/analysis',
     title: 'AI 智能分析',
     icon: 'DataAnalysis',
+    roles: ['admin', 'teacher'],
     children: [
       { path: '/analysis/profile', title: '学情画像', icon: 'User' },
       { path: '/analysis/trend', title: '成绩趋势预测', icon: 'TrendCharts' },
       { path: '/analysis/knowledge', title: '知识点掌握度', icon: 'Grid' },
       { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell', roles: ['admin', 'teacher'] },
       { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound' },
+    ],
+  },
+  // ---- 学生端分析 ----
+  {
+    path: '/student',
+    title: '个人分析',
+    icon: 'DataAnalysis',
+    roles: ['student'],
+    children: [
+      { path: '/student/profile', title: '学情画像', icon: 'User' },
+      { path: '/student/knowledge', title: '知识点掌握度', icon: 'Grid' },
+      { path: '/student/evaluation', title: '学习评价', icon: 'Medal' },
     ],
   },
   {
@@ -42,6 +63,17 @@ export const menuList: MenuItem[] = [
       { path: '/quiz/manage', title: 'AI 出题', icon: 'MagicStick', roles: ['admin', 'teacher'] },
       { path: '/quiz/records', title: '答题记录', icon: 'List', roles: ['admin', 'teacher'] },
       { path: '/quiz/answer', title: '在线答题', icon: 'Edit', roles: ['student'] },
+      { path: '/student/quiz-list', title: '答题任务', icon: 'List', roles: ['student'] },
+    ],
+  },
+  {
+    path: '/student',
+    title: '学习档案',
+    icon: 'Collection',
+    roles: ['student'],
+    children: [
+      { path: '/student/grade-archive', title: '成绩档案', icon: 'TrendCharts' },
+      { path: '/student/error-book', title: '错题本', icon: 'Notebook' },
     ],
   },
   {
@@ -114,6 +146,14 @@ export const routeTitleMap: Record<string, string> = {
   '/system/user': '用户权限管理',
   '/system/log': '系统日志',
   '/system/config': '基础参数配置',
+  '/student/dashboard': '我的学习',
+  '/student/profile': '个人学情画像',
+  '/student/knowledge': '知识点掌握度',
+  '/student/evaluation': '学习评价',
+  '/student/quiz-list': '答题任务',
+  '/student/quiz-result': '答题结果',
+  '/student/grade-archive': '成绩档案',
+  '/student/error-book': '错题本',
 }
 
 /** 路由父级映射，用于面包屑层级 */
@@ -135,4 +175,11 @@ export const routeParentMap: Record<string, { path: string; title: string }> = {
   '/system/user': { path: '/system', title: '系统管理' },
   '/system/log': { path: '/system', title: '系统管理' },
   '/system/config': { path: '/system', title: '系统管理' },
+  '/student/profile': { path: '/student', title: '个人分析' },
+  '/student/knowledge': { path: '/student', title: '个人分析' },
+  '/student/evaluation': { path: '/student', title: '个人分析' },
+  '/student/quiz-list': { path: '/quiz', title: 'AI 练习' },
+  '/student/quiz-result': { path: '/quiz', title: 'AI 练习' },
+  '/student/grade-archive': { path: '/student', title: '学习档案' },
+  '/student/error-book': { path: '/student', title: '学习档案' },
 }

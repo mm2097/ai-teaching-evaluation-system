@@ -2,7 +2,7 @@
  * 模拟用户账号与业务数据
  * 演示环境使用，正式环境由后端接口提供
  */
-import type { ImportLog, SystemUser, TeachingDataRecord, UserInfo, WarningRecord } from '@/types'
+import type { ImportLog, SystemUser, TeachingDataRecord, UserInfo, UserRole, WarningRecord } from '@/types'
 export * from './dict'
 
 /** 演示账号列表 */

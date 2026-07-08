@@ -7,8 +7,8 @@ import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { studentEvalList, evalIndicatorConfig } from '@/mock'
-import { delay, scoreToGrade, evalGradeType } from '@/utils/auth'
+import { scoreToGrade, evalGradeType } from '@/utils/auth'
+import request from '@/utils/request'
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -53,8 +53,26 @@ const barOption = computed<EChartsOption>(() => ({
   }],
 }))
 
+/** 评价体系说明（静态配置） */
+const evalIndicatorConfig = [
+  { id: 1, name: '学业成绩', weight: 40, rule: '基于课程考核加权平均分' },
+  { id: 2, name: '学习态度', weight: 25, rule: '考勤率 + 作业提交率 + 课堂互动' },
+  { id: 3, name: '学习进步', weight: 20, rule: '近三次测验成绩变化趋势' },
+  { id: 4, name: '知识掌握', weight: 15, rule: '知识点测试掌握率' },
+]
+
 onMounted(async () => {
-  await delay(300)
+  try {
+    const res = await request.get('/v1/evaluations/results', {
+      params: { student_id: userStore.userInfo?.studentId, dept_id: 1 },
+    })
+    const results = res.data ?? []
+    if (results.length) {
+      const latest = results[results.length - 1]
+      evalData.value.totalScore = latest.total_score ?? 0
+      evalData.value.grade = (latest.grade || '及格') as typeof evalData.value.grade
+    }
+  } catch { /* empty */ }
   loading.value = false
 })
 </script>

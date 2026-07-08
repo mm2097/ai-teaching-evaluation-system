@@ -25,8 +25,8 @@ const loading = ref(false)
 /** 演示账号列表 */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
-  { username: 'teacher', role: '任课教师' },
-  { username: 'student', role: '学生用户' },
+  { username: 'teacher1', role: '任课教师' },
+  { username: 'stu01', role: '学生用户' },
 ]
 
 /**
@@ -55,12 +55,13 @@ async function handleLogin(): Promise<void> {
 }
 
 /**
- * 快速填充演示账号（密码统一为 123456）
+ * 快速填充演示账号并自动登录（密码统一为 123456）
  * @param username 演示账号名
  */
-function fillDemoAccount(username: string): void {
+async function quickLogin(username: string): Promise<void> {
   loginForm.username = username
   loginForm.password = '123456'
+  await handleLogin()
 }
 </script>
 
@@ -124,7 +125,7 @@ function fillDemoAccount(username: string): void {
               :key="item.username"
               class="demo-tag"
               effect="plain"
-              @click="fillDemoAccount(item.username)"
+              @click="quickLogin(item.username)"
             >
               {{ item.role }}
             </el-tag>

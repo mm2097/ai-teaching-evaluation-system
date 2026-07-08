@@ -56,13 +56,9 @@ def list_teachers(
 @router.get("/dictionaries/departments", tags=["字典"])
 def list_departments(session: Session = Depends(get_session)) -> list[str]:
     """列出所有学院（从课程和教师表中提取去重值）。"""
-    from sqlalchemy import union
-    stmt = union(
-        select(Course.college).distinct(),
-        select(Teacher.college).distinct(),
-    )
-    results = session.exec(stmt).all()
-    return sorted(set(r for r in results if r))
+    course_cols = session.exec(select(Course.college).distinct()).all()
+    teacher_cols = session.exec(select(Teacher.college).distinct()).all()
+    return sorted(set(c for c in list(course_cols) + list(teacher_cols) if c))
 
 
 @router.get("/dictionaries/semesters", tags=["字典"])

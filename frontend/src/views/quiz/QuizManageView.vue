@@ -16,7 +16,6 @@ import {
 } from '@/api/quiz'
 import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank } from '@/api/questionBank'
 import { fetchCourses, fetchClasses } from '@/api/dict'
-import { getKnowledgePointsByCourse } from '@/mock/dict'
 import { useUserStore } from '@/stores/user'
 import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
@@ -58,12 +57,11 @@ async function loadClassOptions(): Promise<void> {
 }
 
 function syncKnowledgePoints(): void {
-  if (form.value.courseId) {
-    knowledgePointOptions.value = getKnowledgePointsByCourse(form.value.courseId)
-    form.value.knowledgePoints = form.value.knowledgePoints.filter((kp) =>
-      knowledgePointOptions.value.includes(kp),
-    )
-  }
+  // Knowledge points will be loaded from the backend when available
+  knowledgePointOptions.value = []
+  form.value.knowledgePoints = form.value.knowledgePoints.filter((kp) =>
+    knowledgePointOptions.value.includes(kp),
+  )
 }
 
 async function loadBankQuestions(): Promise<void> {

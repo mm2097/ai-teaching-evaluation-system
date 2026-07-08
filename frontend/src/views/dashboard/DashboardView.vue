@@ -4,25 +4,46 @@
   未查询时仅展示欢迎区与筛选栏
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import { DataAnalysis, Search } from '@element-plus/icons-vue'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { computeClassKnowledgeStats } from '@/api/analysis'
+import type { KnowledgeHeatmapResult } from '@/api/analysis'
 import { useDashboardFilter } from '@/composables/useDashboardFilter'
 import { useUserStore } from '@/stores/user'
-import {
-  buildCourseClassHeatmap,
-  dashboardFilterFactors,
-  dashboardStats,
-  getStudentsInCourseClass,
-  warningRecords,
-} from '@/mock'
+import request from '@/utils/request'
 
 const router = useRouter()
 const userStore = useUserStore()
+
+/** 实时看板数据（来自后端） */
+const dashboardStats = ref({ studentCount: 0, courseCount: 0, teacherCount: 0, passRate: 0, excellentRate: 0, attendanceRate: 0, warningCount: 0 })
+const warnings = ref<any[]>([])
+const heatmap = ref<KnowledgeHeatmapResult>({ knowledgePoints: [], students: [], data: [] })
+
+async function loadDashboardData(courseId?: number, classId?: number) {
+  try {
+    const [statsRes, warnRes] = await Promise.all([
+      request.get('/v1/dashboard/stats', { params: courseId ? { course_id: courseId } : {} }),
+      request.get('/v1/analysis/warnings', { params: { class_id: classId } }),
+    ])
+    dashboardStats.value = statsRes.data
+    warnings.value = warnRes.data
+  } catch { /* 首次加载失败时展示空数据 */ }
+}
+
+async function loadHeatmap(courseId?: number, classId?: number) {
+  if (!courseId || !classId) { heatmap.value = { knowledgePoints: [], students: [], data: [] }; return }
+  try {
+    const res = await request.get('/v1/analysis/knowledge-heatmap', {
+      params: { course_id: courseId, class_id: classId },
+    })
+    heatmap.value = res.data
+  } catch { heatmap.value = { knowledgePoints: [], students: [], data: [] } }
+}
 
 const {
   filters,
@@ -57,35 +78,19 @@ const filterSteps = [
 ]
 
 const filterFactor = computed(() => {
-  const gradeFactor = dashboardFilterFactors.grade[applied.value.grade || ''] ?? 1
-  const semFactor = dashboardFilterFactors.semester[applied.value.semester || ''] ?? 1
-  return gradeFactor * semFactor
+  return 1 // 后端已返回真实数据，不再需要系数
 })
 
 const classStudentCount = computed(() => {
-  const courseId = applied.value.courseId
-  const classId = applied.value.classId
-  if (!courseId || !classId) return 0
-  return getStudentsInCourseClass(courseId, classId).length
+  return heatmap.value.students?.length ?? 0
 })
 
 const classWarningCount = computed(() => {
-  const courseId = applied.value.courseId
-  const classId = applied.value.classId
-  if (!courseId || !classId) return 0
-  return warningRecords.filter(
-    (w) => w.classId === classId && w.courseId === courseId,
-  ).length
+  return warnings.value.length
 })
 
 const knowledgeStats = computed(() => {
-  const courseId = applied.value.courseId
-  const classId = applied.value.classId
-  if (!courseId || !classId) {
-    return { weakPoints: [], classAvgByKp: [] as number[] }
-  }
-  const heatmap = buildCourseClassHeatmap(courseId, classId)
-  return computeClassKnowledgeStats(heatmap)
+  return computeClassKnowledgeStats(heatmap.value)
 })
 
 const statCards = computed(() => {
@@ -106,14 +111,13 @@ const statCards = computed(() => {
 })
 
 const scorePieOption = computed<EChartsOption>(() => {
-  const courseId = applied.value.courseId
-  const classId = applied.value.classId
-  if (!courseId || !classId) return {}
-  const heatmap = buildCourseClassHeatmap(courseId, classId)
+  const kpData = heatmap.value.data ?? []
+  const students = heatmap.value.students ?? []
+  if (!students.length || !kpData.length) return {}
   const buckets = [0, 0, 0, 0, 0]
-  heatmap.students.forEach((_, sIdx) => {
-    const values = heatmap.data.filter((d) => d[1] === sIdx).map((d) => d[2]!)
-    const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
+  students.forEach((_: string, sIdx: number) => {
+    const values = kpData.filter((d: number[]) => d[1] === sIdx).map((d: number[]) => d[2]!)
+    const avg = values.length ? values.reduce((a: number, b: number) => a + b, 0) / values.length : 0
     if (avg >= 90) buckets[4]!++
     else if (avg >= 80) buckets[3]!++
     else if (avg >= 70) buckets[2]!++
@@ -142,14 +146,12 @@ const scorePieOption = computed<EChartsOption>(() => {
 })
 
 const knowledgeBarOption = computed<EChartsOption>(() => {
-  const courseId = applied.value.courseId
-  const classId = applied.value.classId
-  if (!courseId || !classId) return {}
-  const heatmap = buildCourseClassHeatmap(courseId, classId)
-  const stats = computeClassKnowledgeStats(heatmap)
-  const kpStats = heatmap.knowledgePoints
-    .map((name, i) => ({ name, rate: stats.classAvgByKp[i] ?? 0 }))
-    .sort((a, b) => a.rate - b.rate)
+  const kps = heatmap.value.knowledgePoints ?? []
+  if (!kps.length) return {}
+  const stats = computeClassKnowledgeStats(heatmap.value)
+  const kpStats = kps
+    .map((name: string, i: number) => ({ name, rate: stats.classAvgByKp[i] ?? 0 }))
+    .sort((a: { name: string; rate: number }, b: { name: string; rate: number }) => a.rate - b.rate)
     .slice(0, 6)
   const names = kpStats.map((p) => p.name)
   const rates = kpStats.map((p) => p.rate)
@@ -177,40 +179,39 @@ const knowledgeBarOption = computed<EChartsOption>(() => {
   }
 })
 
+/** 趋势图数据（从后端获取） */
+const trendData = ref({ months: [] as string[], passRate: [] as number[], excellentRate: [] as number[] })
+
+async function loadTrendData(courseId?: number) {
+  if (!courseId) return
+  try {
+    const res = await request.get('/v1/dashboard/grade-trend', { params: { course_id: courseId } })
+    const d = res.data
+    trendData.value = { months: d.months || [], passRate: d.passRate || [], excellentRate: d.passRate ? d.passRate.map(() => 0) : [] }
+  } catch { /* ignore */ }
+}
+
 const trendLineOption = computed<EChartsOption>(() => {
-  const semFactor = dashboardFilterFactors.semester[applied.value.semester] ?? 1
-  const passBase = [82, 84, 85, 83, 87, 89]
-  const excBase = [20, 21, 22, 21, 23, 24]
+  const t = trendData.value
+  if (!t.months.length) {
+    return {
+      title: { text: '暂无趋势数据', left: 'center', top: 'center', textStyle: { color: '#94a3b8', fontSize: 14 } },
+    }
+  }
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['及格率', '优秀率'], top: 0, textStyle: { color: '#64748b' } },
     grid: { left: 50, right: 20, top: 40, bottom: 30 },
-    xAxis: {
-      type: 'category',
-      data: ['9月', '10月', '11月', '12月', '1月', '2月'],
-      axisLabel: { color: '#64748b' },
-    },
-    yAxis: {
-      type: 'value',
-      max: 100,
-      axisLabel: { color: '#64748b', formatter: '{value}%' },
-    },
+    xAxis: { type: 'category', data: t.months, axisLabel: { color: '#64748b' } },
+    yAxis: { type: 'value', max: 100, axisLabel: { color: '#64748b', formatter: '{value}%' } },
     series: [
       {
-        name: '及格率',
-        type: 'line',
-        smooth: true,
-        data: passBase.map((v) => +(v * (0.95 + semFactor * 0.05)).toFixed(1)),
-        itemStyle: { color: '#2563eb' },
-        areaStyle: { color: 'rgba(37, 99, 235, 0.08)' },
+        name: '及格率', type: 'line', smooth: true, data: t.passRate,
+        itemStyle: { color: '#2563eb' }, areaStyle: { color: 'rgba(37,99,235,0.08)' },
       },
       {
-        name: '优秀率',
-        type: 'line',
-        smooth: true,
-        data: excBase.map((v) => +(v * (0.95 + semFactor * 0.05)).toFixed(1)),
-        itemStyle: { color: '#10b981' },
-        areaStyle: { color: 'rgba(16, 185, 129, 0.08)' },
+        name: '优秀率', type: 'line', smooth: true, data: t.excellentRate,
+        itemStyle: { color: '#10b981' }, areaStyle: { color: 'rgba(16,185,129,0.08)' },
       },
     ],
   }
@@ -219,6 +220,17 @@ const trendLineOption = computed<EChartsOption>(() => {
 function handleStatClick(item: { link?: string }): void {
   if (item.link) router.push(item.link)
 }
+
+// 查询时加载真实数据
+watch(showDashboard, async (show) => {
+  if (show) {
+    await Promise.all([
+      loadDashboardData(applied.value.courseId, applied.value.classId),
+      loadHeatmap(applied.value.courseId, applied.value.classId),
+      loadTrendData(applied.value.courseId),
+    ])
+  }
+})
 </script>
 
 <template>

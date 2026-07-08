@@ -3,12 +3,11 @@
   展示班级成绩趋势、分布与个人预测结果
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
 import { fetchGradeTrend, fetchGradePredictions } from '@/api/analysis'
-import { getKnowledgePointsByCourse } from '@/mock/dict'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
 const scope = useAnalysisScope('class')
@@ -29,7 +28,7 @@ async function loadTrend(): Promise<void> {
   trendData.value = await fetchGradeTrend({ ...queryParams.value, analysisType: '成绩趋势' })
   predictions.value = await fetchGradePredictions(queryParams.value)
 
-  const kps = getKnowledgePointsByCourse(queryParams.value.courseId)
+  const kps: string[] = []
   const avg = trendData.value.avgScore.at(-1) ?? 0
   classFeatures.value = [
     { title: '整体水平', content: `本课程班级最近一次平均分 ${avg}，${avg >= 80 ? '整体表现良好' : avg >= 70 ? '处于中等水平' : '需加强整体辅导'}` },
@@ -42,6 +41,15 @@ onMounted(async () => {
   await scope.loadOptions()
   await loadTrend()
 })
+
+// 切换课程/班级/学生时自动刷新数据
+let _initialized = false
+watch(queryParams, async (val) => {
+  if (!_initialized) { _initialized = true; return }
+  if (val.courseId && val.classId) {
+    await loadTrend()
+  }
+}, { deep: true })
 
 const trendOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis' },

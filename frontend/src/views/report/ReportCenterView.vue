@@ -3,12 +3,29 @@
   统计指标由后端计算，分析结论与建议由 LLM 生成
 -->
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, View } from '@element-plus/icons-vue'
 import { generateAiReport } from '@/api/ai'
-import { semesterOptions, courses, classes } from '@/mock'
+import { fetchSemesters, fetchCourses, fetchClasses } from '@/api/dict'
 import type { AiReportResult } from '@/types'
+
+const semesterOptions = ref<{ label: string; value: string }[]>([])
+const courses = ref<any[]>([])
+const classes = ref<any[]>([])
+
+onMounted(async () => {
+  try {
+    const [semRes, courseRes, classRes] = await Promise.all([
+      fetchSemesters(),
+      fetchCourses({ deptId: 1 }),
+      fetchClasses({ deptId: 1 }),
+    ])
+    semesterOptions.value = semRes.map(s => ({ label: s.semesterName, value: s.semesterCode }))
+    courses.value = courseRes
+    classes.value = classRes
+  } catch { /* empty */ }
+})
 
 const reportTypes = [
   { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', icon: 'Reading' },
@@ -29,8 +46,8 @@ const generating = ref(false)
 const previewVisible = ref(false)
 const reportData = ref<AiReportResult | null>(null)
 
-const csCourses = courses.filter((c) => c.deptId === 1)
-const csClasses = classes.filter((c) => c.deptId === 1)
+const csCourses = computed(() => courses.value)
+const csClasses = computed(() => classes.value)
 
 const historyReports = ref([
   { id: 1, name: '计科2401班-数据结构学情报告', type: '班级学情', time: '2026-03-15 10:30', format: 'PDF' },

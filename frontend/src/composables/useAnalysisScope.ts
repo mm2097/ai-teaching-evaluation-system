@@ -6,7 +6,6 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import type { AnalysisQuery, LinkedStudentOption, TargetType, UserRole } from '@/types'
-import { semesters as semesterDict } from '@/mock/dict'
 
 /** 各角色允许的分析对象类型 */
 const roleTargetTypes: Record<UserRole, TargetType[]> = {
@@ -43,7 +42,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
       ? defaultTargetType
       : allowedTargetTypes.value[0]!,
   )
-  const semesterId = ref(semesterDict.find((s) => s.isCurrent)?.id || 1)
+  const semesterId = ref(1)
   const classId = ref<number | undefined>()
   const courseId = ref<number | undefined>()
   const targetId = ref<number | undefined>()
@@ -83,6 +82,10 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   async function loadOptions(preserveTarget = false): Promise<void> {
     const sems = await fetchSemesters()
     semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
+    const currentSem = sems.find((s) => s.isCurrent)
+    if (currentSem && !preserveTarget) {
+      semesterId.value = currentSem.id
+    }
 
     if (role.value === 'teacher') {
       const teacherId = userStore.userInfo?.teacherId

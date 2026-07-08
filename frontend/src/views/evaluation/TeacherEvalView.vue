@@ -3,14 +3,22 @@
   展示教师综合评价得分、维度详情与排名
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { teacherEvalList } from '@/mock'
 import { evalGradeType } from '@/utils/auth'
+import request from '@/utils/request'
 
-/** 选中的教师 */
-const selectedTeacher = ref(teacherEvalList[0])
+const teacherEvalList = ref<any[]>([])
+const selectedTeacher = ref<any>(null)
+
+onMounted(async () => {
+  try {
+    const res = await request.get('/v1/evaluations')
+    teacherEvalList.value = res.data.filter((e: any) => e.targetType === 'student') // 暂复用学生评价数据
+    if (teacherEvalList.value.length) selectedTeacher.value = teacherEvalList.value[0]
+  } catch { teacherEvalList.value = [] }
+})
 
 /** 维度雷达图 */
 const radarOption = computed<EChartsOption>(() => {

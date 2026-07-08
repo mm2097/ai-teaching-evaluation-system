@@ -3,12 +3,11 @@
   展示预警名单、等级与原因，支持筛选
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchWarnings } from '@/api/analysis'
-import { fetchClasses, fetchCourses, searchStudents } from '@/api/dict'
-import { semesterOptions } from '@/mock'
+import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
 import type { LinkedStudentOption, WarningRecord } from '@/types'
@@ -22,7 +21,7 @@ const semesterId = ref(1)
 const courseId = ref<number | undefined>()
 const classId = ref<number | undefined>()
 const statusFilter = ref<number | ''>('')
-
+const semesterOptions = ref<{ id?: number; label: string; value: string }[]>([])
 const classOptions = ref<{ label: string; value: number }[]>([])
 const courseOptions = ref<{ label: string; value: number }[]>([])
 const warningList = ref<WarningRecord[]>([])
@@ -86,12 +85,24 @@ async function loadWarnings(): Promise<void> {
   })
 }
 
+async function loadSemesters(): Promise<void> {
+  const sems = await fetchSemesters()
+  semesterOptions.value = sems.map(s => ({ label: s.semesterName, value: s.semesterCode, id: s.id }))
+}
+
 async function handleQuery(): Promise<void> {
+  await loadSemesters()
   await loadFilterOptions()
   await loadWarnings()
 }
 
 onMounted(handleQuery)
+
+let _inited = false
+watch([courseId, classId, levelFilter, typeFilter, statusFilter], async () => {
+  if (!_inited) { _inited = true; return }
+  await loadWarnings()
+})
 
 const filteredWarnings = computed(() => warningList.value)
 

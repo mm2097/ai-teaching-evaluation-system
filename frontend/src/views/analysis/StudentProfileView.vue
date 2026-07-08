@@ -3,11 +3,10 @@
   单课程维度学情雷达图、标签与知识点优劣势
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
-import { studentProfileRadar } from '@/mock'
 import { fetchStudentProfile } from '@/api/analysis'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 import type { StudentProfileData } from '@/types'
@@ -50,10 +49,18 @@ const studentInfo = computed(() =>
     : '',
 )
 
+const defaultIndicators = [
+  { name: '成绩', max: 100 },
+  { name: '考勤', max: 100 },
+  { name: '作业', max: 100 },
+  { name: '互动', max: 100 },
+  { name: '综合', max: 100 },
+]
+
 const radarOption = computed<EChartsOption>(() => ({
   tooltip: {},
   radar: {
-    indicator: studentProfileRadar.indicators,
+    indicator: profileData.value?.radarIndicators ?? defaultIndicators,
     shape: 'polygon',
     splitArea: { areaStyle: { color: ['#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1'] } },
     axisName: { color: '#64748b' },
@@ -63,7 +70,7 @@ const radarOption = computed<EChartsOption>(() => ({
       type: 'radar',
       data: [
         {
-          value: profileData.value?.radarValues || studentProfileRadar.values,
+          value: profileData.value?.radarValues ?? [],
           name: studentName.value,
           areaStyle: { color: 'rgba(37, 99, 235, 0.2)' },
           lineStyle: { color: '#2563eb', width: 2 },
@@ -81,6 +88,12 @@ onMounted(async () => {
   await scope.loadOptions()
   await loadProfile()
 })
+
+let _inited = false
+watch(queryParams, async (val) => {
+  if (!_inited) { _inited = true; return }
+  if (val.courseId) await loadProfile()
+}, { deep: true })
 </script>
 
 <template>

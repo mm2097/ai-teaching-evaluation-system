@@ -3,18 +3,41 @@
   支持多条件查询、编辑、删除与导出
 -->
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Delete, Document } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { teachingDataList, semesterOptions, departmentOptions, dataTypeLabels } from '@/mock'
+import { fetchSemesters, fetchDepartments } from '@/api/dict'
+import request from '@/utils/request'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import type { LinkedStudentOption, TeachingDataRecord } from '@/types'
 
 const dataFlowStore = useDataFlowStore()
 const { deptId, majorId, classId, majorOptions, classOptions } = useDictCascade()
+
+const semesterOptions = ref<{ label: string; value: string }[]>([])
+const departmentOptions = ref<{ label: string; value: number; id?: number }[]>([])
+const teachingDataList = ref<any[]>([])
+const dataTypeLabels: Record<string, string> = { score: '成绩', attendance: '考勤', assignment: '作业' }
+
+onMounted(async () => {
+  try {
+    const [semRes, deptRes, dataRes] = await Promise.all([
+      fetchSemesters(),
+      fetchDepartments(),
+      request.get('/v1/teaching-data'),
+    ])
+    semesterOptions.value = semRes.map(s => ({ label: s.semesterName, value: s.semesterCode }))
+    departmentOptions.value = deptRes.map(d => ({ label: d.deptName, value: d.id, id: d.id }))
+    teachingDataList.value = dataRes.data?.list ?? dataRes.data ?? []
+    tableData.value = [...teachingDataList.value]
+    if (tableData.value.length) {
+      editForm.value = { ...tableData.value[0]! }
+    }
+  } catch { /* empty */ }
+})
 
 const query = ref({
   courseName: '',
@@ -25,7 +48,7 @@ const query = ref({
 
 const selectedStudentId = ref<string | number | undefined>()
 
-const tableData = ref<TeachingDataRecord[]>([...teachingDataList])
+const tableData = ref<TeachingDataRecord[]>([])
 const currentPage = ref(1)
 const pageSize = ref(10)
 
@@ -91,7 +114,7 @@ watch([deptId, majorId, classId], () => {
 })
 
 const editVisible = ref(false)
-const editForm = ref<TeachingDataRecord>({ ...teachingDataList[0]! })
+const editForm = ref<TeachingDataRecord>({} as TeachingDataRecord)
 const selectedRows = ref<TeachingDataRecord[]>([])
 
 function handleEdit(row: TeachingDataRecord): void {

@@ -1,30 +1,14 @@
 /**
- * AI 分析 API（模拟后端 /api/analysis/* 接口）
+ * AI 分析 API（调用真实后端 /api/v1/analysis/*）
  */
-import { delay } from '@/utils/auth'
-import { findStudentProfile, gradeTrendData, gradeTrendFactors, warningRecords } from '@/mock'
-import {
-  buildCourseClassHeatmap,
-  buildPersonalKnowledgeHeatmap,
-  courses,
-  getKnowledgePointsByCourse,
-  getStudentMastery,
-  getStudentsInCourseClass,
-} from '@/mock/dict'
+import request from '@/utils/request'
 import type { AnalysisQuery, StudentProfileData, TargetType, WarningRecord } from '@/types'
 
 export interface KnowledgeHeatmapResult {
   knowledgePoints: string[]
   students: string[]
   data: number[][]
-  /** 各知识点班级平均掌握度（个人视角用于对比） */
   classAvgByKp?: number[]
-}
-
-function getWeakLevel(rate: number): '严重' | '中等' | '轻微' {
-  if (rate < 60) return '严重'
-  if (rate < 75) return '中等'
-  return '轻微'
 }
 
 /** 从热力图数据计算班级统计 */
@@ -36,7 +20,8 @@ export function computeClassKnowledgeStats(heatmap: KnowledgeHeatmapResult) {
       ? Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10
       : 0
     const weakCount = values.filter((v) => v < 75).length
-    return { name, rate, weakCount, level: getWeakLevel(rate) }
+    const level: '严重' | '中等' | '轻微' = rate < 60 ? '严重' : rate < 75 ? '中等' : '轻微'
+    return { name, rate, weakCount, level }
   })
   const allValues = data.map((d) => d[2]!)
   const avgRate = allValues.length
@@ -58,133 +43,83 @@ export function computeClassKnowledgeStats(heatmap: KnowledgeHeatmapResult) {
 
 /** 获取学情画像 */
 export async function fetchStudentProfile(query: AnalysisQuery): Promise<StudentProfileData | null> {
-  await delay(300)
-  if (query.targetType === 'student' && query.targetId) {
-    const profile = findStudentProfile(query.targetId, query.courseId)
-    if (profile) {
-      const { courseId: _cid, ...data } = profile
-      return data
-    }
+  if (query.targetType !== 'student' || !query.targetId) return null
+  try {
+    const res = await request.get('/v1/analysis/profile', {
+      params: { student_id: query.targetId, course_id: query.courseId },
+    })
+    return res.data || null
+  } catch {
+    return null
   }
-  return null
 }
 
-/** 获取成绩趋势数据（按班级/课程微调） */
+/** 获取成绩趋势数据 */
 export async function fetchGradeTrend(query: AnalysisQuery) {
-  await delay(300)
-  const classFactor = query.classId ? (gradeTrendFactors[`class-${query.classId}`] ?? 1) : 1
-  const courseFactor = query.courseId ? (gradeTrendFactors[`course-${query.courseId}`] ?? 1) : 1
-  const factor = classFactor * courseFactor
-
-  return {
-    months: gradeTrendData.months,
-    avgScore: gradeTrendData.avgScore.map((v) => Math.round(v * factor)),
-    passRate: gradeTrendData.passRate.map((v) => Math.min(100, Math.round(v * factor))),
-    maxScore: gradeTrendData.maxScore.map((v) => Math.min(100, Math.round(v * factor))),
-    minScore: gradeTrendData.minScore.map((v) => Math.round(v * factor)),
+  try {
+    const res = await request.get('/v1/dashboard/grade-trend', {
+      params: {
+        course_id: query.courseId,
+        class_id: query.targetType === 'class' ? query.classId : query.classId,
+        student_id: query.targetType === 'student' ? query.targetId : undefined,
+      },
+    })
+    return res.data
+  } catch {
+    return { months: [], avgScore: [], passRate: [], maxScore: [], minScore: [] }
   }
 }
 
 /** 获取知识点热力图数据 */
 export async function fetchKnowledgeHeatmap(query: AnalysisQuery): Promise<KnowledgeHeatmapResult> {
-  await delay(300)
-
-  if (!query.courseId) {
+  try {
+    const res = await request.get('/v1/analysis/knowledge-heatmap', {
+      params: {
+        course_id: query.courseId,
+        class_id: query.targetType === 'class' ? query.targetId : query.classId,
+        student_id: query.targetType === 'student' ? query.targetId : undefined,
+      },
+    })
+    return res.data
+  } catch {
     return { knowledgePoints: [], students: [], data: [] }
-  }
-
-  if (query.targetType === 'student') {
-    if (!query.targetId) {
-      return {
-        knowledgePoints: getKnowledgePointsByCourse(query.courseId),
-        students: [],
-        data: [],
-      }
-    }
-    const personal = buildPersonalKnowledgeHeatmap(
-      query.targetId,
-      query.courseId,
-      query.classId,
-    )
-    return {
-      knowledgePoints: personal.knowledgePoints,
-      students: personal.students,
-      data: personal.data,
-      classAvgByKp: personal.classAvgByKp,
-    }
-  }
-
-  const classId = query.classId ?? query.targetId
-  if (!classId) {
-    return {
-      knowledgePoints: getKnowledgePointsByCourse(query.courseId),
-      students: [],
-      data: [],
-    }
-  }
-
-  const heatmap = buildCourseClassHeatmap(query.courseId, classId)
-  const classStats = computeClassKnowledgeStats(heatmap)
-  return {
-    ...heatmap,
-    classAvgByKp: classStats.classAvgByKp,
   }
 }
 
-/** 获取预警记录（带筛选，教师仅看本人授课范围） */
+/** 获取预警记录 */
 export async function fetchWarnings(query: AnalysisQuery & {
   level?: string
   type?: string
   status?: number
   teacherId?: number
 }): Promise<WarningRecord[]> {
-  await delay(300)
-
-  let teacherCourseIds: number[] | undefined
-  if (query.teacherId) {
-    teacherCourseIds = courses.filter((c) => c.teacherId === query.teacherId).map((c) => c.id)
+  try {
+    const res = await request.get('/v1/analysis/warnings', {
+      params: {
+        course_id: query.courseId,
+        class_id: query.classId,
+        level: query.level,
+      },
+    })
+    return res.data
+  } catch {
+    return []
   }
-
-  return warningRecords.filter((w) => {
-    if (query.deptId && w.deptId !== query.deptId) return false
-    if (query.classId && w.classId !== query.classId) return false
-    if (query.semesterId && w.semesterId !== query.semesterId) return false
-    if (query.courseId && w.courseId !== query.courseId) return false
-    if (query.level && w.level !== query.level) return false
-    if (query.type && w.type !== query.type) return false
-    if (query.status !== undefined && query.status !== null && w.status !== query.status) return false
-    if (teacherCourseIds && w.courseId && !teacherCourseIds.includes(w.courseId)) return false
-    if (query.studentNo && w.studentId !== query.studentNo) return false
-    return true
-  })
 }
 
-/** 获取某课程某班级学生成绩预测列表 */
+/** 获取成绩预测列表 */
 export async function fetchGradePredictions(query: AnalysisQuery) {
-  await delay(200)
-  if (!query.courseId || !query.classId) return []
-
-  const studentsInClass = getStudentsInCourseClass(query.courseId, query.classId)
-  return studentsInClass.map((s) => {
-    const mastery = getStudentMastery(s.id, query.courseId!)
-    const current = mastery?.length
-      ? Math.round(mastery.reduce((a, b) => a + b, 0) / mastery.length)
-      : 70
-    const delta = current >= 85 ? 3 : current >= 70 ? 0 : -4
-    const low = Math.max(0, current + delta - 3)
-    const high = Math.min(100, current + delta + 3)
-    const trend = delta > 1 ? '上升' : delta < -1 ? '下滑' : '稳定'
-    return {
-      name: s.studentName,
-      current,
-      predicted: `${low}-${high}`,
-      trend,
-      confidence: Math.min(95, 70 + Math.floor(current / 5)),
-    }
-  })
+  try {
+    const res = await request.get('/v1/analysis/grade-predictions', {
+      params: { course_id: query.courseId, class_id: query.classId },
+    })
+    return res.data
+  } catch {
+    return []
+  }
 }
 
-/** 分析对象类型选项（单课程/单班级维度） */
+/** 分析对象类型选项 */
 export const targetTypeOptions: { label: string; value: TargetType }[] = [
   { label: '学生', value: 'student' },
   { label: '班级', value: 'class' },

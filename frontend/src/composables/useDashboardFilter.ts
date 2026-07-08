@@ -4,8 +4,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchClasses, fetchCourses, fetchDashboardGrades, fetchMajors } from '@/api/dict'
-import { semesterOptions } from '@/mock/dict'
+import { fetchClasses, fetchCourses, fetchDashboardGrades, fetchMajors, fetchSemesters } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 
 export interface DashboardFilters {
@@ -40,10 +39,10 @@ export function useDashboardFilter() {
   const userStore = useUserStore()
   const deptId = 1
 
+  const semesterOptions = ref<{ label: string; value: string; id: number }[]>([])
+
   const filters = ref<DashboardFilters>({
-    semester: semesterOptions.find((s) => s.value === '2025-2026-1')?.value
-      ?? semesterOptions[0]?.value
-      ?? '',
+    semester: '',
     majorId: undefined,
     grade: '',
     courseId: undefined,
@@ -256,6 +255,10 @@ export function useDashboardFilter() {
     optionsLoading.value = true
     void (async () => {
       try {
+        const sems = await fetchSemesters()
+        semesterOptions.value = sems.map(s => ({ label: s.semesterName, value: s.semesterCode, id: s.id }))
+        const current = semesterOptions.value.find(s => s.value === '2025-2026-1')
+        filters.value.semester = current?.value ?? semesterOptions.value[0]?.value ?? ''
         await loadMajors()
         await loadGrades()
         await loadCourses()

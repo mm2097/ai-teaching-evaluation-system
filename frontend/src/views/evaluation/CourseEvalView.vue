@@ -3,13 +3,22 @@
   展示课程综合评价与同类对比排名
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { courseEvalList } from '@/mock'
 import { evalGradeType } from '@/utils/auth'
+import request from '@/utils/request'
 
-const selectedCourse = ref(courseEvalList[0])
+const courseEvalList = ref<any[]>([])
+const selectedCourse = ref<any>(null)
+
+onMounted(async () => {
+  try {
+    const res = await request.get('/v1/evaluations')
+    courseEvalList.value = res.data
+    if (courseEvalList.value.length) selectedCourse.value = courseEvalList.value[0]
+  } catch { courseEvalList.value = [] }
+})
 
 /** 课程维度对比柱状图 */
 const barOption = computed<EChartsOption>(() => {

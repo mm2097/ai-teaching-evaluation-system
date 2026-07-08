@@ -51,10 +51,10 @@ def seed() -> None:
         # ========== 2. 用户（10人） ==========
         users = [
             SysUser(username="admin", password="123456", real_name="张管理", role_id=1, status=1),
-            SysUser(username="teacher1", password="123456", real_name="王建国", role_id=2, status=1),
+            SysUser(username="teacher", password="123456", real_name="王建国", role_id=2, status=1),
             SysUser(username="teacher2", password="123456", real_name="李明远", role_id=2, status=1),
             SysUser(username="teacher3", password="123456", real_name="陈晓芳", role_id=2, status=1),
-            SysUser(username="stu01", password="123456", real_name="赵伟", role_id=3, status=1),
+            SysUser(username="student", password="123456", real_name="赵伟", role_id=3, status=1),
             SysUser(username="stu02", password="123456", real_name="钱丽华", role_id=3, status=1),
             SysUser(username="stu03", password="123456", real_name="孙浩然", role_id=3, status=1),
             SysUser(username="stu04", password="123456", real_name="周敏", role_id=3, status=1),

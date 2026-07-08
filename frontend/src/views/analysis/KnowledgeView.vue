@@ -38,7 +38,12 @@ async function loadHeatmap(): Promise<void> {
   heatmapData.value = await fetchKnowledgeHeatmap(params)
 }
 
-watch([queryParams, viewMode, targetId, classId], loadHeatmap, { deep: true, immediate: true })
+watch([queryParams, viewMode], () => {
+  // 关键参数未就绪时跳过，避免无效请求
+  if (viewMode.value === 'class' && classId.value == null) return
+  if (viewMode.value === 'student' && targetId.value == null) return
+  loadHeatmap()
+}, { immediate: true })
 
 watch(viewMode, (mode) => {
   targetType.value = mode === 'class' ? 'class' : 'student'
@@ -62,19 +67,17 @@ const heatmapOption = computed<EChartsOption>(() => {
         return `${heatmapData.value.students[y!]} - ${heatmapData.value.knowledgePoints[x!]}<br/>掌握度: ${val}%`
       },
     },
-    grid: { left: isPersonal ? 20 : 80, right: 40, top: 10, bottom: 80 },
+    grid: { left: isPersonal ? 20 : 80, right: 40, top: 10, bottom: 60 },
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,
-      splitArea: { show: true },
       axisLabel: { rotate: 30, fontSize: 11 },
     },
     yAxis: isPersonal
-      ? { show: false }
+      ? { type: 'category', data: [''], show: false } as EChartsOption['yAxis']
       : {
           type: 'category',
           data: heatmapData.value.students,
-          splitArea: { show: true },
         },
     visualMap: {
       min: 0,
@@ -88,8 +91,7 @@ const heatmapOption = computed<EChartsOption>(() => {
     series: [{
       type: 'heatmap',
       data: heatmapData.value.data,
-      label: { show: true, fontSize: 11 },
-      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
+      label: { show: false },
     }],
   }
 })
@@ -153,7 +155,12 @@ async function handleStudentSearch(keyword: string): Promise<void> {
 
     <div class="content-card">
       <div class="content-card__title">{{ heatmapTitle }}</div>
-      <BaseChart :option="heatmapOption" :height="viewMode === 'student' ? '200px' : '400px'" />
+      <el-skeleton v-if="heatmapData.data.length === 0" :rows="5" animated style="padding: 20px" />
+      <BaseChart
+        v-else
+        :option="heatmapOption"
+        :height="viewMode === 'student' ? '200px' : '400px'"
+      />
     </div>
 
     <el-row :gutter="16">

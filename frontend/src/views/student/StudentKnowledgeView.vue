@@ -11,6 +11,7 @@ import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(true)
+const dataReady = ref(false)
 
 const heatmapData = ref({
   knowledgePoints: [] as string[],
@@ -26,6 +27,7 @@ async function loadHeatmap(): Promise<void> {
       targetId: userStore.userInfo?.studentId || 1,
       analysisType: '知识点掌握度',
     })
+    dataReady.value = true
   } finally {
     loading.value = false
   }
@@ -41,14 +43,13 @@ const heatmapOption = computed<EChartsOption>(() => ({
       return `${heatmapData.value.knowledgePoints[p.value[0]!]}<br/>掌握度: ${p.value[2]!}%`
     },
   },
-  grid: { left: 20, right: 40, top: 10, bottom: 80 },
+  grid: { left: 20, right: 40, top: 10, bottom: 60 },
   xAxis: {
     type: 'category',
     data: heatmapData.value.knowledgePoints,
-    splitArea: { show: true },
     axisLabel: { rotate: 30, fontSize: 11 },
   },
-  yAxis: { show: false },
+  yAxis: { type: 'category', data: [''], show: false },
   visualMap: {
     min: 0, max: 100,
     calculable: true,
@@ -60,8 +61,7 @@ const heatmapOption = computed<EChartsOption>(() => ({
   series: [{
     type: 'heatmap',
     data: heatmapData.value.data,
-    label: { show: true, fontSize: 12 },
-    emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' } },
+    label: { show: false },
   }],
 }))
 
@@ -99,7 +99,8 @@ const overviewStats = computed(() => {
         <el-descriptions-item label="最佳知识点">{{ overviewStats.maxItem }}</el-descriptions-item>
         <el-descriptions-item label="最弱知识点">{{ overviewStats.minItem }}</el-descriptions-item>
       </el-descriptions>
-      <BaseChart :option="heatmapOption" height="220px" />
+      <el-skeleton v-if="!dataReady" :rows="3" animated style="padding: 20px" />
+      <BaseChart v-else :option="heatmapOption" height="220px" />
     </div>
 
     <div class="content-card" style="margin-top: 16px">

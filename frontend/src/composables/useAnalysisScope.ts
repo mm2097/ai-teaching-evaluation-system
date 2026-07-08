@@ -43,6 +43,9 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const showTargetTypeFilter = computed(() => role.value !== 'student')
   const showStudentPicker = computed(() => targetType.value === 'student' && role.value !== 'student')
 
+  /** 并发锁，防止 loadOptions 重入 */
+  let loadingPromise: Promise<void> | null = null
+
   async function loadStudentOptions(keyword?: string): Promise<void> {
     const students = await searchStudents({
       keyword: keyword ?? studentKeyword.value,
@@ -60,46 +63,58 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   }
 
   async function loadOptions(): Promise<void> {
-    const sems = await fetchSemesters()
-    semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
+    // 防止并发重入
+    if (loadingPromise) return loadingPromise
 
-    if (role.value === 'teacher') {
-      const teacherId = userStore.userInfo?.teacherId
-      const courses = await fetchCourses({ teacherId, semesterId: semesterId.value })
-      courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-      if (!courseId.value && courseOptions.value.length) {
-        courseId.value = courseOptions.value[0]!.value
-      }
-      const classes = await fetchClasses({ deptId: 1 })
-      classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-      if (!classId.value && classOptions.value.length) {
-        classId.value = classOptions.value[0]!.value
-      }
-    } else if (role.value === 'admin') {
-      const classes = await fetchClasses({ deptId: 1 })
-      classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-      const courses = await fetchCourses({ deptId: 1, semesterId: semesterId.value })
-      courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-      if (!courseId.value && courseOptions.value.length) {
-        courseId.value = courseOptions.value[0]!.value
-      }
-    }
+    loadingPromise = (async () => {
+      const sems = await fetchSemesters()
+      semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
 
-    if (targetType.value === 'student') {
-      if (role.value === 'student') {
-        targetId.value = userStore.userInfo?.studentId
-      } else {
-        await loadStudentOptions()
+      if (role.value === 'teacher') {
+        const teacherId = userStore.userInfo?.teacherId
+        const courses = await fetchCourses({ teacherId, semesterId: semesterId.value })
+        courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+        if (!courseId.value && courseOptions.value.length) {
+          courseId.value = courseOptions.value[0]!.value
+        }
+        const classes = await fetchClasses({ deptId: 1 })
+        classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
+        if (!classId.value && classOptions.value.length) {
+          classId.value = classOptions.value[0]!.value
+        }
+      } else if (role.value === 'admin') {
+        const classes = await fetchClasses({ deptId: 1 })
+        classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
+        if (!classId.value && classOptions.value.length) {
+          classId.value = classOptions.value[0]!.value
+        }
+        const courses = await fetchCourses({ deptId: 1, semesterId: semesterId.value })
+        courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+        if (!courseId.value && courseOptions.value.length) {
+          courseId.value = courseOptions.value[0]!.value
+        }
       }
-    } else if (targetType.value === 'class') {
-      targetOptions.value = classOptions.value
-      if (!targetId.value && targetOptions.value.length) {
-        targetId.value = targetOptions.value[0]!.value
+
+      if (targetType.value === 'student') {
+        if (role.value === 'student') {
+          targetId.value = userStore.userInfo?.studentId
+        } else {
+          await loadStudentOptions()
+        }
+      } else if (targetType.value === 'class') {
+        targetOptions.value = classOptions.value
+        if (!targetId.value && targetOptions.value.length) {
+          targetId.value = targetOptions.value[0]!.value
+        }
       }
-    }
+    })()
+
+    await loadingPromise
+    loadingPromise = null
   }
 
-  watch([targetType, semesterId, classId, courseId], () => {
+  // 仅监听外部变化（学期切换、分析对象类型切换），不再监听 classId/courseId 避免递归
+  watch([targetType, semesterId], () => {
     targetId.value = undefined
     loadOptions()
   })

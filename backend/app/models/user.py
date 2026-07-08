@@ -1,58 +1,69 @@
-"""用户模型与 API schema。
-
-SQLModel 推荐写法:把表模型(table=True)和请求/响应 schema 放一起,
-共享字段定义,减少重复。
-"""
+"""用户与角色模型。对应设计文档 4.1 节。"""
 from datetime import datetime
+from typing import Optional
 
-from sqlmodel import Field, SQLModel
-
-
-class User(SQLModel, table=True):
-    """用户表。"""
-
-    id: int | None = Field(default=None, primary_key=True)
-    username: str = Field(index=True, unique=True)
-    password: str  # TODO: 生产环境用 passlib[bcrypt] 哈希存储,当前为明文(仅 demo)
-    name: str
-    role: str = Field(default="teacher", index=True)  # admin / manager / teacher / student
-    department: str = Field(default="")
-    status: bool = Field(default=True)  # True=启用, False=禁用
-    created_at: datetime = Field(default_factory=datetime.now)
+from sqlmodel import Field, Relationship, SQLModel
 
 
-# --- API Schemas(不映射表,只用于请求/响应)---
+class SysRole(SQLModel, table=True):
+    """角色表 sys_role。"""
+
+    __tablename__ = "sys_role"
+
+    role_id: Optional[int] = Field(default=None, primary_key=True)
+    role_name: str = Field(max_length=32)
+    role_code: str = Field(max_length=32, unique=True, index=True)
+    description: Optional[str] = Field(default=None, max_length=255)
+    create_time: datetime = Field(default_factory=datetime.now)
+
+    users: list["SysUser"] = Relationship(back_populates="role")
+
+
+class SysUser(SQLModel, table=True):
+    """系统用户表 sys_user。"""
+
+    __tablename__ = "sys_user"
+
+    user_id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(max_length=64, unique=True, index=True)
+    password: str = Field(max_length=128)
+    real_name: str = Field(max_length=32)
+    role_id: int = Field(foreign_key="sys_role.role_id", index=True)
+    status: int = Field(default=1)  # 0=禁用, 1=启用
+    create_time: datetime = Field(default_factory=datetime.now)
+    update_time: datetime = Field(default_factory=datetime.now)
+
+    role: Optional[SysRole] = Relationship(back_populates="users")
+
+
+# --- API Schemas ---
+
+
+class LoginRequest(SQLModel):
+    username: str
+    password: str
 
 
 class UserCreate(SQLModel):
-    """创建用户 - 请求体。"""
-
     username: str
     password: str
-    name: str
-    role: str = "teacher"
-    department: str = ""
-    status: bool = True
+    real_name: str
+    role_id: int
+    status: int = 1
 
 
 class UserUpdate(SQLModel):
-    """更新用户 - 请求体(所有字段可选,只更新传入的字段)。"""
-
-    username: str | None = None
-    password: str | None = None
-    name: str | None = None
-    role: str | None = None
-    department: str | None = None
-    status: bool | None = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    real_name: Optional[str] = None
+    role_id: Optional[int] = None
+    status: Optional[int] = None
 
 
 class UserRead(SQLModel):
-    """返回给前端的用户信息(不含密码)。"""
-
-    id: int
+    user_id: int
     username: str
-    name: str
-    role: str
-    department: str
-    status: bool
-    created_at: datetime
+    real_name: str
+    role_id: int
+    status: int
+    create_time: datetime

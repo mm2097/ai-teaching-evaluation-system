@@ -31,7 +31,7 @@ export const menuList: MenuItem[] = [
   },
   {
     path: '/analysis',
-    title: 'AI 智能分析',
+    title: '智能分析',
     icon: 'DataAnalysis',
     roles: ['admin', 'teacher'],
     children: [
@@ -160,10 +160,10 @@ export const routeTitleMap: Record<string, string> = {
 export const routeParentMap: Record<string, { path: string; title: string }> = {
   '/data/import': { path: '/data', title: '数据采集' },
   '/data/manage': { path: '/data', title: '数据采集' },
-  '/analysis/profile': { path: '/analysis', title: 'AI 智能分析' },
-  '/analysis/trend': { path: '/analysis', title: 'AI 智能分析' },
-  '/analysis/knowledge': { path: '/analysis', title: 'AI 智能分析' },
-  '/analysis/warning': { path: '/analysis', title: 'AI 智能分析' },
+  '/analysis/profile': { path: '/analysis', title: '智能分析' },
+  '/analysis/trend': { path: '/analysis', title: '智能分析' },
+  '/analysis/knowledge': { path: '/analysis', title: '智能分析' },
+  '/analysis/warning': { path: '/analysis', title: '智能分析' },
   '/quiz/bank': { path: '/quiz', title: 'AI 智能辅助教学' },
   '/quiz/manage': { path: '/quiz', title: 'AI 智能辅助教学' },
   '/quiz/records': { path: '/quiz', title: 'AI 智能辅助教学' },

@@ -1,11 +1,14 @@
 """题库管理 API。
 
 接口：
-    GET  /api/v1/question-bank            题库列表（按课程过滤）
-    POST /api/v1/question-bank            批量新增题目
-    POST /api/v1/question-bank/check      检查题干是否已存在
-    GET  /api/v1/question-bank/templates  内置模板列表
-    POST /api/v1/question-bank/import-builtin  从内置模板导入
+    GET    /api/v1/question-bank            题库列表（按课程过滤）
+    POST   /api/v1/question-bank            批量新增题目
+    POST   /api/v1/question-bank/check      检查题干是否已存在
+    GET    /api/v1/question-bank/templates  内置模板列表
+    GET    /api/v1/question-bank/stats      题库统计
+    PUT    /api/v1/question-bank/{id}       更新单题
+    DELETE /api/v1/question-bank/{id}       删除单题
+    POST   /api/v1/question-bank/import-builtin  从内置模板导入
 """
 from __future__ import annotations
 
@@ -13,7 +16,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlmodel import Session, func, or_, select
 
@@ -80,6 +83,19 @@ class ImportRowsRequest(BaseModel):
 class ImportBuiltinRequest(BaseModel):
     courseId: int
     templateId: str
+
+
+class UpdateQuestionRequest(BaseModel):
+    """更新单题请求体。"""
+    type: str = "single_choice"
+    stem: str = ""
+    options: list[dict[str, str]] | None = None
+    answer: str = ""
+    answerList: list[str] | None = None
+    explanation: str | None = None
+    knowledgePoint: str | None = None
+    difficulty: str = "medium"
+    score: float = 0
 
 
 # ===== 知识点辅助 =====
@@ -237,6 +253,95 @@ def check_questions_in_bank(
     existing = set(rows)
 
     return {"status": {s: s in existing for s in req.stems}}
+
+
+@router.get("/question-bank/stats", tags=["题库管理"])
+def question_bank_stats(
+    course_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> dict:
+    """题库统计（按课程维度聚合题型/难度/来源分布）。"""
+    stmt = select(AiQuestion)
+    if course_id:
+        stmt = stmt.where(AiQuestion.course_id == course_id)
+    questions = session.exec(stmt).all()
+
+    by_type = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0}
+    by_source = {"ai": 0, "manual": 0, "import": 0}
+    by_difficulty = {"easy": 0, "medium": 0, "hard": 0}
+
+    for q in questions:
+        type_str = _TYPE_INT_TO_STR.get(q.type, "single_choice")
+        if type_str in by_type:
+            by_type[type_str] += 1
+        diff_str = _difficulty_str(len(q.content) % 10)
+        if diff_str in by_difficulty:
+            by_difficulty[diff_str] += 1
+        by_source["manual"] += 1  # 当前所有题均归为 manual
+
+    return {
+        "total": len(questions),
+        "byType": by_type,
+        "bySource": by_source,
+        "byDifficulty": by_difficulty,
+    }
+
+
+@router.put("/question-bank/{question_id}", tags=["题库管理"])
+def update_question(
+    question_id: int,
+    req: UpdateQuestionRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """更新单题（题干、答案、选项、知识点等）。"""
+    q = session.get(AiQuestion, question_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    if req.stem:
+        q.content = req.stem
+    if req.options is not None:
+        q.options = json.dumps(req.options, ensure_ascii=False) if req.options else None
+    if req.answer:
+        answer = req.answer
+        if req.answerList:
+            answer = ",".join(req.answerList)
+        q.correct_answer = answer
+    if req.explanation is not None:
+        q.analysis = req.explanation
+    if req.type:
+        q.type = _TYPE_STR_TO_INT.get(req.type, q.type)
+    if req.knowledgePoint:
+        point_id = _find_or_create_knowledge_point(session, q.course_id, req.knowledgePoint)
+        if point_id:
+            q.point_id = point_id
+
+    session.add(q)
+    session.commit()
+    return {"id": q.question_id, "message": "更新成功"}
+
+
+@router.delete("/question-bank/{question_id}", tags=["题库管理"])
+def delete_question(
+    question_id: int,
+    session: Session = Depends(get_session),
+) -> dict:
+    """删除单题（同时清理任务关联）。"""
+    q = session.get(AiQuestion, question_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="题目不存在")
+
+    # 清理 task_question 关联
+    from app.models import TaskQuestion
+    links = session.exec(
+        select(TaskQuestion).where(TaskQuestion.question_id == question_id)
+    ).all()
+    for link in links:
+        session.delete(link)
+
+    session.delete(q)
+    session.commit()
+    return {"id": question_id, "message": "已删除"}
 
 
 @router.get("/question-bank/templates", tags=["题库管理"])

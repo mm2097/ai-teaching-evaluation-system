@@ -3,6 +3,13 @@
  */
 import request from '@/utils/request'
 import type { ParsedQuestionRow } from '@/utils/questionTemplateValidator'
+import type {
+  DifficultyLevel,
+  ExerciseSource,
+  ExerciseType,
+  QuestionBankStats,
+  QuizQuestion,
+} from '@/types'
 
 export interface QuestionRecord {
   id: number
@@ -167,4 +174,65 @@ export async function importQuestionsFromBuiltin(
     templateId,
   })
   return res.data
+}
+
+// ===== QuestionBankView 使用的接口 =====
+
+/** 题库统计（按课程维度） */
+export async function fetchQuestionBankStats(courseId?: number): Promise<QuestionBankStats> {
+  const params: FetchQuestionBankParams = courseId ? { courseId } : {}
+  const res = await request.get<QuestionRecord[]>('/v1/question-bank', { params })
+  const items = res.data
+  const stats: QuestionBankStats = {
+    total: items.length,
+    byType: { single_choice: 0, multi_choice: 0, judge: 0, fill_blank: 0 },
+    bySource: { ai: 0, manual: 0, import: 0 } as Record<ExerciseSource, number>,
+    byDifficulty: { easy: 0, medium: 0, hard: 0 },
+  }
+  for (const q of items) {
+    if (q.type in stats.byType) (stats.byType[q.type as ExerciseType] as number)++
+    if (q.difficulty in stats.byDifficulty) (stats.byDifficulty[q.difficulty as DifficultyLevel] as number)++
+  }
+  return stats
+}
+
+/** 新增单道题目（QuestionBankView 使用） */
+export async function createQuestion(question: Omit<QuizQuestion, 'id'>): Promise<void> {
+  await request.post('/v1/question-bank', {
+    questions: [
+      {
+        courseId: question.courseId,
+        type: question.type,
+        stem: question.stem,
+        options: question.options,
+        answer: question.answer,
+        answerList: question.answerList,
+        explanation: question.explanation,
+        knowledgePoint: question.knowledgePoint,
+        difficulty: question.difficulty,
+        score: question.score,
+      },
+    ],
+    source: question.source || 'manual',
+  })
+}
+
+/** 更新题目 */
+export async function updateQuestion(id: number, question: Partial<QuizQuestion>): Promise<void> {
+  await request.put(`/v1/question-bank/${id}`, {
+    type: question.type,
+    stem: question.stem,
+    options: question.options,
+    answer: question.answer,
+    answerList: question.answerList,
+    explanation: question.explanation,
+    knowledgePoint: question.knowledgePoint,
+    difficulty: question.difficulty,
+    score: question.score,
+  })
+}
+
+/** 删除题目 */
+export async function deleteQuestion(id: number): Promise<void> {
+  await request.delete(`/v1/question-bank/${id}`)
 }

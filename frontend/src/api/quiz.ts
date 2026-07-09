@@ -2,6 +2,7 @@
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
 import request from '@/utils/request'
+import type { DifficultyLevel, ExerciseType, QuizQuestion } from '@/types'
 
 export interface QuizAssignmentRecord {
   id: number
@@ -30,10 +31,16 @@ export interface QuizSubmissionRecord {
   answers: { questionIndex: number; questionContent: string; studentAnswer: string; correctAnswer: string; score: number; isCorrect: boolean }[]
 }
 
+/** 答题任务查询参数 */
+export interface QuizAssignmentQuery {
+  courseId?: number
+  teacherId?: number
+}
+
 /** 获取答题任务列表 */
-export async function fetchQuizAssignments(): Promise<QuizAssignmentRecord[]> {
+export async function fetchQuizAssignments(params?: QuizAssignmentQuery): Promise<QuizAssignmentRecord[]> {
   try {
-    const res = await request.get('/v1/answer-tasks')
+    const res = await request.get('/v1/answer-tasks', { params })
     return res.data
   } catch {
     return []
@@ -130,4 +137,68 @@ export async function fetchErrorBook(studentId: number): Promise<{
   })
 
   return errors.sort((a, b) => b.submitTime.localeCompare(a.submitTime))
+}
+
+// ===== QuizManageView 使用的接口 =====
+
+/** AI 生成练习题请求参数 */
+export interface GenerateQuizParams {
+  courseId: number
+  classId: number
+  knowledgePoints: string[]
+  questionTypes: ExerciseType[]
+  questionCount: number
+  difficulty: DifficultyLevel
+  extraRequirements?: string
+}
+
+/** AI 生成练习题响应 */
+export interface GenerateQuizResult {
+  questions: QuizQuestion[]
+  meta: {
+    model: string
+    elapsedMs: number
+  }
+}
+
+/** 保存练习任务参数 */
+export interface SaveQuizAssignmentParams {
+  title: string
+  courseId: number
+  courseName: string
+  classId: number
+  className: string
+  teacherName: string
+  knowledgePoints: string[]
+  status: 'draft' | 'published'
+  questions: QuizQuestion[]
+}
+
+/** AI 生成练习题（经后端代理调用算法服务 8001） */
+export async function generateQuizQuestions(params: GenerateQuizParams): Promise<GenerateQuizResult> {
+  const res = await request.post('/v1/exercises/generate', {
+    courseId: params.courseId,
+    knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
+    questionTypes: params.questionTypes,
+    questionCount: params.questionCount,
+    difficulty: params.difficulty,
+    extraRequirements: params.extraRequirements || '',
+  })
+  return res.data
+}
+
+/** 保存练习任务（草稿或已发布） */
+export async function saveQuizAssignment(params: SaveQuizAssignmentParams): Promise<QuizAssignmentRecord> {
+  const res = await request.post('/v1/answer-tasks', params)
+  return res.data
+}
+
+/** 发布练习任务 */
+export async function publishQuizAssignment(id: number): Promise<void> {
+  await request.post(`/v1/answer-tasks/${id}/publish`)
+}
+
+/** 关闭练习任务 */
+export async function closeQuizAssignment(id: number): Promise<void> {
+  await request.post(`/v1/answer-tasks/${id}/close`)
 }

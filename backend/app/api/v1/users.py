@@ -1,8 +1,9 @@
 """用户管理接口。"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
 
 from app.core.database import get_session
+from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.models import SysUser, UserCreate, UserRead, UserUpdate
 
 router = APIRouter()
@@ -15,7 +16,12 @@ def list_users(session: Session = Depends(get_session)) -> list[SysUser]:
 
 
 @router.post("/users", response_model=UserRead, status_code=201, tags=["用户管理"])
-def create_user(payload: UserCreate, session: Session = Depends(get_session)) -> SysUser:
+def create_user(
+    payload: UserCreate,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> SysUser:
     """创建用户。用户名重复返回 400。"""
     if session.exec(select(SysUser).where(SysUser.username == payload.username)).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
@@ -23,6 +29,14 @@ def create_user(payload: UserCreate, session: Session = Depends(get_session)) ->
     session.add(user)
     session.commit()
     session.refresh(user)
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="用户管理",
+        operation="新增",
+        content=f"创建用户：{user.username}",
+        ip_address=get_client_ip(request),
+    )
     return user
 
 
@@ -37,7 +51,11 @@ def get_user(user_id: int, session: Session = Depends(get_session)) -> SysUser:
 
 @router.put("/users/{user_id}", response_model=UserRead, tags=["用户管理"])
 def update_user(
-    user_id: int, payload: UserUpdate, session: Session = Depends(get_session)
+    user_id: int,
+    payload: UserUpdate,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> SysUser:
     """更新用户(只改传入的字段)。"""
     user = session.get(SysUser, user_id)
@@ -48,14 +66,35 @@ def update_user(
     session.add(user)
     session.commit()
     session.refresh(user)
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="用户管理",
+        operation="编辑",
+        content=f"更新用户：{user.username}",
+        ip_address=get_client_ip(request),
+    )
     return user
 
 
 @router.delete("/users/{user_id}", status_code=204, tags=["用户管理"])
-def delete_user(user_id: int, session: Session = Depends(get_session)) -> None:
+def delete_user(
+    user_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> None:
     """删除用户。"""
     user = session.get(SysUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     session.delete(user)
     session.commit()
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="用户管理",
+        operation="删除",
+        content=f"删除用户：{user.username}",
+        ip_address=get_client_ip(request),
+    )

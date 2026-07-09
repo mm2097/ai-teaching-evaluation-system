@@ -1,9 +1,10 @@
 """课程管理 API。"""
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.models import Course
+from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
+from app.models import Course, SysUser
 
 router = APIRouter()
 
@@ -59,6 +60,7 @@ def get_course(course_id: int, session: Session = Depends(get_session)) -> dict:
 
 @router.post("/courses", status_code=201, tags=["课程管理"])
 def create_course(
+    request: Request,
     course_code: str = Query(...),
     course_name: str = Query(...),
     teacher_id: int = Query(...),
@@ -66,6 +68,7 @@ def create_course(
     college: str = Query(...),
     credit: float | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> dict:
     """创建课程。"""
     if session.exec(select(Course).where(Course.course_code == course_code)).first():
@@ -78,11 +81,20 @@ def create_course(
     session.add(course)
     session.commit()
     session.refresh(course)
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="课程管理",
+        operation="新增",
+        content=f"创建课程：{course.course_name} ({course.course_code})",
+        ip_address=get_client_ip(request),
+    )
     return {"course_id": course.course_id, "course_name": course.course_name}
 
 
 @router.put("/courses/{course_id}", tags=["课程管理"])
 def update_course(
+    request: Request,
     course_id: int,
     course_name: str | None = Query(default=None),
     teacher_id: int | None = Query(default=None),
@@ -90,6 +102,7 @@ def update_course(
     credit: float | None = Query(default=None),
     status: int | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> dict:
     """更新课程(只改传入字段)。"""
     course = session.get(Course, course_id)
@@ -108,14 +121,35 @@ def update_course(
     session.add(course)
     session.commit()
     session.refresh(course)
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="课程管理",
+        operation="编辑",
+        content=f"更新课程：{course.course_name} ({course.course_code})",
+        ip_address=get_client_ip(request),
+    )
     return {"course_id": course.course_id, "course_name": course.course_name}
 
 
 @router.delete("/courses/{course_id}", status_code=204, tags=["课程管理"])
-def delete_course(course_id: int, session: Session = Depends(get_session)) -> None:
+def delete_course(
+    request: Request,
+    course_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> None:
     """删除课程。"""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     session.delete(course)
     session.commit()
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="课程管理",
+        operation="删除",
+        content=f"删除课程：{course.course_name} ({course.course_code})",
+        ip_address=get_client_ip(request),
+    )

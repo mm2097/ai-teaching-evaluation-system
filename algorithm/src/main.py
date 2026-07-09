@@ -7,15 +7,19 @@
 接口：
     GET  /health              健康检查
     POST /generate_exercises  AI 出题
+    POST /generate_report     报告 LLM 增强
+    POST /agent/chat          Agent FC（同步版，给后端兜底用）
 """
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .generator import generate_exercises
+from .reporter import enhance_report
 from .schemas import ErrorResponse, GenerateRequest, GenerateResponse
 
 
@@ -93,4 +97,94 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     except Exception as e:
         # 未预期错误
         logger.exception(f"出题未预期异常：{e}")
+        raise HTTPException(status_code=500, detail=f"AI 服务内部错误：{e}")
+
+
+# ===== D10 报告 LLM 增强 =====
+
+class ReportRequestModel(BaseModel):
+    """报告增强请求体。"""
+
+    scope: str = Field(..., description="class / student")
+    template: dict = Field(..., description="模板初稿 {summary, conclusion, suggestion}")
+    context: dict = Field(..., description="结构化统计指标")
+
+
+@app.post(
+    "/generate_report",
+    tags=["报告生成"],
+)
+def generate_report(req: ReportRequestModel) -> dict:
+    """报告 LLM 增强接口。
+
+    失败自动回退到模板文本（``source=template_fallback``），保证不抛 5xx。
+    """
+    s = get_settings()
+    if not s.llm_api_key:
+        # 无 Key 时直接返回模板回退
+        return {
+            "summary": req.template.get("summary", ""),
+            "conclusion": req.template.get("conclusion", ""),
+            "suggestion": req.template.get("suggestion", ""),
+            "source": "template_fallback",
+            "error": "AI 服务未配置 API Key",
+        }
+    try:
+        return enhance_report(req.scope, req.template, req.context)
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"报告增强异常：{e}")
+        return {
+            "summary": req.template.get("summary", ""),
+            "conclusion": req.template.get("conclusion", ""),
+            "suggestion": req.template.get("suggestion", ""),
+            "source": "template_fallback",
+            "error": str(e)[:200],
+        }
+
+
+# ===== Agent Function Calling 透传 =====
+
+class AgentChatRequest(BaseModel):
+    """Agent 单步 FC 请求体（透传给 LLM）。"""
+
+    messages: list[dict] = Field(..., description="完整对话历史")
+    tools: list[dict] = Field(default_factory=list, description="工具 schema")
+    tool_choice: str = Field(default="auto")
+
+
+@app.post(
+    "/agent/chat",
+    tags=["Agent"],
+)
+def agent_chat(req: AgentChatRequest) -> dict:
+    """Agent 单步 FC 调用。
+
+    后端 Agent 内核每步循环调用此接口：发 messages + tools → 拿 tool_calls 或 content。
+    循环逻辑、工具执行都在 backend。
+    """
+    s = get_settings()
+    if not s.llm_api_key:
+        raise HTTPException(status_code=503, detail="AI 服务未配置 API Key，Agent 不可用")
+
+    from .llm_client import get_llm_client
+    try:
+        client = get_llm_client()
+        result = client.chat_with_tools(
+            messages=req.messages,
+            tools=req.tools,
+            tool_choice=req.tool_choice,
+        )
+        return {
+            "content": result.content,
+            "tool_calls": result.tool_calls,
+            "finish_reason": result.finish_reason,
+            "model": result.model,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+        }
+    except RuntimeError as e:
+        logger.error(f"Agent FC 调用失败：{e}")
+        raise HTTPException(status_code=503, detail=f"AI 服务暂不可用：{e}")
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"Agent FC 未预期异常：{e}")
         raise HTTPException(status_code=500, detail=f"AI 服务内部错误：{e}")

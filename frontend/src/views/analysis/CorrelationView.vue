@@ -20,7 +20,7 @@ const indicators = [
   { name: '作业提交率', correlation: 0.72, impact: '显著正相关', suggestion: '督促未交作业学生及时补交' },
   { name: '课堂问答参与', correlation: 0.85, impact: '强正相关', suggestion: '鼓励更多学生参与课堂互动' },
   { name: '考勤出勤率', correlation: 0.68, impact: '显著正相关', suggestion: '关注频繁缺勤学生' },
-  { name: 'AI 练习完成率', correlation: 0.61, impact: '中等正相关', suggestion: '通过 AI 练习巩固薄弱知识点' },
+  { name: 'AI 智能辅助教学完成率', correlation: 0.61, impact: '中等正相关', suggestion: '通过 AI 智能辅助教学巩固薄弱知识点' },
   { name: '作业得分', correlation: 0.78, impact: '强正相关', suggestion: '加强作业反馈与错题讲解' },
   { name: '缺勤频次', correlation: -0.45, impact: '负相关', suggestion: '缺勤与成绩下滑高度相关，需及时干预' },
 ]
@@ -51,7 +51,7 @@ const barOption = computed<EChartsOption>(() => ({
 const scatterOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'item' },
   grid: { left: 60, right: 30, top: 30, bottom: 40 },
-  xAxis: { name: 'AI 练习得分', nameLocation: 'center', nameGap: 25 },
+  xAxis: { name: 'AI 智能辅助教学得分', nameLocation: 'center', nameGap: 25 },
   yAxis: { name: '课程成绩', nameTextStyle: { padding: [0, 0, 0, 20] } },
   series: [{
     type: 'scatter',
@@ -95,7 +95,7 @@ const scatterOption = computed<EChartsOption>(() => ({
       </el-col>
       <el-col :span="10">
         <div class="content-card">
-          <div class="content-card__title">AI 练习得分 vs 课程成绩</div>
+          <div class="content-card__title">AI 智能辅助教学得分 vs 课程成绩</div>
           <BaseChart :option="scatterOption" height="380px" />
         </div>
       </el-col>

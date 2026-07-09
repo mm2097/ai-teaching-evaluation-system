@@ -106,7 +106,7 @@ const statCards = computed(() => {
     { title: '平均出勤率', value: +(dashboardStats.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
     { title: '预警学生', value: classWarningCount.value, icon: 'Bell', color: '#ef4444', trend: -12, link: '/analysis/warning' },
     { title: '知识点薄弱项', value: knowledgeStats.value.weakPoints.length, icon: 'Grid', color: '#8b5cf6', link: '/analysis/knowledge' },
-    { title: 'AI 练习完成率', value: 78.5, unit: '%', icon: 'EditPen', color: '#ec4899', link: '/quiz/manage' },
+    { title: 'AI 智能辅助教学完成率', value: 78.5, unit: '%', icon: 'EditPen', color: '#ec4899', link: '/quiz/manage' },
   ]
 })
 

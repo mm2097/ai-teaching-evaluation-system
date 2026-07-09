@@ -10,7 +10,7 @@ const evalIndicatorConfig = [
   { id: 1, name: '学业成绩', dimension: '学生评价', weight: 40, rule: '基于本课程加权平均分' },
   { id: 2, name: '学习态度', dimension: '学生评价', weight: 25, rule: '基于考勤率与作业提交率' },
   { id: 3, name: '学习进步', dimension: '学生评价', weight: 20, rule: '基于近三次测验/考试成绩变化' },
-  { id: 4, name: '知识掌握', dimension: '学生评价', weight: 15, rule: '基于知识点掌握度与 AI 练习得分' },
+  { id: 4, name: '知识掌握', dimension: '学生评价', weight: 15, rule: '基于知识点掌握度与 AI 智能辅助教学得分' },
 ]
 
 /** 指标列表（可编辑） */

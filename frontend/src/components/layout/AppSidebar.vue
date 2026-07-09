@@ -4,17 +4,22 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import * as Icons from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
+const router = useRouter()
 const appStore = useAppStore()
 const userStore = useUserStore()
 
 /** 当前激活菜单路径 */
 const activeMenu = computed(() => route.path)
+
+function handleSelect(index: string) {
+  router.push(index)
+}
 
 /**
  * 根据图标名称获取组件
@@ -48,6 +53,7 @@ function getIcon(iconName: string) {
         active-text-color="#ffffff"
         router
         unique-opened
+        @select="handleSelect"
       >
         <template v-for="menu in userStore.visibleMenus" :key="menu.path">
           <!-- 有子菜单的分组 -->

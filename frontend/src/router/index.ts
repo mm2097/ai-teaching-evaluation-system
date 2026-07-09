@@ -65,7 +65,7 @@ const router = createRouter({
           component: () => import('@/views/analysis/WarningView.vue'),
           meta: { title: '异常学情预警', roles: ['admin', 'teacher'] },
         },
-        // ---- AI 练习 ----
+        // ---- AI 智能辅助教学 ----
         {
           path: 'agent/chat',
           name: 'AgentChat',

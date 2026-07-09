@@ -309,7 +309,7 @@ export interface ExerciseOption {
   text: string
 }
 
-/** AI 练习题（对齐后端 Exercise 模型） */
+/** AI 智能辅助教学题（对齐后端 Exercise 模型） */
 export interface QuizQuestion {
   id: number
   courseId?: number

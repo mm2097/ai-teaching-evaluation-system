@@ -202,3 +202,22 @@ export async function publishQuizAssignment(id: number): Promise<void> {
 export async function closeQuizAssignment(id: number): Promise<void> {
   await request.post(`/v1/answer-tasks/${id}/close`)
 }
+
+/** 获取学生的答题任务列表 */
+export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssignmentRecord[]> {
+  return fetchQuizAssignments()
+}
+
+/** 提交答题答案 */
+export async function submitQuizAnswers(
+  taskId: number,
+  _studentId: number,
+  _studentName: string,
+  answers: Record<number, string | string[]>,
+): Promise<{ submissionId: number; score: number; totalScore: number; correctCount: number }> {
+  const { data } = await request.post('/v1/answer-records', {
+    task_id: taskId,
+    answers,
+  })
+  return data
+}

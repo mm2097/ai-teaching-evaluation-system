@@ -36,7 +36,7 @@ router = APIRouter()
 
 # status 映射：DB int → 前端 string
 _STATUS_MAP = {0: "draft", 1: "published", 2: "closed"}
-_TYPE_MAP = {1: "single_choice", 2: "multi_choice", 3: "judge", 4: "fill_blank"}
+_TYPE_MAP = {1: "single_choice", 2: "multi_choice", 3: "judge", 4: "fill_blank", 5: "short_answer"}
 
 
 @router.get("/answer-tasks", tags=["答题管理"])
@@ -84,7 +84,7 @@ def list_answer_tasks(
                 "options": [],
                 "answer": q.correct_answer,
                 "explanation": q.analysis or "",
-                "difficulty": "medium",
+                "difficulty": q.difficulty or "medium",
             })
 
         # 班级名（AnswerTask 没有直接关联班级，用课程下第一个班级兜底）
@@ -178,6 +178,159 @@ def list_answer_records(
     return result
 
 
+class SubmitAnswersRequest(BaseModel):
+    """学生提交答题。"""
+
+    task_id: int
+    answers: dict[str, str] = {}  # {question_id: student_answer}
+    student_id: int = 1  # 默认 1（MVP 无登录态时的兜底）
+
+
+@router.post("/answer-records", tags=["答题管理"])
+def submit_answers(
+    req: SubmitAnswersRequest,
+    session: Session = Depends(get_session),
+) -> dict:
+    """学生提交答题答案。
+
+    客观题（type 1-4）：规则判分
+    简答题（type 5）：调算法服务 8001 AI 判分
+    """
+    # 查任务关联的题目
+    tq_rows = session.exec(
+        select(TaskQuestion, AiQuestion)
+        .join(AiQuestion, TaskQuestion.question_id == AiQuestion.question_id)
+        .where(TaskQuestion.task_id == req.task_id)
+        .order_by(TaskQuestion.sort_num)
+    ).all()
+
+    if not tq_rows:
+        raise HTTPException(status_code=404, detail="任务不存在或无题目")
+
+    total_score = 0.0
+    correct_count = 0
+    records_created = 0
+
+    for idx, (tq, question) in enumerate(tq_rows):
+        qid = str(question.question_id)
+        user_answer = req.answers.get(qid, "")
+        per_score = 100.0 / max(len(tq_rows), 1)
+
+        if question.type == 5:
+            # 简答题：调 AI 判分
+            ai_result = _call_ai_judge(session, question, user_answer, req.student_id, req.task_id)
+            if ai_result["score"] is not None:
+                total_score += ai_result["score"] * per_score / 10.0  # AI 给 0-10 分，映射到 per_score
+                if ai_result["score"] >= 6.0:
+                    correct_count += 1
+            records_created += 1
+        else:
+            # 客观题：规则判分
+            is_correct = _judge_objective(question, user_answer)
+            score = per_score if is_correct else 0
+            record = StudentAnswerRecord(
+                task_id=req.task_id,
+                question_id=question.question_id,
+                student_id=req.student_id,
+                user_answer=user_answer,
+                score=score,
+                is_correct=1 if is_correct else 0,
+            )
+            session.add(record)
+            total_score += score
+            if is_correct:
+                correct_count += 1
+            records_created += 1
+
+    session.commit()
+
+    return {
+        "submissionId": 0,
+        "score": round(total_score, 1),
+        "totalScore": 100,
+        "correctCount": correct_count,
+    }
+
+
+def _judge_objective(question: AiQuestion, user_answer: str) -> bool:
+    """客观题规则判分。"""
+    correct = question.correct_answer.strip()
+    user = user_answer.strip()
+
+    if question.type == 1:
+        # 单选
+        return user.upper() == correct.upper()
+    elif question.type == 2:
+        # 多选：答案排序后比较
+        import json as _json
+        try:
+            correct_list = _json.loads(correct) if correct.startswith("[") else list(correct)
+            user_list = _json.loads(user) if user.startswith("[") else list(user)
+        except (ValueError, TypeError):
+            correct_list = list(correct)
+            user_list = list(user)
+        return sorted([str(x).upper() for x in correct_list]) == sorted([str(x).upper() for x in user_list])
+    elif question.type == 3:
+        # 判断
+        correct_val = correct in ("正确", "true", "True", "1")
+        user_val = user in ("正确", "true", "True", "1")
+        return correct_val == user_val
+    elif question.type == 4:
+        # 填空：忽略大小写比较
+        return user.lower() == correct.lower()
+    return False
+
+
+def _call_ai_judge(
+    session: Session,
+    question: AiQuestion,
+    student_answer: str,
+    student_id: int,
+    task_id: int,
+) -> dict:
+    """调算法服务 AI 判分并存储记录。"""
+    payload = {
+        "question_stem": question.content,
+        "reference_answer": question.correct_answer,
+        "student_answer": student_answer,
+        "max_score": 10.0,
+    }
+    try:
+        resp = httpx.post("http://127.0.0.1:8001/judge_answer", json=payload, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.ConnectError, httpx.HTTPStatusError, httpx.RequestError):
+        # 算法服务不可达，存待人工判分
+        record = StudentAnswerRecord(
+            task_id=task_id,
+            question_id=question.question_id,
+            student_id=student_id,
+            user_answer=student_answer,
+            score=0,
+            is_correct=0,
+            ai_score=None,
+            judge_reason="AI 服务不可达，需人工判分",
+        )
+        session.add(record)
+        return {"score": None}
+
+    total_score = data.get("total_score")
+    reason = data.get("reason", "")
+
+    record = StudentAnswerRecord(
+        task_id=task_id,
+        question_id=question.question_id,
+        student_id=student_id,
+        user_answer=student_answer,
+        score=float(total_score) if total_score is not None else 0,
+        is_correct=1 if total_score is not None and total_score >= 6.0 else 0,
+        ai_score=float(total_score) if total_score is not None else None,
+        judge_reason=reason,
+    )
+    session.add(record)
+    return {"score": total_score}
+
+
 # ===== 创建/发布/关闭任务 =====
 
 class QuestionItem(BaseModel):
@@ -245,7 +398,7 @@ def _ensure_question_in_bank(session: Session, item: QuestionItem, course_id: in
     point_id = kp.point_id
 
     import json
-    type_map = {"single_choice": 1, "multi_choice": 2, "judge": 3, "fill_blank": 4}
+    type_map = {"single_choice": 1, "multi_choice": 2, "judge": 3, "fill_blank": 4, "short_answer": 5}
     answer = item.answer
     if item.answerList:
         answer = ",".join(item.answerList)
@@ -349,6 +502,83 @@ def close_answer_task(
 
 # ===== AI 生成题目（代理算法服务 8001）=====
 
+def _retrieve_reference_questions(
+    session: Session,
+    course_id: int,
+    knowledge_points: list[str],
+    difficulty: str,
+    top_k: int = 5,
+) -> list[dict]:
+    """从题库按知识点+难度检索相似题作为 RAG 参考样本。
+
+    检索策略：
+        1. 按知识点名称匹配 KnowledgePoint → 拿 point_id 列表
+        2. 查 AiQuestion：course_id + point_id IN (...) + difficulty
+        3. 不足时跨知识点补充（同课程任意知识点，同难度）
+    返回：[{type, stem, options, answer, explanation, knowledge_point, difficulty}]
+    """
+    import json as _json
+
+    # 步骤 1：按知识点名称找 point_id
+    point_ids: list[int] = []
+    if knowledge_points:
+        kps = session.exec(
+            select(KnowledgePoint)
+            .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
+            .where(
+                KnowledgeModule.course_id == course_id,
+                KnowledgePoint.point_name.in_(knowledge_points),
+            )
+        ).all()
+        point_ids = [kp.point_id for kp in kps]
+
+    # 步骤 2：精确匹配（知识点 + 难度）
+    matched: list[AiQuestion] = []
+    if point_ids:
+        matched = list(session.exec(
+            select(AiQuestion).where(
+                AiQuestion.course_id == course_id,
+                AiQuestion.point_id.in_(point_ids),
+                AiQuestion.difficulty == difficulty,
+            ).limit(top_k)
+        ).all())
+
+    # 步骤 3：不足时跨知识点补充（同课程，同难度）
+    if len(matched) < top_k:
+        existing_ids = {q.question_id for q in matched}
+        extra = list(session.exec(
+            select(AiQuestion).where(
+                AiQuestion.course_id == course_id,
+                AiQuestion.difficulty == difficulty,
+                ~AiQuestion.question_id.in_(existing_ids) if existing_ids else True,
+            ).limit(top_k - len(matched))
+        ).all())
+        matched.extend(extra)
+
+    # 组装返回
+    result = []
+    for q in matched[:top_k]:
+        kp = session.get(KnowledgePoint, q.point_id)
+        # 解析 options
+        options_text = ""
+        if q.options:
+            try:
+                opts = _json.loads(q.options)
+                options_text = "；".join(opts) if isinstance(opts, list) else str(opts)
+            except (ValueError, TypeError):
+                options_text = q.options or ""
+        result.append({
+            "type": _TYPE_MAP.get(q.type, "single_choice"),
+            "stem": q.content,
+            "options": options_text,
+            "answer": q.correct_answer,
+            "explanation": q.analysis or "",
+            "knowledge_point": kp.point_name if kp else "",
+            "difficulty": q.difficulty or "medium",
+        })
+    return result
+
+
 class GenerateExercisesRequest(BaseModel):
     """前端 → 后端的生成请求。"""
     courseId: int
@@ -373,12 +603,17 @@ def generate_exercises_proxy(
     course_name = course.course_name if course else "未知课程"
 
     # 按题型分布：均匀分配
-    type_map = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0}
+    type_map = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0, "short_answer": 0}
     types = req.questionTypes or ["single_choice"]
     for i in range(req.questionCount):
         t = types[i % len(types)]
         if t in type_map:
             type_map[t] += 1
+
+    # RAG 检索：从题库拉参考题注入 prompt（题库为空时返回空列表，算法服务回退纯 LLM）
+    reference_questions = _retrieve_reference_questions(
+        session, req.courseId, req.knowledgePoints or [], req.difficulty
+    )
 
     payload = {
         "course_id": req.courseId,
@@ -387,6 +622,7 @@ def generate_exercises_proxy(
         "difficulty": req.difficulty,
         "extra_requirements": req.extraRequirements,
         "question_types": type_map,
+        "reference_questions": reference_questions,
     }
 
     try:

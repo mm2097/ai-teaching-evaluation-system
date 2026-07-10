@@ -16,7 +16,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from .llm_client import get_llm_client
-from .prompts.exercise import SYSTEM_PROMPT, build_fewshot_text, build_user_prompt
+from .prompts.exercise import SYSTEM_PROMPT, build_fewshot_text, build_reference_text, build_user_prompt
 from .schemas import (
     GenerateMeta,
     GenerateRequest,
@@ -36,9 +36,16 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     start = time.perf_counter()
 
     # ---------- 拼装 prompt ----------
+    # 优先级：reference_questions（RAG 检索）> 静态 few-shot > 无示范
     user_prompt = build_user_prompt(req)
-    fewshot = build_fewshot_text(req.course_name)
-    full_user = (fewshot + "\n\n" + user_prompt) if fewshot else user_prompt
+    reference_text = build_reference_text(req.reference_questions or [])
+    if reference_text:
+        full_user = reference_text + "\n\n" + user_prompt
+        logger.info(f"RAG 出题：注入 {len(req.reference_questions or [])} 道题库参考题")
+    else:
+        fewshot = build_fewshot_text(req.course_name)
+        full_user = (fewshot + "\n\n" + user_prompt) if fewshot else user_prompt
+        logger.info("RAG 出题：题库无参考题，回退静态 few-shot")
     logger.info(
         f"出题请求 course={req.course_name} 知识点={req.knowledge_points} 总数={req.total_count}"
     )
@@ -194,6 +201,11 @@ def _check_single(q: QuestionSchema, required_kps: set[str]) -> tuple[bool, str]
     elif q.type == "fill_blank":
         if not q.answer_list or len(q.answer_list) == 0:
             return False, "填空题缺少 answer_list"
+
+    # 简答题：answer 为参考答案文字，最少 5 字
+    elif q.type == "short_answer":
+        if len(q.answer.strip()) < 5:
+            return False, "简答题参考答案过短（<5字）"
 
     # 知识点漂移检查：仅标注，不丢弃（设计文档第 5.5 节）
     # （这里仅记录日志，保留题目，后续由教师审核决定）

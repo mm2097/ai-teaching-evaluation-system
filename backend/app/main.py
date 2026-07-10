@@ -18,6 +18,7 @@ from app.api.v1.attendance import router as attendance_router
 from app.api.v1.teaching_data import router as teaching_data_router
 from app.api.v1.quiz import router as quiz_router
 from app.api.v1.question_bank import router as question_bank_router
+from app.api.v1.judge import router as judge_router
 from app.api.v1.agent import router as agent_router
 from app.api.v1.report import router as report_router
 from app.core.config import settings
@@ -63,5 +64,6 @@ app.include_router(attendance_router, prefix="/api/v1", tags=["考勤管理"])
 app.include_router(teaching_data_router, prefix="/api/v1", tags=["教学数据"])
 app.include_router(quiz_router, prefix="/api/v1", tags=["答题管理"])
 app.include_router(question_bank_router, prefix="/api/v1", tags=["题库管理"])
+app.include_router(judge_router, prefix="/api/v1", tags=["AI 判题"])
 app.include_router(agent_router, prefix="/api/v1", tags=["AI Agent"])
 app.include_router(report_router, prefix="/api/v1", tags=["报告生成"])

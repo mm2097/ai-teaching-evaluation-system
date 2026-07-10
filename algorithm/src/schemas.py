@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # ===== 题型枚举 =====
-QuestionType = Literal["single_choice", "multi_choice", "judge", "fill_blank"]
+QuestionType = Literal["single_choice", "multi_choice", "judge", "fill_blank", "short_answer"]
 Difficulty = Literal["easy", "medium", "hard"]
 
 
@@ -23,6 +23,7 @@ class QuestionTypeDistribution(BaseModel):
     multi_choice: int = Field(default=0, ge=0, le=30, description="多选题数量")
     judge: int = Field(default=0, ge=0, le=30, description="判断题数量")
     fill_blank: int = Field(default=0, ge=0, le=30, description="填空题数量")
+    short_answer: int = Field(default=0, ge=0, le=10, description="简答题数量")
 
 
 class GenerateRequest(BaseModel):
@@ -41,6 +42,11 @@ class GenerateRequest(BaseModel):
         default=None,
         description="班级薄弱知识点参考：[{name, correct_rate}]",
     )
+    # 可选：题库 RAG 检索到的参考题（风格+难度示范）
+    reference_questions: list[dict] | None = Field(
+        default=None,
+        description="题库检索到的参考题：[{type, stem, options, answer, explanation, knowledge_point, difficulty}]",
+    )
 
     @property
     def total_count(self) -> int:
@@ -51,6 +57,7 @@ class GenerateRequest(BaseModel):
                 self.question_types.multi_choice,
                 self.question_types.judge,
                 self.question_types.fill_blank,
+                self.question_types.short_answer,
             ]
         )
 
@@ -103,3 +110,32 @@ class ErrorResponse(BaseModel):
     """统一错误响应。"""
 
     detail: str
+
+
+# ===== AI 判题 =====
+class JudgeRequest(BaseModel):
+    """AI 判题请求体（后端 → AI 服务）。"""
+
+    question_stem: str = Field(..., description="题干")
+    reference_answer: str = Field(..., description="参考答案")
+    rubric: list[str] | None = Field(default=None, description="评分要点（可选）")
+    student_answer: str = Field(..., description="学生答案")
+    max_score: float = Field(default=10.0, description="满分")
+
+
+class JudgeResponse(BaseModel):
+    """AI 判题响应体（AI 服务 → 后端）。
+
+    对齐 MVP 验收测试集 TC-B2：total_score 为 None 表示需人工判分。
+    """
+
+    total_score: float | None = Field(..., description="最终得分（None=需人工判分）")
+    rubric_points: list[dict] = Field(
+        default_factory=list,
+        description="评分点：[{point, score, max_score}]",
+    )
+    confidence: float | None = Field(default=None, description="置信度 0-1")
+    reason: str = Field(default="", description="判分依据（文字解释）")
+    flag: Literal["normal", "manual_required"] = Field(
+        default="normal", description="normal=正常 / manual_required=需人工"
+    )

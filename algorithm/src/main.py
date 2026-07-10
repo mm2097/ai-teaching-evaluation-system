@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field
 
 from .config import get_settings
 from .generator import generate_exercises
+from .judge import judge_answer
 from .reporter import enhance_report
-from .schemas import ErrorResponse, GenerateRequest, GenerateResponse
+from .schemas import ErrorResponse, GenerateRequest, GenerateResponse, JudgeRequest, JudgeResponse
 
 
 @asynccontextmanager
@@ -98,6 +99,54 @@ def generate(req: GenerateRequest) -> GenerateResponse:
         # 未预期错误
         logger.exception(f"出题未预期异常：{e}")
         raise HTTPException(status_code=500, detail=f"AI 服务内部错误：{e}")
+
+
+# ===== B2 AI 判题 =====
+
+@app.post(
+    "/judge_answer",
+    response_model=JudgeResponse,
+    responses={503: {"model": ErrorResponse}},
+    tags=["AI 判题"],
+)
+def judge(req: JudgeRequest) -> JudgeResponse:
+    """AI 判题主接口。
+
+    对齐 MVP 验收测试集 TC-B2：简答题 AI 判分，给出依据。
+    失败时返回 flag=manual_required 而非报错（TC-B2-08）。
+    """
+    s = get_settings()
+    if not s.llm_api_key:
+        # 无 Key 时返回需人工判分
+        return JudgeResponse(
+            total_score=None,
+            rubric_points=[],
+            confidence=None,
+            reason="AI 服务未配置 API Key，需人工判分",
+            flag="manual_required",
+        )
+
+    try:
+        return judge_answer(req)
+    except RuntimeError as e:
+        logger.error(f"判题失败：{e}")
+        # 判题失败不抛 5xx，返回 manual_required（对齐 TC-B2-08）
+        return JudgeResponse(
+            total_score=None,
+            rubric_points=[],
+            confidence=None,
+            reason=f"AI 判分异常，需人工判分：{e}",
+            flag="manual_required",
+        )
+    except Exception as e:
+        logger.exception(f"判题未预期异常：{e}")
+        return JudgeResponse(
+            total_score=None,
+            rubric_points=[],
+            confidence=None,
+            reason=f"AI 服务内部错误，需人工判分：{e}",
+            flag="manual_required",
+        )
 
 
 # ===== D10 报告 LLM 增强 =====

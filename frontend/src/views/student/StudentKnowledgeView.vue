@@ -7,11 +7,13 @@ import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { fetchKnowledgeHeatmap } from '@/api/analysis'
+import { fetchCourses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 
 const userStore = useUserStore()
 const loading = ref(true)
 const dataReady = ref(false)
+const courseId = ref<number>(1)
 
 const heatmapData = ref({
   knowledgePoints: [] as string[],
@@ -25,6 +27,8 @@ async function loadHeatmap(): Promise<void> {
     heatmapData.value = await fetchKnowledgeHeatmap({
       targetType: 'student',
       targetId: userStore.userInfo?.studentId || 1,
+      courseId: courseId.value,
+      classId: userStore.userInfo?.classId,
       analysisType: '知识点掌握度',
     })
     dataReady.value = true
@@ -33,7 +37,17 @@ async function loadHeatmap(): Promise<void> {
   }
 }
 
-onMounted(loadHeatmap)
+onMounted(async () => {
+  // 获取学生所在班级的课程
+  try {
+    const studentClassId = userStore.userInfo?.classId
+    const courses = studentClassId
+      ? await fetchCourses({ deptId: 1, classId: studentClassId })
+      : []
+    if (courses.length) courseId.value = courses[0]!.id
+  } catch { /* empty */ }
+  await loadHeatmap()
+})
 
 const heatmapOption = computed<EChartsOption>(() => ({
   tooltip: {

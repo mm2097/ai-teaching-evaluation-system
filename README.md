@@ -18,7 +18,7 @@
 |----|------|
 | 前端 | Vue 3.5 + TypeScript + Vite + Element Plus + Pinia + Vue Router + ECharts + Axios |
 | 后端 | FastAPI + SQLModel + loguru + SQLite(可平滑切换 PostgreSQL) |
-| 算法 | Python(占位,待补充) |
+| 算法 | Python(FastAPI + openai SDK + pydantic-settings),独立进程 8001 端口 |
 
 ## 目录结构
 
@@ -146,9 +146,110 @@ cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
 | 改配置 | `app/core/config.py`(或 `.env`) |
 | 加中间件 | `app/main.py` |
 
-## 算法侧
+## 算法侧(AI 服务)
 
-占位,待后续补充依赖与模型。
+独立 FastAPI 进程,跑在 8001 端口。提供 AI 出题、AI 判题、报告生成、Agent 问答能力,后端通过 HTTP 调用它。
+
+> ⚠️ 必须用 `algorithm/.venv` 的虚拟环境,不能用全局 Python(全局 pydantic v1 会报错)。
+
+### 启动算法服务
+
+```bash
+cd algorithm
+.venv/Scripts/python.exe -m uvicorn src.main:app --port 8001 --reload
+```
+
+启动后访问:
+
+| 地址 | 说明 |
+|------|------|
+| http://127.0.0.1:8001/health | 健康检查 + 查看当前模型/Key 配置状态 |
+| http://127.0.0.1:8001/docs | Swagger 接口文档 |
+
+### 配置 LLM 模型(关键)
+
+算法服务通过 OpenAI 兼容协议接入大模型,**配置只需改一个 `.env` 文件**。
+
+**第一步:创建配置文件**
+
+```bash
+cd algorithm
+cp .env.example .env      # Windows PowerShell: Copy-Item .env.example .env
+```
+
+**第二步:编辑 `.env`,填入厂商和 API Key**
+
+当前已接入 **DeepSeek**(默认),完整配置示例:
+
+```env
+# ---------- LLM 厂商配置 ----------
+LLM_PROVIDER=deepseek
+
+# API Key(在厂商控制台申请)
+LLM_API_KEY=sk-你的真实Key
+
+# Base URL(OpenAI 兼容端点,不同厂商不同)
+LLM_BASE_URL=https://api.deepseek.com/v1
+
+# 模型名
+LLM_MODEL=deepseek-chat
+
+# ---------- 调用参数 ----------
+LLM_TIMEOUT=30          # 单次调用超时(秒)
+LLM_MAX_RETRY=2         # 失败重试次数
+LLM_TEMPERATURE=0.7     # 采样温度(0-1,出题推荐 0.7)
+LLM_MAX_TOKENS=4000     # 单次最大输出 token
+
+# ---------- 服务配置 ----------
+AI_SERVICE_PORT=8001
+AI_CORS_ORIGINS=http://localhost:5173,http://localhost:8000
+```
+
+### 支持的厂商切换
+
+改 `.env` 里的 `LLM_PROVIDER` / `LLM_BASE_URL` / `LLM_MODEL` 三项即可切换:
+
+| 厂商 | PROVIDER | BASE_URL | MODEL | 申请 Key |
+|------|----------|----------|-------|---------|
+| **DeepSeek**(当前默认) | `deepseek` | `https://api.deepseek.com/v1` | `deepseek-chat`(V3) / `deepseek-reasoner`(R1) | https://platform.deepseek.com/api_keys |
+| 通义千问(阿里) | `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` / `qwen-turbo` | https://dashscope.console.aliyun.com |
+| 智谱 GLM | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash`(免费) / `glm-4` | https://open.bigmodel.cn |
+| OpenAI(需科学上网) | `openai` | `https://api.openai.com/v1` | `gpt-4o-mini` / `gpt-4o` | https://platform.openai.com |
+
+> **变更后必须重启算法服务**(`.env` 在进程启动时读一次,Ctrl+C 后重新启动命令)。
+
+### 算法服务接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查,返回当前 provider/model/api_key_configured |
+| POST | `/generate_exercises` | AI 出题(支持单选/多选/判断/填空/简答 5 种题型) |
+| POST | `/judge_answer` | AI 判简答题(返回分数 + rubric 逐项打分 + 置信度) |
+| POST | `/generate_report` | 生成学情报告结论(模板兜底 + LLM 增强) |
+| POST | `/agent/chat` | Agent 对话(学情问答 / 组卷,调工具查数据库) |
+
+### 验证 LLM 是否连通
+
+启动算法服务后,跑一次出题测试:
+
+```bash
+# Windows PowerShell 用 ConvertTo-Json 生成 payload
+curl -X POST http://localhost:8001/generate_exercises ^
+  -H "Content-Type: application/json" ^
+  -d "{\"course_id\":1,\"course_name\":\"数据结构\",\"knowledge_points\":[\"栈\"],\"question_types\":{\"single_choice\":1},\"difficulty\":\"medium\"}"
+```
+
+返回包含 `questions` 数组即成功。若返回 `403 AllocationQuota.FreeTierOnly`,说明该厂商免费额度已耗尽,需充值或换 Key。
+
+### 三服务全链路
+
+完整链路:浏览器(5173) → 后端(8000) → 算法服务(8001) → LLM 厂商
+
+| 服务 | 端口 | 启动命令 |
+|------|------|----------|
+| 前端 | 5173 | `cd frontend && npm run dev` |
+| 后端 | 8000 | `cd backend && uvicorn app.main:app --reload` |
+| 算法 | 8001 | `cd algorithm && .venv/Scripts/python.exe -m uvicorn src.main:app --port 8001 --reload` |
 
 ## 协作
 

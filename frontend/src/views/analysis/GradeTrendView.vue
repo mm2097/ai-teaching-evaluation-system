@@ -70,23 +70,32 @@ const trendOption = computed<EChartsOption>(() => ({
 
 const histOption = computed<EChartsOption>(() => {
   const preds = predictions.value
-  const buckets = [0, 0, 0, 0, 0]
+  const counts = [0, 0, 0, 0, 0]
   preds.forEach((p) => {
-    if (p.current >= 90) buckets[4]!++
-    else if (p.current >= 80) buckets[3]!++
-    else if (p.current >= 70) buckets[2]!++
-    else if (p.current >= 60) buckets[1]!++
-    else buckets[0]!++
+    if (p.current >= 90) counts[4]!++
+    else if (p.current >= 80) counts[3]!++
+    else if (p.current >= 70) counts[2]!++
+    else if (p.current >= 60) counts[1]!++
+    else counts[0]!++
   })
+  const total = preds.length || 1
+  const percentages = counts.map(b => Math.round((b / total) * 100))
   return {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 50, right: 20, top: 30, bottom: 30 },
-    xAxis: { type: 'category', data: ['0-59', '60-69', '70-79', '80-89', '90-100'] },
-    yAxis: { type: 'value', name: '人数' },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: unknown) => {
+        const p = (params as { dataIndex: number; name: string; marker: string }[])[0]!
+        return `${p.name}<br/>${p.marker} 占比: ${percentages[p.dataIndex]}%（${counts[p.dataIndex]}人）`
+      },
+    },
+    grid: { left: 55, right: 20, top: 30, bottom: 30 },
+    xAxis: { type: 'category', data: ['0-59', '60-69', '70-79', '80-89', '90-100'], axisLabel: { interval: 0 } },
+    yAxis: { type: 'value', name: '占比', min: 0, max: 100, axisLabel: { formatter: '{value}%' } },
     series: [{
       type: 'bar',
-      data: buckets,
-      barWidth: 40,
+      data: percentages,
+      barMaxWidth: 50,
+      barCategoryGap: '20%',
       itemStyle: {
         borderRadius: [6, 6, 0, 0],
         color: (params: { dataIndex: number }) => {

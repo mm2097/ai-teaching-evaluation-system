@@ -21,7 +21,13 @@ const submitting = ref(false)
 const result = ref<{
   score: number
   totalScore: number
-  details: { question: QuizQuestion; correct: boolean; userAnswer: string | boolean }[]
+  details: {
+    question: QuizQuestion
+    correct: boolean
+    userAnswer: string | boolean
+    aiScore?: number | null
+    aiReason?: string
+  }[]
 } | null>(null)
 
 onMounted(async () => {
@@ -93,17 +99,24 @@ async function handleSubmit(): Promise<void> {
       userStore.userInfo?.name || '学生',
       answers.value,
     )
+    // 简答题不使用前端 judgeAnswer，标记 correct 为 submission 结果
     const details = activeQuiz.value.questions.map((q) => ({
       question: q,
-      correct: judgeAnswer(q, answers.value[q.id]),
+      correct: q.type === 'short_answer' ? true : judgeAnswer(q, answers.value[q.id]),
       userAnswer: answers.value[q.id] ?? '',
+      // 简答题的 AI 判分结果会由后端返回，这里先用占位（展示层依赖后端数据）
     }))
     result.value = {
       score: submission.score,
       totalScore: submission.totalScore,
       details,
     }
-    ElMessage.success('提交成功，知识点掌握度已同步更新')
+    ElMessage.success('提交成功')
+    if (submission.correctCount !== undefined) {
+      ElMessage.info(`答对 ${submission.correctCount} 题`)
+    }
+  } catch {
+    ElMessage.error('提交失败，请稍后重试')
   } finally {
     submitting.value = false
   }
@@ -168,6 +181,16 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
             <p v-if="!item.correct" class="answer-line correct">
               正确答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
             </p>
+            <!-- 简答题 AI 判分依据 -->
+            <div v-if="item.question.type === 'short_answer' && item.aiReason" class="ai-judge">
+              <div class="ai-judge__header">
+                <el-tag size="small" type="warning">AI 判分</el-tag>
+                <span v-if="item.aiScore !== null && item.aiScore !== undefined" class="ai-score">
+                  得分：{{ item.aiScore }} / 10
+                </span>
+              </div>
+              <p class="ai-reason">{{ item.aiReason }}</p>
+            </div>
             <p v-if="item.question.explanation" class="explanation">解析：{{ item.question.explanation }}</p>
           </div>
           <div class="submit-bar">
@@ -208,9 +231,17 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
           </el-radio-group>
 
           <el-input
-            v-else
+            v-else-if="q.type === 'fill_blank'"
             v-model="(answers[q.id] as string)"
             placeholder="请输入答案"
+          />
+
+          <el-input
+            v-else-if="q.type === 'short_answer'"
+            v-model="(answers[q.id] as string)"
+            type="textarea"
+            :rows="4"
+            placeholder="请输入你的解答"
           />
         </div>
 
@@ -295,6 +326,34 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
   .answer-line { font-size: 13px; color: #475569; margin-bottom: 4px; }
   .answer-line.correct { color: #10b981; }
   .explanation { font-size: 12px; color: #64748b; margin-top: 6px; }
+
+  .ai-judge {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+
+    .ai-judge__header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+
+      .ai-score {
+        font-size: 13px;
+        font-weight: 600;
+        color: #d97706;
+      }
+    }
+
+    .ai-reason {
+      font-size: 12px;
+      color: #78350f;
+      line-height: 1.5;
+      margin: 0;
+    }
+  }
 }
 
 .submit-bar {

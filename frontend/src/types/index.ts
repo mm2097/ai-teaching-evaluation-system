@@ -247,7 +247,7 @@ export interface ValidationError {
 }
 
 /** 题目类型（对齐后端 Exercise.type） */
-export type ExerciseType = 'single_choice' | 'multi_choice' | 'judge' | 'fill_blank'
+export type ExerciseType = 'single_choice' | 'multi_choice' | 'judge' | 'fill_blank' | 'short_answer'
 
 /** @deprecated 兼容旧引用，请使用 ExerciseType */
 export type QuestionType = ExerciseType

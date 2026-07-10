@@ -40,6 +40,10 @@ export function judgeAnswer(question: QuizQuestion, studentAnswer: string | bool
       return acceptable.some((item) => normalizeText(item) === normalized)
     }
 
+    case 'short_answer':
+      // 简答题由后端 AI 判分，前端不参与规则判分
+      return false
+
     default:
       return false
   }
@@ -61,6 +65,7 @@ export const exerciseTypeLabels: Record<ExerciseType, string> = {
   multi_choice: '多选题',
   judge: '判断题',
   fill_blank: '填空题',
+  short_answer: '简答题',
 }
 
 /** 难度中文标签 */

@@ -20,6 +20,8 @@ interface QuestionResult {
   question: QuizQuestion
   userAnswer: string | string[]
   isCorrect: boolean
+  aiScore?: number | null
+  aiReason?: string
 }
 
 const submissionId = ref(Number(route.query.id) || 0)
@@ -51,9 +53,14 @@ const wrongKnowledgePoints = computed(() => {
 
 const typeLabel: Record<string, string> = {
   single: '单选题',
+  single_choice: '单选题',
   multiple: '多选题',
+  multi_choice: '多选题',
   fill: '填空题',
+  fill_blank: '填空题',
+  judge: '判断题',
   short: '简答题',
+  short_answer: '简答题',
 }
 
 function getOptionLetter(idx: number): string {
@@ -164,6 +171,16 @@ function backToQuiz(): void {
           <div class="eq-correct-answer">
             <span class="label">正确答案：</span>
             <span class="value correct">{{ Array.isArray(item.question.answer) ? item.question.answer.join('、') : item.question.answer }}</span>
+          </div>
+          <!-- 简答题 AI 判分依据 -->
+          <div v-if="(item.question.type === 'short_answer' || item.question.type === 'short') && item.aiReason" class="eq-ai-judge">
+            <div class="eq-ai-header">
+              <el-tag size="small" type="warning">AI 判分</el-tag>
+              <span v-if="item.aiScore !== null && item.aiScore !== undefined" class="eq-ai-score">
+                建议分：{{ item.aiScore }} / 10
+              </span>
+            </div>
+            <p class="eq-ai-reason">{{ item.aiReason }}</p>
           </div>
         </div>
       </div>
@@ -278,6 +295,34 @@ function backToQuiz(): void {
 
       .value.wrong { color: #ef4444; font-weight: 600; }
       .value.correct { color: #10b981; font-weight: 600; }
+    }
+
+    .eq-ai-judge {
+      margin-top: 8px;
+      padding: 8px 12px;
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 6px;
+
+      .eq-ai-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+
+        .eq-ai-score {
+          font-size: 13px;
+          font-weight: 600;
+          color: #d97706;
+        }
+      }
+
+      .eq-ai-reason {
+        font-size: 12px;
+        color: #78350f;
+        line-height: 1.5;
+        margin: 0;
+      }
     }
   }
 }

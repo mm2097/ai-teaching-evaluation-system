@@ -32,7 +32,7 @@ const router = createRouter({
           path: 'data/import',
           name: 'DataImport',
           component: () => import('@/views/data/DataImportView.vue'),
-          meta: { title: '模板上传', roles: ['admin', 'teacher'] },
+          meta: { title: '数据上传', roles: ['admin', 'teacher'] },
         },
         {
           path: 'data/manage',

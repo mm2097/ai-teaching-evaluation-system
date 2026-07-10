@@ -1,7 +1,7 @@
 /**
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
-import request from '@/utils/request'
+import request, { USE_MOCK } from '@/utils/request'
 import type { DifficultyLevel, ExerciseType, QuizQuestion } from '@/types'
 
 export interface QuizAssignmentRecord {
@@ -70,27 +70,12 @@ export async function fetchQuizResult(
     isCorrect: boolean
   }[]
 }> {
-  await delay(300)
-  const submission = quizSubmissions.find((s) => s.id === submissionId)
-  if (!submission) throw new Error('提交记录不存在')
-
-  const assignment = quizAssignments.find((a) => a.id === submission.assignmentId)
-  if (!assignment) throw new Error('练习信息不存在')
-
-  const questionResults = assignment.questions.map((q) => {
-    const ans = submission.answers[q.id]
-    let isCorrect = false
-    if (Array.isArray(q.answer)) {
-      const userAns = Array.isArray(ans) ? [...ans].sort().join(',') : ''
-      const correct = [...q.answer].sort().join(',')
-      isCorrect = userAns === correct
-    } else {
-      isCorrect = String(ans).trim() === String(q.answer).trim()
-    }
-    return { question: q, userAnswer: ans ?? '', isCorrect }
-  })
-
-  return { score: submission.score, totalScore: submission.totalScore, questionResults }
+  if (USE_MOCK) {
+    return mockQuizResult(submissionId)
+  }
+  // 真实后端路径（预留）
+  const res = await request.get('/v1/answer-records/' + submissionId)
+  return res.data
 }
 
 /** 错题本（按学生聚合所有已提交练习的错题） */
@@ -101,42 +86,16 @@ export async function fetchErrorBook(studentId: number): Promise<{
   submitTime: string
   knowledgePoint: string
 }[]> {
-  await delay(300)
-  const mySubmissions = quizSubmissions.filter((s) => s.studentId === studentId)
-  const errors: {
-    quizQuestion: QuizQuestion
-    userAnswer: string | string[]
-    correctAnswer: string | string[]
-    submitTime: string
-    knowledgePoint: string
-  }[] = []
-
-  mySubmissions.forEach((sub) => {
-    const assignment = quizAssignments.find((a) => a.id === sub.assignmentId)
-    if (!assignment) return
-    assignment.questions.forEach((q) => {
-      const ans = sub.answers[q.id]
-      let isCorrect = false
-      if (Array.isArray(q.answer)) {
-        const userAns = Array.isArray(ans) ? [...ans].sort().join(',') : ''
-        const correct = [...q.answer].sort().join(',')
-        isCorrect = userAns === correct
-      } else {
-        isCorrect = String(ans).trim() === String(q.answer).trim()
-      }
-      if (!isCorrect) {
-        errors.push({
-          quizQuestion: q,
-          userAnswer: ans ?? '',
-          correctAnswer: q.answer,
-          submitTime: sub.submitTime,
-          knowledgePoint: q.knowledgePoint,
-        })
-      }
-    })
-  })
-
-  return errors.sort((a, b) => b.submitTime.localeCompare(a.submitTime))
+  if (USE_MOCK) {
+    return mockErrorBook(studentId)
+  }
+  // 真实后端路径（预留）
+  try {
+    const res = await request.get('/v1/answer-records', { params: { student_id: studentId } })
+    return res.data
+  } catch {
+    return []
+  }
 }
 
 // ===== QuizManageView 使用的接口 =====
@@ -221,3 +180,112 @@ export async function submitQuizAnswers(
   })
   return data
 }
+
+/* ============================================================
+ * Mock 数据（USE_MOCK=true 时由 fetchQuizResult / fetchErrorBook 使用）
+ * ============================================================ */
+
+/** mock 答题结果（5 题，3 对 2 错） */
+function mockQuizResult(_submissionId: number): {
+  score: number
+  totalScore: number
+  questionResults: { question: any; userAnswer: string | string[]; isCorrect: boolean }[]
+} {
+  const questions = [
+    {
+      id: 1, type: 'single', content: '在长度为 n 的顺序表中删除一个元素，平均需要移动多少个元素？',
+      options: ['(n-1)/2', 'n/2', '(n+1)/2', 'n'], answer: '(n-1)/2',
+      knowledgePoint: '线性表', score: 20,
+    },
+    {
+      id: 2, type: 'multiple', content: '以下属于线性数据结构的有？',
+      options: ['数组', '二叉树', '链表', '队列'], answer: ['数组', '链表', '队列'],
+      knowledgePoint: '线性表', score: 20,
+    },
+    {
+      id: 3, type: 'fill', content: '队列的特点是____。',
+      options: undefined, answer: '先进先出', knowledgePoint: '栈与队列', score: 20,
+    },
+    {
+      id: 4, type: 'single', content: '深度为 k 的完全二叉树至少有多少个结点？',
+      options: ['2^k - 1', '2^(k-1)', '2^(k-1) - 1', '2^k'], answer: '2^(k-1)',
+      knowledgePoint: '树与二叉树', score: 20,
+    },
+    {
+      id: 5, type: 'fill', content: '堆排序的最坏时间复杂度为____。',
+      options: undefined, answer: 'O(n log n)', knowledgePoint: '排序算法', score: 20,
+    },
+  ]
+
+  const userAnswers: Record<number, string | string[]> = {
+    1: '(n-1)/2',        // 对
+    2: ['数组', '队列'],  // 错（漏选链表）
+    3: '先进先出',        // 对
+    4: '2^k - 1',        // 错
+    5: 'O(n log n)',     // 对
+  }
+
+  const questionResults = questions.map((q) => {
+    const ua = userAnswers[q.id]!
+    let isCorrect = false
+    if (Array.isArray(q.answer)) {
+      isCorrect = Array.isArray(ua) && [...ua].sort().join(',') === [...q.answer].sort().join(',')
+    } else {
+      isCorrect = String(ua).trim() === String(q.answer).trim()
+    }
+    return { question: q, userAnswer: ua, isCorrect }
+  })
+
+  const correctCount = questionResults.filter((r) => r.isCorrect).length
+  return {
+    score: correctCount * 20,
+    totalScore: 100,
+    questionResults,
+  }
+}
+
+/** mock 错题本（3 道错题） */
+function mockErrorBook(_studentId: number): {
+  quizQuestion: any
+  userAnswer: string | string[]
+  correctAnswer: string | string[]
+  submitTime: string
+  knowledgePoint: string
+}[] {
+  return [
+    {
+      quizQuestion: {
+        id: 2, type: 'multiple', content: '以下属于线性数据结构的有？',
+        options: ['数组', '二叉树', '链表', '队列'],
+        answer: ['数组', '链表', '队列'], knowledgePoint: '线性表', score: 20,
+      },
+      userAnswer: ['数组', '队列'],
+      correctAnswer: ['数组', '链表', '队列'],
+      submitTime: '2026-03-15 10:30:00',
+      knowledgePoint: '线性表',
+    },
+    {
+      quizQuestion: {
+        id: 4, type: 'single', content: '深度为 k 的完全二叉树至少有多少个结点？',
+        options: ['2^k - 1', '2^(k-1)', '2^(k-1) - 1', '2^k'],
+        answer: '2^(k-1)', knowledgePoint: '树与二叉树', score: 20,
+      },
+      userAnswer: '2^k - 1',
+      correctAnswer: '2^(k-1)',
+      submitTime: '2026-03-15 10:30:00',
+      knowledgePoint: '树与二叉树',
+    },
+    {
+      quizQuestion: {
+        id: 7, type: 'single', content: '若进栈序列为 1,2,3,4，则以下哪个不可能是出栈序列？',
+        options: ['3,2,1,4', '4,3,2,1', '1,2,3,4', '4,1,2,3'],
+        answer: '4,1,2,3', knowledgePoint: '栈与队列', score: 20,
+      },
+      userAnswer: '4,3,2,1',
+      correctAnswer: '4,1,2,3',
+      submitTime: '2026-03-14 16:00:00',
+      knowledgePoint: '栈与队列',
+    },
+  ]
+}
+

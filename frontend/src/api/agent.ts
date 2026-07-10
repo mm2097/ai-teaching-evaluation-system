@@ -2,8 +2,9 @@
  * AI Agent API（学情问答 + 组卷 Agent）
  * 对接后端 /api/v1/agent/chat 和 /api/v1/agent/chat/stream
  */
-import request from '@/utils/request'
+import request, { USE_MOCK } from '@/utils/request'
 import type { AgentType, AgentStreamEvent } from '@/types'
+import { mockStreamAgentChat } from '@/mock/agentMock'
 
 export interface ChatMessage {
   role: 'user' | 'assistant'
@@ -32,6 +33,12 @@ export interface StreamAgentChatParams {
 export async function* streamAgentChat(
   params: StreamAgentChatParams,
 ): AsyncGenerator<AgentStreamEvent> {
+  // Mock 模式：走本地流式生成器
+  if (USE_MOCK) {
+    yield* mockStreamAgentChat(params.message)
+    return
+  }
+
   const res = await fetch('/api/v1/agent/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

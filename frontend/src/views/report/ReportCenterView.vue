@@ -6,9 +6,12 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, View } from '@element-plus/icons-vue'
-import { generateClassReport, generateStudentReport, type ReportResponse } from '@/api/ai'
+import { generateReport as generateReportApi, type ReportResponse } from '@/api/ai'
 import { fetchSemesters, fetchCourses, fetchClasses, fetchStudents } from '@/api/dict'
+import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
+
+const userStore = useUserStore()
 
 const semesterOptions = ref<{ label: string; value: string }[]>([])
 const courses = ref<any[]>([])
@@ -29,11 +32,15 @@ onMounted(async () => {
 })
 
 const reportTypes = [
-  { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单' },
+  { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', roles: ['admin', 'teacher'] },
   { id: 2, name: '学生个人学情报告', desc: '包含学生雷达图、知识点掌握、学习建议' },
   { id: 3, name: '课程知识点分析报告', desc: '包含知识点热力图、薄弱项分析、改进建议' },
   { id: 4, name: '学生学习质量报告', desc: '包含学习质量评价得分、维度分析' },
 ]
+
+const visibleReportTypes = computed(() =>
+  reportTypes.filter((t) => !t.roles || t.roles.includes(userStore.userRole!))
+)
 
 const genParams = ref({
   reportType: 1,
@@ -61,11 +68,28 @@ const reportSourceTag = computed(() => {
   return reportData.value.source === 'llm' ? 'warning' : 'info' as const
 })
 
+const previewTitle = computed(() => {
+  return reportData.value?.report_type_name
+    || reportTypes.find((t) => t.id === genParams.value.reportType)?.name
+    || '学情分析报告'
+})
+
 const historyReports = ref([
   { id: 1, name: '计科2401班 - 数据结构 班级学情报告', type: '班级学情', time: '2026-03-15 10:30', format: 'PDF' },
   { id: 2, name: '陈同学 - 数据结构 学生个报告', type: '个人学情', time: '2026-03-14 16:00', format: 'PDF' },
   { id: 3, name: '数据结构 知识点分析报告', type: '知识点', time: '2026-03-12 09:00', format: 'PDF' },
 ])
+
+// 确保默认选中的报告类型对当前角色可见
+watch(
+  visibleReportTypes,
+  (types) => {
+    if (types.length > 0 && !types.find((t) => t.id === genParams.value.reportType)) {
+      genParams.value.reportType = types[0]!.id
+    }
+  },
+  { immediate: true },
+)
 
 // 切换报告类型或班级时加载学生列表
 watch(
@@ -93,22 +117,19 @@ async function generateReport(): Promise<void> {
   try {
     await loadDashboardStats()
 
-    if (genParams.value.reportType === 2) {
-      if (!genParams.value.studentId) {
-        ElMessage.warning('请先选择学生')
-        generating.value = false
-        return
-      }
-      reportData.value = await generateStudentReport(
-        genParams.value.studentId,
-        genParams.value.courseId,
-      )
-    } else {
-      reportData.value = await generateClassReport(
-        genParams.value.courseId,
-        genParams.value.classId,
-      )
+    // 学生个人报告需要验证 studentId
+    if (genParams.value.reportType === 2 && !genParams.value.studentId) {
+      ElMessage.warning('请先选择学生')
+      generating.value = false
+      return
     }
+
+    reportData.value = await generateReportApi({
+      courseId: genParams.value.courseId,
+      reportType: genParams.value.reportType as 1 | 2 | 3 | 4,
+      classId: genParams.value.classId ?? undefined,
+      studentId: genParams.value.reportType === 2 ? genParams.value.studentId : undefined,
+    })
 
     const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
     const courseName = courses.value.find((c: any) => c.id === genParams.value.courseId)?.courseName || ''
@@ -154,7 +175,7 @@ function exportReport(): void {
 
           <div class="report-type-grid">
             <div
-              v-for="item in reportTypes"
+              v-for="item in visibleReportTypes"
               :key="item.id"
               class="report-type-card"
               :class="{ active: genParams.reportType === item.id }"
@@ -242,9 +263,7 @@ function exportReport(): void {
 
     <el-dialog v-model="previewVisible" title="报告预览" width="720px" top="5vh">
       <div v-if="reportData" class="report-preview">
-        <h2 style="text-align: center; margin-bottom: 20px">
-          {{ genParams.reportType === 2 ? '学生个人' : '班级整体' }}学情分析报告
-        </h2>
+        <h2 style="text-align: center; margin-bottom: 20px">{{ previewTitle }}</h2>
 
         <h3>一、核心指标概览</h3>
         <el-descriptions :column="2" border style="margin: 16px 0">

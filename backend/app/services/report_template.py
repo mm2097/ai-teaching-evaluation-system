@@ -28,6 +28,7 @@ class ReportContext:
     """报告生成所需上下文（模板与 LLM 通用）。"""
 
     scope: str = "class"           # class / student
+    report_type: int = 1           # 1=班级学情 2=学生个人 3=课程知识点 4=学习质量
     course_id: int = 0
     course_name: str = ""
     student_id: Optional[int] = None
@@ -48,12 +49,14 @@ class ReportContext:
 
 
 def build_class_context(
-    session: Session, course_id: int, class_id: Optional[int] = None
+    session: Session, course_id: int, class_id: Optional[int] = None,
+    report_type: int = 1,
 ) -> ReportContext:
     """构建班级报告上下文。"""
     course = session.get(Course, course_id)
     ctx = ReportContext(
         scope="class",
+        report_type=report_type,
         course_id=course_id,
         course_name=course.course_name if course else "",
         class_name="",
@@ -200,8 +203,79 @@ def render_student_report(ctx: ReportContext) -> dict:
     }
 
 
+def render_knowledge_report(ctx: ReportContext) -> dict:
+    """课程知识点分析报告模板。"""
+    # 按掌握度排序，取前 5 薄弱和前 5 优势
+    weak_top5 = ctx.weak_points[:5] if ctx.weak_points else ["暂无"]
+    strong_top5 = ctx.strong_points[:5] if ctx.strong_points else ["暂无"]
+    weak_count = len(ctx.weak_points)
+    strong_count = len(ctx.strong_points)
+
+    summary = (
+        f"《{ctx.course_name}》知识点分析："
+        f"优势知识点 {strong_count} 个，薄弱知识点 {weak_count} 个。"
+        f"班级均分 {ctx.avg_score}，及格率 {ctx.pass_rate}%。"
+    )
+    conclusion = (
+        f"薄弱知识点：{'、'.join(weak_top5)}。"
+        + (f"优势知识点：{'、'.join(strong_top5)}。" if strong_top5[0] != "暂无" else "")
+        + ("知识点掌握两极分化明显，需分层教学。" if weak_count > 3 and strong_count > 3
+           else "整体知识点掌握较为均衡。" if weak_count <= 2
+           else "薄弱知识点较多，需加强基础教学。")
+    )
+    suggestion = (
+        f"教学建议："
+        + (f"对「{ctx.weak_points[0]}」进行专题突破，配合课堂练习巩固；" if ctx.weak_points else "")
+        + (f"对「{ctx.strong_points[0]}」可适当拓展深度，设计挑战性任务。" if ctx.strong_points else "")
+        + "建议每周安排一次知识点复盘测试，跟踪薄弱点的改善情况。"
+    )
+    return {
+        "scope": "class",
+        "report_type": 3,
+        "summary": summary,
+        "conclusion": conclusion,
+        "suggestion": suggestion,
+        "source": "template",
+    }
+
+
+def render_quality_report(ctx: ReportContext) -> dict:
+    """学生学习质量报告模板（班级维度）。"""
+    level = "良好" if ctx.avg_score >= 75 else "一般" if ctx.avg_score >= 60 else "偏低"
+    summary = (
+        f"《{ctx.course_name}》学习质量评价："
+        f"班级均分 {ctx.avg_score}，整体水平{level}。"
+        f"及格率 {ctx.pass_rate}%，优秀率 {ctx.excellent_rate}%。"
+    )
+    conclusion = (
+        f"学业水平：均分 {ctx.avg_score}，"
+        + ("大部分学生达到良好以上水平。" if ctx.excellent_rate >= 30
+           else "多数学生处于及格线附近，整体水平有待提升。" if ctx.pass_rate < 80
+           else "整体学业水平中等。")
+        + (f"知识掌握：薄弱点集中在{'、'.join(ctx.weak_points[:3])}。" if ctx.weak_points else "")
+    )
+    suggestion = (
+        f"质量提升建议："
+        + ("针对优秀率偏低的问题，为前30%学生提供拓展学习资源；" if ctx.excellent_rate < 20 else "")
+        + ("针对及格率偏低的问题，对学困生实施一对一帮扶计划；" if ctx.pass_rate < 70 else "")
+        + "建立学习质量跟踪档案，每月评估一次各维度变化趋势。"
+    )
+    return {
+        "scope": "class",
+        "report_type": 4,
+        "summary": summary,
+        "conclusion": conclusion,
+        "suggestion": suggestion,
+        "source": "template",
+    }
+
+
 def render_report(ctx: ReportContext) -> dict:
-    """模板兜底入口（LLM 增强失败时调用）。"""
-    if ctx.scope == "student":
+    """模板兜底入口（按 report_type 分发）。"""
+    if ctx.scope == "student" or ctx.report_type == 2:
         return render_student_report(ctx)
+    if ctx.report_type == 3:
+        return render_knowledge_report(ctx)
+    if ctx.report_type == 4:
+        return render_quality_report(ctx)
     return render_class_report(ctx)

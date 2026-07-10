@@ -25,6 +25,8 @@ export interface ReportResponse {
   suggestion: string
   source: string
   scope?: string
+  report_type?: number
+  report_type_name?: string
   error?: string
 }
 
@@ -33,23 +35,20 @@ export async function generateExercises(_params: AIQuestionParams): Promise<Gene
   return []
 }
 
-/** 生成班级学情报告 */
-export async function generateClassReport(courseId: number, classId?: number): Promise<ReportResponse> {
-  const { data } = await request.get('/v1/report/class', {
-    params: { course_id: courseId, class_id: classId },
+/** 生成报告（统一接口，后端按 report_type 返回不同内容） */
+export async function generateReport(params: {
+  courseId: number
+  reportType: 1 | 2 | 3 | 4
+  classId?: number
+  studentId?: number
+}): Promise<ReportResponse> {
+  const { data } = await request.get('/v1/report', {
+    params: {
+      course_id: params.courseId,
+      report_type: params.reportType,
+      class_id: params.classId,
+      student_id: params.studentId,
+    },
   })
   return data
-}
-
-/** 生成学生个人报告 */
-export async function generateStudentReport(studentId: number, courseId: number): Promise<ReportResponse> {
-  const { data } = await request.get('/v1/report/student', {
-    params: { student_id: studentId, course_id: courseId },
-  })
-  return data
-}
-
-/** @deprecated 使用 generateClassReport / generateStudentReport 替代 */
-export async function generateAiReport(_studentId: string, _courseName: string): Promise<string> {
-  return 'AI 分析服务对接中，敬请期待...'
 }

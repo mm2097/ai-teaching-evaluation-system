@@ -1,6 +1,6 @@
 <!--
   数据采集流程导航条
-  在「模板上传 → 数据管理」页面间提供跳转
+  在「数据上传 → 数据管理」页面间提供跳转
 -->
 <script setup lang="ts">
 import { computed } from 'vue'
@@ -13,7 +13,7 @@ const router = useRouter()
 const dataFlowStore = useDataFlowStore()
 
 const steps = [
-  { path: '/data/import', title: '模板上传', step: 1 },
+  { path: '/data/import', title: '数据上传', step: 1 },
   { path: '/data/manage', title: '数据管理', step: 2 },
 ]
 
@@ -52,7 +52,7 @@ function goTo(path: string): void {
       <span class="context-stat">成功 {{ currentLog.successCount }} 条</span>
     </div>
     <div v-else class="flow-context empty">
-      <span>尚未上传数据，请先在「模板上传」下载模板并上传文件</span>
+      <span>尚未上传数据，请先在「数据上传」下载模板并上传文件</span>
     </div>
   </div>
 </template>

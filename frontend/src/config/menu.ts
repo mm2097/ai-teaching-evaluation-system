@@ -25,7 +25,7 @@ export const menuList: MenuItem[] = [
     icon: 'Upload',
     roles: ['admin', 'teacher'],
     children: [
-      { path: '/data/import', title: '模板上传', icon: 'Upload' },
+      { path: '/data/import', title: '数据上传', icon: 'Upload' },
       { path: '/data/manage', title: '数据管理', icon: 'Document' },
     ],
   },
@@ -129,7 +129,7 @@ export function filterMenusByRole(menus: MenuItem[], role: UserRole): MenuItem[]
 /** 路由 meta 标题映射，用于面包屑 */
 export const routeTitleMap: Record<string, string> = {
   '/dashboard': '综合看板',
-  '/data/import': '模板上传',
+  '/data/import': '数据上传',
   '/data/manage': '数据管理',
   '/analysis/profile': '学情画像',
   '/analysis/trend': '成绩趋势预测',

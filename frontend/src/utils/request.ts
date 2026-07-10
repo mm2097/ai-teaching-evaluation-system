@@ -1,16 +1,62 @@
 /**
  * Axios 实例
  * 统一 baseURL、超时、错误处理、认证头
+ *
+ * USE_MOCK = true 时启用前端全量 Mock，无需后端即可独立运行。
+ * 改为 false 即恢复真实后端联调。
  */
 import axios from 'axios'
+import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
 import { getToken } from '@/utils/auth'
 import router from '@/router'
+import { handleRequest } from '@/mock/handler'
+
+/** 一键开关：true=全量 Mock，false=真实后端 */
+export const USE_MOCK = true
 
 const request = axios.create({
   baseURL: '/api',
   timeout: 10000,
 })
+
+/* ============================================================
+ * Mock adapter —— 在 axios 层统一拦截，不改动任何 View / API 文件
+ * ============================================================ */
+if (USE_MOCK) {
+  request.defaults.adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
+    // 模拟 200-500ms 网络延迟
+    await new Promise((resolve) => setTimeout(resolve, 200 + Math.random() * 300))
+
+    const method = (config.method || 'GET').toUpperCase()
+    const url = config.url || ''
+    const params = config.params
+    const data = config.data
+
+    const result = handleRequest({ method, url, params, data })
+
+    if (result.status >= 400) {
+      // 构造错误让拦截器处理
+      const error: any = {
+        response: {
+          status: result.status,
+          data: result.data,
+        },
+        config,
+        message: `Request failed with status code ${result.status}`,
+      }
+      throw error
+    }
+
+    return {
+      data: result.data,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    } as AxiosResponse
+  }
+}
 
 request.interceptors.request.use(
   (config) => {
@@ -32,7 +78,9 @@ request.interceptors.response.use(
     }
     const detail = error.response?.data?.detail
     const msg = typeof detail === 'string' ? detail : error.message || '请求失败'
-    ElMessage.error(msg)
+    if (!USE_MOCK) {
+      ElMessage.error(msg)
+    }
     return Promise.reject(error)
   },
 )

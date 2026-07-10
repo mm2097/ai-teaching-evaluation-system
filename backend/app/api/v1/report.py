@@ -80,6 +80,10 @@ def get_report(
         if not student_id:
             raise HTTPException(status_code=400, detail="学生个人报告必须提供 student_id")
         ctx = build_student_context(session, student_id, course_id)
+    elif report_type == 4 and student_id:
+        # 学生学习质量报告 — 有 student_id 时走学生维度
+        ctx = build_student_context(session, student_id, course_id)
+        scope = "student"
     else:
         ctx = build_class_context(session, course_id, class_id, report_type)
 

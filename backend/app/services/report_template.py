@@ -272,10 +272,12 @@ def render_quality_report(ctx: ReportContext) -> dict:
 
 def render_report(ctx: ReportContext) -> dict:
     """模板兜底入口（按 report_type 分发）。"""
-    if ctx.scope == "student" or ctx.report_type == 2:
+    if ctx.report_type == 2:
         return render_student_report(ctx)
     if ctx.report_type == 3:
         return render_knowledge_report(ctx)
     if ctx.report_type == 4:
         return render_quality_report(ctx)
+    if ctx.scope == "student":
+        return render_student_report(ctx)
     return render_class_report(ctx)

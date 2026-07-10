@@ -18,6 +18,8 @@ export const authApi = {
         name: data.user.real_name,
         role: roleMap[data.user.role_code] ?? 'student',
         department: '',
+        studentId: data.user.student_id ?? undefined,
+        classId: data.user.class_id ?? undefined,
       },
     }
   },

@@ -13,7 +13,7 @@ import router from '@/router'
 import { handleRequest } from '@/mock/handler'
 
 /** 一键开关：true=全量 Mock，false=真实后端 */
-export const USE_MOCK = true
+export const USE_MOCK = false
 
 const request = axios.create({
   baseURL: '/api',

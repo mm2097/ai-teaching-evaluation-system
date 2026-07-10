@@ -13,6 +13,14 @@ import request from '@/utils/request'
 
 const userStore = useUserStore()
 
+const isStudent = computed(() => userStore.userRole === 'student')
+
+// 是否显示学生选择器（学生角色自动匹配，不显示）
+const showStudentPicker = computed(() => {
+  if (genParams.value.reportType !== 2 && genParams.value.reportType !== 4) return false
+  return !isStudent.value
+})
+
 const semesterOptions = ref<{ label: string; value: string }[]>([])
 const courses = ref<any[]>([])
 const classes = ref<any[]>([])
@@ -29,6 +37,12 @@ onMounted(async () => {
     courses.value = courseRes
     classes.value = classRes
   } catch { /* empty */ }
+
+  // 学生用户自动匹配个人信息
+  if (userStore.userInfo?.studentId && userStore.userRole === 'student') {
+    genParams.value.studentId = userStore.userInfo.studentId
+    genParams.value.classId = userStore.userInfo.classId ?? genParams.value.classId
+  }
 })
 
 const reportTypes = [
@@ -46,8 +60,8 @@ const genParams = ref({
   reportType: 1,
   semester: '2025-2026-1',
   courseId: 1,
-  classId: 1,
-  studentId: undefined as number | undefined,
+  classId: userStore.userInfo?.classId ?? 1,
+  studentId: (userStore.userInfo?.studentId ?? undefined) as number | undefined,
   format: 'pdf',
 })
 
@@ -91,7 +105,19 @@ watch(
   { immediate: true },
 )
 
-// 切换报告类型或班级时加载学生列表
+// 学生用户选择类型 2/4 时自动匹配个人信息
+watch(
+  [() => genParams.value.reportType, isStudent, () => userStore.userInfo],
+  ([type, student, info]) => {
+    if (student && info && (type === 2 || type === 4)) {
+      genParams.value.studentId = info.studentId
+      genParams.value.classId = info.classId ?? genParams.value.classId
+    }
+  },
+  { immediate: true },
+)
+
+// 切换报告类型或班级时加载学生列表（仅非学生角色）
 watch(
   [() => genParams.value.reportType, () => genParams.value.classId],
   async ([type, classId]) => {
@@ -117,8 +143,8 @@ async function generateReport(): Promise<void> {
   try {
     await loadDashboardStats()
 
-    // 学生个人报告需要验证 studentId
-    if (genParams.value.reportType === 2 && !genParams.value.studentId) {
+    // 学生个人报告/学习质量报告需要验证 studentId
+    if ((genParams.value.reportType === 2 || genParams.value.reportType === 4) && !genParams.value.studentId) {
       ElMessage.warning('请先选择学生')
       generating.value = false
       return
@@ -128,7 +154,7 @@ async function generateReport(): Promise<void> {
       courseId: genParams.value.courseId,
       reportType: genParams.value.reportType as 1 | 2 | 3 | 4,
       classId: genParams.value.classId ?? undefined,
-      studentId: genParams.value.reportType === 2 ? genParams.value.studentId : undefined,
+      studentId: (genParams.value.reportType === 2 || genParams.value.reportType === 4) ? genParams.value.studentId : undefined,
     })
 
     const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
@@ -205,7 +231,7 @@ function exportReport(): void {
                 <el-option v-for="c in csClasses" :key="c.id" :label="c.className" :value="c.id" />
               </el-select>
             </el-form-item>
-            <el-form-item v-if="genParams.reportType === 2" label="学生">
+            <el-form-item v-if="showStudentPicker" label="学生">
               <el-select
                 v-model="genParams.studentId"
                 style="width: 100%"

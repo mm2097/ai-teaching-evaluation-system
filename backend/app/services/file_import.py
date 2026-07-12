@@ -918,3 +918,124 @@ def import_file(
             merged.error_count += 1
 
     return merged
+
+
+# ============================================================================
+# 模板下载：生成标准模板文件
+# ============================================================================
+
+import io as _io
+from openpyxl.styles import Font as _Font, Alignment as _Alignment, PatternFill as _PatternFill
+from openpyxl.utils import get_column_letter as _get_column_letter
+
+# 模板元信息（template_id、名称、分类、表头、示例行）
+TEMPLATE_META: list[dict[str, Any]] = [
+    {
+        "template_id": TEMPLATE_EXAM_DEDUCTION.template_id,
+        "name": "课程测试各题扣分情况",
+        "dataType": "成绩",
+        "description": "导入课程测试各题扣分明细，包含每位学生各大题扣分及对应知识点，适用于期中/期末考试扣分分析。",
+        "headers": [
+            "编号", "课程名称", "测试名称", "学号", "姓名",
+            "第1大题", "第1大题扣分的主要知识点",
+            "第2大题", "第2大题扣分的主要知识点",
+            "第3大题", "第3大题扣分的主要知识点",
+            "第4大题", "第4大题扣分的主要知识点",
+            "第5大题", "第5大题扣分的主要知识点",
+            "总成绩",
+        ],
+        "example": [
+            1, "计算机网络", "期中考试", "2024001001", "赵伟",
+            2, "数据报分片", 2, "TCP/IP参考模型", 2, "TCP报文段",
+            2, "可靠传输技术", 2, "ARP协议", 90,
+        ],
+        "instruction": "填写说明：①总成绩为实际得分（满分100）；②第1~5大题为扣分值（非得分）；③知识点填写该题扣分对应的知识领域名称。",
+    },
+    {
+        "template_id": TEMPLATE_SCORE_SUMMARY.template_id,
+        "name": "成绩汇总",
+        "dataType": "成绩",
+        "description": "导入课程各类成绩汇总，包含期中、期末、平时、实验、课程设计等多维度成绩。",
+        "headers": [
+            "编号", "课程名称", "学号", "姓名",
+            "期中成绩", "课堂平时成绩", "作业成绩", "平时成绩1",
+            "实验成绩", "小班讨论成绩", "课程设计", "平时成绩2",
+            "期末成绩", "总评成绩",
+        ],
+        "example": [
+            1, "计算机网络", "2024001001", "赵伟",
+            85, 90, 88, 88,
+            92, 85, 90, 89,
+            95, 91,
+        ],
+        "instruction": "填写说明：①平时成绩1和平时成绩2为系统自动计算项（课堂平时+作业的平均，实验+讨论+课程设计的平均），可留空由Excel公式计算；②总评成绩=25%×平时1+25%×平时2+50%×期末；③所有成绩为百分制。",
+    },
+    {
+        "template_id": TEMPLATE_ATTENDANCE.template_id,
+        "name": "成绩考勤情况",
+        "dataType": "考勤",
+        "description": "导入课程考勤记录，每位学生32次课的出勤状态（到/缺/请假/迟到）。",
+        "headers": [
+            "编号", "课程名称", "学号", "姓名",
+            *[f"考勤{i}" for i in range(1, 33)],
+            "考勤总数", "到课数", "请假数", "到课率",
+        ],
+        "example": [
+            1, "计算机网络", "2024001001", "赵伟",
+            *(["到"] * 32),
+            None, None, None, None,
+        ],
+        "instruction": "填写说明：①考勤列填「到」「缺」「请假」「迟到」之一；②考勤总数、到课数、请假数、到课率为Excel公式自动计算，请勿手动填写。",
+    },
+]
+
+
+def generate_template_xlsx(template_id: str) -> bytes:
+    """根据模板 ID 生成标准 .xlsx 模板文件（仅含表头+示例行+填写说明）。"""
+    meta = next((m for m in TEMPLATE_META if m["template_id"] == template_id), None)
+    if not meta:
+        raise ValueError(f"未知模板 ID: {template_id}")
+
+    wb = openpyxl.Workbook()
+    # 使用通用 Sheet 名（避免硬编码班级名）
+    ws = wb.active
+    ws.title = "Sheet1"
+
+    # 样式
+    header_font = _Font(bold=True, size=11)
+    header_fill = _PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+    example_fill = _PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
+    wrap_align = _Alignment(wrap_text=True, vertical="center")
+
+    headers = meta["headers"]
+    example = meta["example"]
+
+    # Row 1: 表头
+    for ci, h in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=ci, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = wrap_align
+
+    # Row 2: 示例数据（黄色底色标示）
+    for ci, val in enumerate(example, start=1):
+        cell = ws.cell(row=2, column=ci, value=val)
+        cell.fill = example_fill
+
+    # Row 4: 填写说明
+    ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=len(headers))
+    instr_cell = ws.cell(row=4, column=1, value=meta["instruction"])
+    instr_cell.font = _Font(italic=True, size=10, color="666666")
+
+    # 调整列宽
+    for ci, h in enumerate(headers, start=1):
+        col_letter = _get_column_letter(ci)
+        width = max(len(str(h)) * 1.5, 10)
+        if width > 30:
+            width = 30
+        ws.column_dimensions[col_letter].width = width
+
+    output = _io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()

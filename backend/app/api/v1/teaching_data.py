@@ -12,16 +12,19 @@ import os
 import tempfile
 import uuid
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import Response
 from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import (
     ScoreRecord, AttendanceRecord, Course, Student, CourseStudent,
-    SysUser, Teacher,
+    SysUser, Teacher, SysRole,
 )
-from app.services.file_import import import_file, ImportResult
+from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx
 
 router = APIRouter()
 
@@ -198,3 +201,80 @@ def upload_teaching_data(
             for e in result.errors
         ],
     }
+
+
+# ============================================================================
+# 模板下载接口（3.2.5 节）
+# ============================================================================
+
+def _check_template_access(current_user: SysUser, session: Session) -> None:
+    """校验模板下载权限：管理员或任课教师（Data.Template.UserValid）。"""
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+    if role_code not in ("admin", "teacher"):
+        raise HTTPException(
+            status_code=403,
+            detail="仅管理员和任课教师可下载模板",
+        )
+
+
+@router.get("/teaching-data/templates", tags=["教学数据"])
+def list_templates(
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """返回可下载的模板列表（Data.Template.Type）。
+
+    按 dataType 分组：成绩、考勤。
+    权限：管理员或任课教师。
+    """
+    _check_template_access(current_user, session)
+    return [
+        {
+            "templateId": m["template_id"],
+            "name": m["name"],
+            "dataType": m["dataType"],
+            "description": m["description"],
+            "headers": m["headers"],
+        }
+        for m in TEMPLATE_META
+    ]
+
+
+@router.get("/teaching-data/templates/{template_id}", tags=["教学数据"])
+def download_template(
+    template_id: str,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> Response:
+    """下载指定模板的 .xlsx 文件（Data.Template.Download）。
+
+    返回标准模板文件，含表头、示例行、填写说明。
+    权限：管理员或任课教师。
+    """
+    _check_template_access(current_user, session)
+
+    meta = next((m for m in TEMPLATE_META if m["template_id"] == template_id), None)
+    if not meta:
+        raise HTTPException(status_code=404, detail=f"模板不存在: {template_id}")
+
+    try:
+        xlsx_bytes = generate_template_xlsx(template_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    # 文件名含中文，用 RFC 5987 编码
+    safe_name = f"模板-{meta['name']}.xlsx"
+    encoded = quote(safe_name, safe="")
+    # ASCII 兜底文件名
+    ascii_name = f"template-{template_id}.xlsx"
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; "
+                f"filename*=UTF-8''{encoded}"
+            ),
+        },
+    )

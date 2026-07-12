@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import get_session
 from app.models import SysUser, SysRole, LoginRequest
 from app.models.student import Student
+from app.models.teacher import Teacher
 
 router = APIRouter()
 
@@ -18,8 +19,13 @@ class LoginUser(SQLModel):
     username: str
     real_name: str
     role_code: str
+    # 学生
     student_id: int | None = None
     class_id: int | None = None
+    # 教师
+    teacher_id: int | None = None
+    college: str | None = None
+    title: str | None = None
 
 
 class LoginResponse(SQLModel):
@@ -60,6 +66,17 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             student_id = student.student_id
             class_id = student.class_id
 
+    # 教师登录时附加 teacher_id / college / title
+    teacher_id: int | None = None
+    college: str | None = None
+    title: str | None = None
+    if role_code == "teacher":
+        teacher = session.exec(select(Teacher).where(Teacher.user_id == user.user_id)).first()
+        if teacher:
+            teacher_id = teacher.teacher_id
+            college = teacher.college
+            title = teacher.title
+
     token = create_token(user.user_id, user.username)
     return LoginResponse(
         token=token,
@@ -70,5 +87,8 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             role_code=role_code,
             student_id=student_id,
             class_id=class_id,
+            teacher_id=teacher_id,
+            college=college,
+            title=title,
         ),
     )

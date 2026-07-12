@@ -5,3 +5,5 @@ sqlmodel
 pydantic-settings
 pyjwt
 httpx
+openpyxl
+python-multipart

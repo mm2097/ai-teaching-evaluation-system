@@ -11,6 +11,7 @@ from app.models import (
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult,
     SysUser, Teacher, SysRole,
 )
+from app.services.predict import predict_student_scores
 
 router = APIRouter()
 
@@ -98,6 +99,43 @@ def _check_profile_access(
 
     # 其他未授权角色
     raise HTTPException(status_code=403, detail="无权查看学情画像")
+
+
+def _check_course_access(
+    session: Session,
+    current_user: SysUser,
+    course_id: int,
+) -> None:
+    """校验课程级数据查看权限（Analysis.ScoreTrend.UserValid）。
+
+    - 管理员（admin）：可查看所有课程数据
+    - 任课教师（teacher）：仅可查看自己授课课程的数据
+    - 学生（student）：无权查看班级/课程级分析数据
+    """
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+
+    if role_code == "admin":
+        return
+
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+
+    if role_code == "teacher":
+        teacher = session.exec(
+            select(Teacher).where(Teacher.user_id == current_user.user_id)
+        ).first()
+        if not teacher:
+            raise HTTPException(status_code=403, detail="当前账号未关联教师信息")
+        if course.teacher_id != teacher.teacher_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"仅授课教师可查看课程「{course.course_name}」的分析数据",
+            )
+        return
+
+    raise HTTPException(status_code=403, detail="无权查看课程分析数据")
 
 
 @router.get("/analysis/profile", tags=["学情分析"])
@@ -254,8 +292,14 @@ def get_warnings(
     class_id: int | None = Query(default=None),
     level: str | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
-    """获取预警记录。"""
+    """获取预警记录。
+
+    权限：仅管理员和对应课程授课教师可查看。
+    """
+    if course_id:
+        _check_course_access(session, current_user, course_id)
     stmt = select(StudyWarning)
     if course_id:
         stmt = stmt.where(StudyWarning.course_id == course_id)
@@ -299,8 +343,20 @@ def get_grade_predictions(
     course_id: int = Query(...),
     class_id: int = Query(...),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
-    """成绩预测列表（基于当前掌握度推算）。"""
+    """成绩预测列表（一元线性回归，Analysis.ScoreTrend.Predict）。
+
+    基于 predict.py 的 simple_linear_regression：
+    - 对每位学生按历次考试时间拟合回归直线
+    - 预测下一次考试成绩区间（95% 置信区间）
+    - R² 反映拟合质量，数据点 ≥ 3 时回归有效，否则降级
+
+    权限（Analysis.ScoreTrend.UserValid）：仅管理员和该课程授课教师可查看。
+    """
+    _check_course_access(session, current_user, course_id)
+
+    # 课程内选修学生
     stmt = select(CourseStudent).where(CourseStudent.course_id == course_id)
     enrollments = session.exec(stmt).all()
     student_ids = [e.student_id for e in enrollments]
@@ -309,7 +365,8 @@ def get_grade_predictions(
     class_students = session.exec(
         select(Student.student_id).where(Student.class_id == class_id)
     ).all()
-    student_ids = [s for s in student_ids if s in set(class_students)]
+    class_set = set(class_students)
+    student_ids = [s for s in student_ids if s in class_set]
 
     result = []
     for sid in student_ids:
@@ -317,26 +374,127 @@ def get_grade_predictions(
         if not student:
             continue
 
-        masteries = session.exec(
-            select(KnowledgeMastery).where(
-                KnowledgeMastery.course_id == course_id,
-                KnowledgeMastery.student_id == sid,
-            )
-        ).all()
-
-        current = round(sum(m.mastery_score for m in masteries) / len(masteries)) if masteries else 70
-        delta = 3 if current >= 85 else (0 if current >= 70 else -4)
-        low = max(0, current + delta - 3)
-        high = min(100, current + delta + 3)
-        trend = "上升" if delta > 1 else ("下滑" if delta < -1 else "稳定")
-        confidence = min(95, 70 + current // 5)
+        pred = predict_student_scores(session, sid, course_id)
 
         result.append({
+            "studentId": sid,
             "name": student.real_name,
-            "current": current,
-            "predicted": f"{low}-{high}",
-            "trend": trend,
-            "confidence": confidence,
+            "studentNo": student.student_no,
+            "current": pred["current"],
+            "predicted": pred["predicted"],
+            "predictedLow": pred["predicted_low"],
+            "predictedHigh": pred["predicted_high"],
+            "trend": pred["trend"],
+            "confidence": pred["confidence"],
+            "slope": pred["slope"],
+            "rSquared": pred["r_squared"],
+            "degraded": pred["degraded"],
+            "history": pred["history"],
         })
 
     return result
+
+
+@router.get("/analysis/grade-distribution", tags=["学情分析"])
+def get_grade_distribution(
+    course_id: int = Query(...),
+    class_id: int | None = Query(default=None),
+    batch_id: int | None = Query(default=None, description="指定考核批次ID，不传则汇总全部批次"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """成绩分布分析与班级特征识别（Analysis.ScoreTrend.Distribute）。
+
+    返回：
+    - distribution: 0-100 按 10 分一档的人数与占比（用于直方图）
+    - statistics: 均值/中位数/标准差/极值/及格率/优秀率/不及格率
+    - characteristic: 偏态描述 + 离散度描述（班级成绩形态特征）
+
+    权限（Analysis.ScoreTrend.UserValid）：仅管理员和该课程授课教师可查看。
+    """
+    _check_course_access(session, current_user, course_id)
+
+    stmt = select(ScoreRecord).where(ScoreRecord.course_id == course_id)
+    if batch_id:
+        stmt = stmt.where(ScoreRecord.batch_id == batch_id)
+
+    if class_id:
+        class_student_ids = session.exec(
+            select(Student.student_id).where(Student.class_id == class_id)
+        ).all()
+        if not class_student_ids:
+            return {"distribution": [], "statistics": {}, "characteristic": "该班级无学生数据"}
+        stmt = stmt.where(ScoreRecord.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+
+    records = session.exec(stmt).all()
+    scores = [r.score for r in records]
+
+    if not scores:
+        return {
+            "distribution": [],
+            "statistics": {},
+            "characteristic": "暂无成绩数据",
+        }
+
+    n = len(scores)
+    mean = sum(scores) / n
+    sorted_scores = sorted(scores)
+    mid = n // 2
+    median = sorted_scores[mid] if n % 2 else (sorted_scores[mid - 1] + sorted_scores[mid]) / 2
+    variance = sum((s - mean) ** 2 for s in scores) / n
+    std_dev = variance ** 0.5
+
+    # 10 分一档直方图分布
+    buckets = []
+    for low in range(0, 100, 10):
+        high = low + 9 if low < 90 else 100
+        count = sum(1 for s in scores if low <= s <= high)
+        buckets.append({
+            "range": f"{low}-{high}",
+            "low": low,
+            "high": high,
+            "count": count,
+            "ratio": round(count / n * 100, 1),
+        })
+
+    # 基础统计
+    pass_rate = sum(1 for s in scores if s >= 60) / n * 100
+    excellent_rate = sum(1 for s in scores if s >= 90) / n * 100
+    fail_rate = sum(1 for s in scores if s < 60) / n * 100
+
+    # 偏度（识别成绩形态）
+    skew = sum((s - mean) ** 3 for s in scores) / n / (std_dev ** 3) if std_dev > 0 else 0
+
+    if skew > 0.5:
+        skew_desc = "正偏态（高分段人数较多，整体偏右）"
+    elif skew < -0.5:
+        skew_desc = "负偏态（低分段人数较多，整体偏左）"
+    else:
+        skew_desc = "近似正态分布"
+
+    # 离散度
+    if std_dev < 8:
+        dispersion = "集中（成绩差异小，学生水平趋同）"
+    elif std_dev > 18:
+        dispersion = "分散（成绩两极分化明显）"
+    else:
+        dispersion = "适中"
+
+    characteristic = f"{skew_desc}，离散度{dispersion}"
+
+    return {
+        "distribution": buckets,
+        "statistics": {
+            "count": n,
+            "mean": round(mean, 1),
+            "median": round(median, 1),
+            "stdDev": round(std_dev, 1),
+            "maxScore": int(max(scores)),
+            "minScore": int(min(scores)),
+            "passRate": round(pass_rate, 1),
+            "excellentRate": round(excellent_rate, 1),
+            "failRate": round(fail_rate, 1),
+            "skewness": round(skew, 2),
+        },
+        "characteristic": characteristic,
+    }

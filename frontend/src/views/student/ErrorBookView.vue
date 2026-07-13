@@ -1,31 +1,18 @@
 <!--
   错题本页面
-  自动归集学生错题并支持复习
+  自动归集学生错题（教师布置 + 自主练习）并支持复习
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { fetchErrorBook } from '@/api/quiz'
-import { searchStudents } from '@/api/dict'
+import { fetchErrorBook, type ErrorBookItem } from '@/api/quiz'
 import { useUserStore } from '@/stores/user'
+import { exerciseTypeLabels } from '@/utils/exerciseJudge'
+import type { ExerciseOption } from '@/types'
 
 const userStore = useUserStore()
 const loading = ref(true)
 const kpFilter = ref('')
-
-interface ErrorItem {
-  quizQuestion: { id: number; type: string; content: string; options?: string[]; answer: string | string[]; knowledgePoint: string; score: number }
-  userAnswer: string | string[]
-  correctAnswer: string | string[]
-  submitTime: string
-  knowledgePoint: string
-}
-
-const errors = ref<ErrorItem[]>([])
-
-const knowledgePointOptions = computed(() =>
-  [...new Set(errors.value.map((e) => e.knowledgePoint))],
-)
+const errors = ref<ErrorBookItem[]>([])
 
 const filteredErrors = computed(() => {
   if (!kpFilter.value) return errors.value
@@ -40,15 +27,15 @@ const kpStats = computed(() => {
     .sort((a, b) => b.count - a.count)
 })
 
-const typeLabel: Record<string, string> = {
-  single: '单选',
-  multiple: '多选',
-  fill: '填空',
-  short: '简答',
+function formatOptions(options?: ExerciseOption[]): string[] {
+  if (!options?.length) return []
+  return options.map((o) => `${o.key}. ${o.text}`)
 }
 
-function getOptionLetter(idx: number): string {
-  return String.fromCharCode(65 + idx)
+function formatAnswer(val: string | string[] | undefined): string {
+  if (!val) return '(未答)'
+  if (Array.isArray(val)) return val.join('、') || '(未答)'
+  return val
 }
 
 onMounted(async () => {
@@ -63,10 +50,10 @@ onMounted(async () => {
 
 <template>
   <div class="page-container" v-loading="loading">
-    <!-- 知识点统计 -->
     <div class="content-card">
       <div class="content-card__title">错题知识点分布</div>
-      <div class="kp-stats">
+      <el-empty v-if="!kpStats.length" description="暂无错题，继续保持！" />
+      <div v-else class="kp-stats">
         <div
           v-for="stat in kpStats"
           :key="stat.name"
@@ -80,7 +67,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- 错题列表 -->
     <div class="content-card" style="margin-top: 16px">
       <div class="content-card__title">
         错题列表
@@ -90,43 +76,45 @@ onMounted(async () => {
 
       <el-empty v-if="!filteredErrors.length" description="暂无错题记录，继续保持！" />
 
-      <div v-for="(item, idx) in filteredErrors" :key="item.quizQuestion.id + '-' + idx" class="error-card">
+      <div
+        v-for="(item, idx) in filteredErrors"
+        :key="item.quizQuestion.id + '-' + idx"
+        class="error-card"
+      >
         <div class="error-header">
           <span class="error-num">第 {{ idx + 1 }} 题</span>
-          <el-tag size="small">{{ typeLabel[item.quizQuestion.type] }}</el-tag>
+          <el-tag size="small">{{ exerciseTypeLabels[item.quizQuestion.type] }}</el-tag>
           <el-tag size="small" type="danger">{{ item.knowledgePoint }}</el-tag>
           <span class="error-time">{{ item.submitTime }}</span>
         </div>
 
-        <p class="error-content">{{ item.quizQuestion.content }}</p>
+        <p class="error-content">{{ item.quizQuestion.stem }}</p>
 
-        <div v-if="item.quizQuestion.options" class="error-options">
+        <div v-if="item.quizQuestion.options?.length" class="error-options">
           <div
-            v-for="(opt, i) in item.quizQuestion.options"
+            v-for="(opt, i) in formatOptions(item.quizQuestion.options)"
             :key="i"
             class="error-option"
-            :class="{
-              'is-correct': Array.isArray(item.correctAnswer)
-                ? item.correctAnswer.includes(opt)
-                : item.correctAnswer === opt,
-              'is-wrong': Array.isArray(item.userAnswer)
-                ? item.userAnswer.includes(opt) && !(Array.isArray(item.correctAnswer) ? item.correctAnswer.includes(opt) : item.correctAnswer === opt)
-                : item.userAnswer === opt && item.correctAnswer !== opt,
-            }"
           >
-            {{ getOptionLetter(i) }}. {{ opt }}
+            {{ opt }}
           </div>
         </div>
 
         <div class="error-answers">
           <div class="answer-row">
             <span class="label">你的答案：</span>
-            <span class="value wrong">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') || '(未答)' : item.userAnswer || '(未答)' }}</span>
+            <span class="value wrong">{{ formatAnswer(item.userAnswer) }}</span>
           </div>
           <div class="answer-row">
             <span class="label">正确答案：</span>
-            <span class="value correct">{{ Array.isArray(item.correctAnswer) ? item.correctAnswer.join('、') : item.correctAnswer }}</span>
+            <span class="value correct">{{ formatAnswer(item.correctAnswer) }}</span>
           </div>
+        </div>
+
+        <div v-if="item.quizQuestion.type === 'short_answer' && item.aiReason" class="ai-judge">
+          <el-tag size="small" type="warning">AI 判分</el-tag>
+          <span v-if="item.aiScore != null" class="ai-score">{{ item.aiScore }} / 10</span>
+          <p class="ai-reason">{{ item.aiReason }}</p>
         </div>
       </div>
     </div>
@@ -200,9 +188,7 @@ onMounted(async () => {
       padding: 8px 12px;
       border-radius: 6px;
       border: 1px solid #e2e8f0;
-
-      &.is-correct { background: #ecfdf5; border-color: #6ee7b7; color: #065f46; }
-      &.is-wrong { background: #ffe4e4; border-color: #fca5a5; color: #991b1b; }
+      background: #fff;
     }
   }
 
@@ -213,6 +199,28 @@ onMounted(async () => {
 
     .value.wrong { color: #ef4444; font-weight: 600; }
     .value.correct { color: #10b981; font-weight: 600; }
+  }
+
+  .ai-judge {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 6px;
+
+    .ai-score {
+      margin-left: 8px;
+      font-weight: 600;
+      color: #d97706;
+      font-size: 13px;
+    }
+
+    .ai-reason {
+      font-size: 12px;
+      color: #78350f;
+      margin: 6px 0 0;
+      line-height: 1.5;
+    }
   }
 }
 </style>

@@ -646,11 +646,15 @@ function generateOneQuestion(type: string, kp: string, difficulty: string, id: n
       explanation: `${kp}的基本操作包括插入、删除和查找。`,
     }),
   }
-  return (templates[type] || templates.single_choice)()
+  const template = templates[type] ?? templates.single_choice
+  return template!()
 }
 
 function handleAnswerTasks(params: Record<string, unknown>) {
-  let result = answerTasks
+  let result = answerTasks.filter((t) => !t.title.startsWith('【自主练习】'))
+  if (params.for_student) {
+    result = result.filter((t) => t.status === 'published')
+  }
   if (params.courseId || params.course_id) {
     const cid = Number(params.courseId || params.course_id)
     result = result.filter((t) => t.courseId === cid)

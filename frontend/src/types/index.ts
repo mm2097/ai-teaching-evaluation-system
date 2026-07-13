@@ -164,6 +164,7 @@ export interface StudentProfileData {
   courseName: string
   tags: string[]
   radarValues: number[]
+  radarIndicators?: { name: string; max: number }[]
   dimensionScores: { name: string; score: number; desc: string }[]
   strongPoints: string
   weakPoints: string
@@ -423,7 +424,7 @@ export interface QuizSubmission {
   score: number
   totalScore: number
   submitTime: string
-  answers: Record<number, string | boolean>
+  answers: Record<number, string | string[] | boolean>
 }
 
 /** 角色中文名称映射 */

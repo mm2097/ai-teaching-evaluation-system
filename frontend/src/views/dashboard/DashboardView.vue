@@ -21,7 +21,7 @@ const userStore = useUserStore()
 
 /** 实时看板数据（来自后端） */
 const dashboardStats = ref({ studentCount: 0, courseCount: 0, teacherCount: 0, passRate: 0, excellentRate: 0, attendanceRate: 0, warningCount: 0 })
-const warnings = ref<any[]>([])
+const warnings = ref<unknown[]>([])
 const heatmap = ref<KnowledgeHeatmapResult>({ knowledgePoints: [], students: [], data: [] })
 
 async function loadDashboardData(courseId?: number, classId?: number) {
@@ -101,9 +101,9 @@ const statCards = computed(() => {
     { title: '班级学生数', value: classStudentCount.value, icon: 'User', color: '#2563eb', trend: 0 },
     { title: '当前课程', value: courseName, icon: 'Notebook', color: '#6366f1' },
     { title: '当前班级', value: className, icon: 'School', color: '#7c3aed' },
-    { title: '课程及格率', value: +(dashboardStats.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
-    { title: '优秀率', value: +(dashboardStats.excellentRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'Star', color: '#f59e0b', trend: 1.8 },
-    { title: '平均出勤率', value: +(dashboardStats.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
+    { title: '课程及格率', value: +(dashboardStats.value.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
+    { title: '优秀率', value: +(dashboardStats.value.excellentRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'Star', color: '#f59e0b', trend: 1.8 },
+    { title: '平均出勤率', value: +(dashboardStats.value.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
     { title: '预警学生', value: classWarningCount.value, icon: 'Bell', color: '#ef4444', trend: -12, link: '/analysis/warning' },
     { title: '知识点薄弱项', value: knowledgeStats.value.weakPoints.length, icon: 'Grid', color: '#8b5cf6', link: '/analysis/knowledge' },
     { title: 'AI 智能辅助教学完成率', value: 78.5, unit: '%', icon: 'EditPen', color: '#ec4899', link: '/quiz/manage' },

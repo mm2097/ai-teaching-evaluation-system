@@ -185,7 +185,7 @@ export async function fetchQuestionBankStats(courseId?: number): Promise<Questio
   const items = res.data
   const stats: QuestionBankStats = {
     total: items.length,
-    byType: { single_choice: 0, multi_choice: 0, judge: 0, fill_blank: 0 },
+    byType: { single_choice: 0, multi_choice: 0, judge: 0, fill_blank: 0, short_answer: 0 },
     bySource: { ai: 0, manual: 0, import: 0 } as Record<ExerciseSource, number>,
     byDifficulty: { easy: 0, medium: 0, hard: 0 },
   }

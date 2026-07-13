@@ -6,6 +6,8 @@
     POST /api/v1/answer-tasks/{id}/publish 发布任务
     POST /api/v1/answer-tasks/{id}/close   关闭任务
     GET  /api/v1/answer-records            答题记录列表（按任务/学生聚合）
+    POST /api/v1/self-practice/start        学生创建自主练习
+    POST /api/v1/self-practice/submit       学生提交自主练习
     POST /api/v1/exercises/generate        AI 生成题目（代理算法服务）
 """
 from __future__ import annotations
@@ -17,7 +19,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, func, select
 
 from app.core.database import get_session
@@ -383,6 +385,8 @@ def submit_answers(
     _require_course_access(current_user, task.course_id, session)
     if _role_code(current_user, session) != "student":
         raise HTTPException(status_code=403, detail="只有学生可以提交答案")
+    if task.task_name.startswith(_SELF_PRACTICE_PREFIX):
+        raise HTTPException(status_code=409, detail="自主练习请使用专用提交接口")
     if task.status != 1:
         raise HTTPException(status_code=409, detail="任务当前不可提交")
     if task.deadline < datetime.now():
@@ -396,26 +400,38 @@ def submit_answers(
         raise HTTPException(status_code=403, detail="该任务未分配给学生所在班级")
     req.student_id = current_student.student_id
 
-    # 查任务关联的题目
+    result = _grade_task_answers(
+        task=task,
+        student=current_student,
+        answers=req.answers,
+        session=session,
+    )
+    session.commit()
+    return result
+
+
+def _grade_task_answers(
+    task: AnswerTask,
+    student: Student,
+    answers: dict[str, str],
+    session: Session,
+) -> dict:
+    """判分并写入答题记录，由调用方统一提交事务。"""
     tq_rows = session.exec(
         select(TaskQuestion, AiQuestion)
         .join(AiQuestion, TaskQuestion.question_id == AiQuestion.question_id)
-        .where(TaskQuestion.task_id == req.task_id)
+        .where(TaskQuestion.task_id == task.task_id)
         .order_by(TaskQuestion.sort_num)
     ).all()
 
     if not tq_rows:
         raise HTTPException(status_code=404, detail="任务不存在或无题目")
 
-    student = session.get(Student, req.student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="学生不存在")
-
     # A resubmission replaces the previous attempt instead of inflating aggregate scores.
     previous_records = session.exec(
         select(StudentAnswerRecord).where(
-            StudentAnswerRecord.task_id == req.task_id,
-            StudentAnswerRecord.student_id == req.student_id,
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
     for record in previous_records:
@@ -428,7 +444,7 @@ def submit_answers(
 
     for _, question in tq_rows:
         qid = str(question.question_id)
-        user_answer = req.answers.get(qid, "")
+        user_answer = answers.get(qid, "")
         per_score = 100.0 / max(len(tq_rows), 1)
 
         if question.type == 5:
@@ -437,8 +453,8 @@ def submit_answers(
                 session,
                 question,
                 user_answer,
-                req.student_id,
-                req.task_id,
+                student.student_id,
+                task.task_id,
                 per_score,
             )
             if ai_result["score"] is not None:
@@ -452,9 +468,9 @@ def submit_answers(
             is_correct = _judge_objective(question, user_answer)
             score = per_score if is_correct else 0
             record = StudentAnswerRecord(
-                task_id=req.task_id,
+                task_id=task.task_id,
                 question_id=question.question_id,
-                student_id=req.student_id,
+                student_id=student.student_id,
                 user_answer=user_answer,
                 score=score,
                 is_correct=1 if is_correct else 0,
@@ -464,24 +480,39 @@ def submit_answers(
             if is_correct:
                 correct_count += 1
 
-    session.commit()
+    session.flush()
 
     first_record = session.exec(
         select(StudentAnswerRecord)
         .where(
-            StudentAnswerRecord.task_id == req.task_id,
-            StudentAnswerRecord.student_id == req.student_id,
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.student_id == student.student_id,
         )
         .order_by(StudentAnswerRecord.answer_id)
     ).first()
     if not first_record:
         raise HTTPException(status_code=500, detail="答题记录保存失败")
 
-    detail = get_answer_record_detail(
-        first_record.answer_id,
-        session=session,
-        current_user=current_user,
-    )
+    records = session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.student_id == student.student_id,
+        )
+    ).all()
+    records_by_question = {record.question_id: record for record in records}
+    question_results = []
+    for _, question in tq_rows:
+        record = records_by_question.get(question.question_id)
+        manual_required = bool(question.type == 5 and record and record.ai_score is None)
+        question_results.append({
+            "question": _serialize_question(question, session, per_score),
+            "userAnswer": record.user_answer if record else "",
+            "isCorrect": bool(record.is_correct) if record else False,
+            "manualRequired": manual_required,
+            "aiScore": record.ai_score if record else None,
+            "aiReason": record.judge_reason if record else "",
+        })
+
     return {
         "submissionId": first_record.answer_id,
         "score": round(total_score, 1),
@@ -489,7 +520,7 @@ def submit_answers(
         "correctCount": correct_count,
         "manualRequiredCount": len(manual_question_ids),
         "manualQuestionIds": manual_question_ids,
-        "questionResults": detail["questionResults"],
+        "questionResults": question_results,
     }
 
 
@@ -610,6 +641,13 @@ class QuestionItem(BaseModel):
     score: float = 0
 
 
+class SelfPracticeSubmitRequest(BaseModel):
+    """学生自主练习提交参数；标准答案只从服务端已保存题目读取。"""
+
+    taskId: int
+    answers: dict[str, str] = Field(default_factory=dict)
+
+
 class SaveAnswerTaskRequest(BaseModel):
     """创建/保存答题任务。"""
     title: str
@@ -684,6 +722,62 @@ def _ensure_question_in_bank(
     return q.question_id
 
 
+@router.post("/self-practice/submit", tags=["答题管理"])
+def submit_self_practice(
+    req: SelfPracticeSubmitRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """提交已创建的自主练习，客户端不能传入或修改标准答案。"""
+    if _role_code(current_user, session) != "student":
+        raise HTTPException(status_code=403, detail="只有学生可以提交自主练习")
+
+    student = _student_for_user(current_user, session)
+    if not student:
+        raise HTTPException(status_code=403, detail="学生信息不存在")
+
+    task = session.get(AnswerTask, req.taskId)
+    if not task or not task.task_name.startswith(_SELF_PRACTICE_PREFIX):
+        raise HTTPException(status_code=404, detail="自主练习不存在")
+    if task.create_by != current_user.user_id:
+        raise HTTPException(status_code=403, detail="无权提交他人的自主练习")
+    _require_course_access(current_user, task.course_id, session)
+    if task.status != 1:
+        raise HTTPException(status_code=409, detail="自主练习已提交或已关闭")
+    if task.deadline < datetime.now():
+        raise HTTPException(status_code=409, detail="自主练习已过期")
+
+    question_ids = set(session.exec(
+        select(TaskQuestion.question_id).where(TaskQuestion.task_id == task.task_id)
+    ).all())
+    if not question_ids:
+        raise HTTPException(status_code=404, detail="自主练习没有题目")
+    valid_answer_keys = {str(question_id) for question_id in question_ids}
+    unknown_answer_keys = set(req.answers) - valid_answer_keys
+    if unknown_answer_keys:
+        raise HTTPException(status_code=422, detail="答案中包含不存在的题目 ID")
+
+    try:
+        result = _grade_task_answers(
+            task=task,
+            student=student,
+            answers=req.answers,
+            session=session,
+        )
+        task.status = 2
+        session.add(task)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    return {
+        **result,
+        "taskId": task.task_id,
+        "taskTitle": task.task_name,
+    }
+
+
 @router.post("/answer-tasks", tags=["答题管理"])
 def create_answer_task(
     req: SaveAnswerTaskRequest,
@@ -700,12 +794,12 @@ def create_answer_task(
     _require_course_access(current_user, req.courseId, session)
 
     role_code = _role_code(current_user, session)
-    if role_code == "student" and not req.title.startswith(_SELF_PRACTICE_PREFIX):
-        raise HTTPException(status_code=403, detail="学生只能创建自主练习任务")
-    if role_code not in {"admin", "teacher", "student"}:
+    if role_code not in {"admin", "teacher"}:
         raise HTTPException(status_code=403, detail="无权创建答题任务")
+    if req.title.startswith(_SELF_PRACTICE_PREFIX):
+        raise HTTPException(status_code=422, detail="自主练习标题为系统保留格式")
 
-    target_class_id = req.classId if role_code in {"admin", "teacher"} else 0
+    target_class_id = req.classId
     if target_class_id and not session.get(ClassInfo, target_class_id):
         raise HTTPException(status_code=404, detail="班级不存在")
 
@@ -972,4 +1066,105 @@ def generate_exercises_proxy(
             "model": meta_raw.get("model", "unknown"),
             "elapsedMs": meta_raw.get("elapsed_ms", 0),
         },
+    }
+
+
+@router.post("/self-practice/start", tags=["答题管理"])
+def start_self_practice(
+    req: GenerateExercisesRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """为当前学生生成并保存私人练习，返回不含标准答案的试卷。"""
+    if _role_code(current_user, session) != "student":
+        raise HTTPException(status_code=403, detail="只有学生可以创建自主练习")
+    student = _student_for_user(current_user, session)
+    if not student:
+        raise HTTPException(status_code=403, detail="学生信息不存在")
+
+    generated = generate_exercises_proxy(
+        req,
+        session=session,
+        current_user=current_user,
+    )
+    generated_questions = generated.get("questions", [])
+    if not generated_questions:
+        raise HTTPException(status_code=503, detail="未生成有效题目，请调整参数后重试")
+
+    course = session.get(Course, req.courseId)
+    now = datetime.now()
+    task = AnswerTask(
+        course_id=req.courseId,
+        task_name=f"{_SELF_PRACTICE_PREFIX}{now.strftime('%Y-%m-%d %H:%M:%S')}",
+        publish_time=now,
+        deadline=now + timedelta(hours=1),
+        status=1,
+        create_by=current_user.user_id,
+    )
+
+    try:
+        session.add(task)
+        session.flush()
+        persisted_question_ids: set[int] = set()
+        for index, raw_question in enumerate(generated_questions):
+            try:
+                item = QuestionItem.model_validate(raw_question)
+            except ValidationError as exc:
+                raise HTTPException(status_code=503, detail="AI 返回的题目格式无效") from exc
+            question_id = _ensure_question_in_bank(
+                session,
+                item,
+                req.courseId,
+                current_user.user_id,
+            )
+            if question_id in persisted_question_ids:
+                raise HTTPException(status_code=422, detail="生成结果中包含重复题目")
+            persisted_question_ids.add(question_id)
+            session.add(
+                TaskQuestion(
+                    task_id=task.task_id,
+                    question_id=question_id,
+                    sort_num=index,
+                )
+            )
+        session.flush()
+
+        task_questions = session.exec(
+            select(TaskQuestion, AiQuestion)
+            .join(AiQuestion, TaskQuestion.question_id == AiQuestion.question_id)
+            .where(TaskQuestion.task_id == task.task_id)
+            .order_by(TaskQuestion.sort_num)
+        ).all()
+        per_score = 100.0 / len(task_questions)
+        questions = [
+            _serialize_question(question, session, per_score, include_solution=False)
+            for _, question in task_questions
+        ]
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+
+    return {
+        "assignment": {
+            "id": task.task_id,
+            "title": task.task_name,
+            "courseId": task.course_id,
+            "courseName": course.course_name if course else "",
+            "classId": student.class_id,
+            "className": "",
+            "teacherName": "",
+            "knowledgePoints": list({
+                question["knowledgePoint"]
+                for question in questions
+                if question["knowledgePoint"]
+            }),
+            "questionCount": len(questions),
+            "totalScore": 100,
+            "status": "published",
+            "publishTime": task.publish_time.strftime("%Y-%m-%d %H:%M"),
+            "deadline": task.deadline.strftime("%Y-%m-%d %H:%M"),
+            "questions": questions,
+        },
+        "meta": generated["meta"],
     }

@@ -7,7 +7,6 @@ import {
   buildErrorBookItems,
   isSelfPracticeTask,
   loadLocalErrorBook,
-  SELF_PRACTICE_PREFIX,
 } from '@/utils/errorBookStorage'
 import { judgeAnswer } from '@/utils/exerciseJudge'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion, QuizSubmission } from '@/types'
@@ -117,6 +116,11 @@ export interface GenerateQuizResult {
   }
 }
 
+export interface StartSelfPracticeResult {
+  assignment: QuizAssignment
+  meta: GenerateQuizResult['meta']
+}
+
 /** 保存练习任务参数 */
 export interface SaveQuizAssignmentParams {
   title: string
@@ -139,7 +143,20 @@ export async function generateQuizQuestions(params: GenerateQuizParams): Promise
     questionCount: params.questionCount,
     difficulty: params.difficulty,
     extraRequirements: params.extraRequirements || '',
-  })
+  }, { timeout: 70000 })
+  return res.data
+}
+
+/** 创建学生私人练习，标准答案保留在后端，返回的试卷不含答案与解析 */
+export async function startSelfPractice(params: GenerateQuizParams): Promise<StartSelfPracticeResult> {
+  const res = await request.post('/v1/self-practice/start', {
+    courseId: params.courseId,
+    knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
+    questionTypes: params.questionTypes,
+    questionCount: params.questionCount,
+    difficulty: params.difficulty,
+    extraRequirements: params.extraRequirements || '',
+  }, { timeout: 70000 })
   return res.data
 }
 
@@ -170,10 +187,7 @@ export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssig
 /** 学生自主练习提交参数 */
 export interface SubmitSelfQuizParams {
   studentId: number
-  courseId: number
-  courseName: string
-  knowledgePoints: string[]
-  questions: QuizQuestion[]
+  taskId: number
   answers: Record<number, string | boolean>
 }
 
@@ -201,23 +215,6 @@ function normalizeAnswers(answers: Record<number, string | string[] | boolean>):
     normalized[String(k)] = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v)
   }
   return normalized
-}
-
-/** 按题目顺序将临时 ID 答案映射到入库后的真实 question_id */
-function mapAnswersByIndex(
-  originalQuestions: QuizQuestion[],
-  savedQuestions: QuizQuestion[],
-  answers: Record<number, string | boolean>,
-): Record<number, string | boolean> {
-  const mapped: Record<number, string | boolean> = {}
-  savedQuestions.forEach((sq, idx) => {
-    const orig = originalQuestions[idx]
-    if (!orig) return
-    const ans = answers[orig.id]
-    if (ans === undefined) return
-    mapped[sq.id] = ans
-  })
-  return mapped
 }
 
 /** 前端组装逐题判分详情（客观题规则判分，简答题标记待 AI 结果） */
@@ -296,38 +293,16 @@ export async function submitQuizAnswers(
   return { ...data, details }
 }
 
-/** 学生自主练习：复用现有 answer-tasks + answer-records 接口 */
+/** 学生自主练习：由后端原子化保存任务、映射临时题号并完成判分 */
 export async function submitSelfQuiz(params: SubmitSelfQuizParams): Promise<QuizSubmitResult> {
-  const title = `${SELF_PRACTICE_PREFIX}${new Date().toLocaleString('zh-CN', { hour12: false })}`
-  const task = await saveQuizAssignment({
-    title,
-    courseId: params.courseId,
-    courseName: params.courseName,
-    classId: 0,
-    className: '',
-    teacherName: '学生自学',
-    knowledgePoints: params.knowledgePoints,
-    status: 'published',
-    questions: params.questions,
-  })
-
-  const allTasks = await fetchQuizAssignments()
-  const saved = allTasks.find((t) => t.id === task.id)
-  const savedQuestions = (saved?.questions || []) as QuizQuestion[]
-  if (!savedQuestions.length) {
-    throw new Error('自主练习任务创建失败')
-  }
-
-  const mappedAnswers = mapAnswersByIndex(params.questions, savedQuestions, params.answers)
-  const { data } = await request.post('/v1/answer-records', {
-    task_id: task.id,
-    student_id: params.studentId,
-    answers: normalizeAnswers(mappedAnswers),
-  })
+  const { data } = await request.post('/v1/self-practice/submit', {
+    taskId: params.taskId,
+    answers: normalizeAnswers(params.answers),
+  }, { timeout: 120000 })
 
   const details = buildSubmitDetails(
-    savedQuestions,
-    mappedAnswers,
+    [],
+    params.answers,
     data.correctCount,
     data.manualQuestionIds,
     data.questionResults,
@@ -336,8 +311,6 @@ export async function submitSelfQuiz(params: SubmitSelfQuizParams): Promise<Quiz
   return {
     ...data,
     details,
-    taskId: task.id,
-    taskTitle: title,
   }
 }
 

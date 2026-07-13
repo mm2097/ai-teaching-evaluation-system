@@ -231,7 +231,7 @@ def test_student_cannot_create_teacher_assignment(session):
     assert exc_info.value.status_code == 403
 
 
-def test_student_self_practice_uses_authenticated_creator(session):
+def test_student_cannot_create_self_practice_through_generic_task_api(session):
     request = quiz.SaveAnswerTaskRequest(
         title="【自主练习】红黑树",
         courseId=1,
@@ -245,15 +245,14 @@ def test_student_self_practice_uses_authenticated_creator(session):
         ],
     )
 
-    result = quiz.create_answer_task(
-        request,
-        session=session,
-        current_user=_user(session, 2),
-    )
-    task = session.get(AnswerTask, result["id"])
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.create_answer_task(
+            request,
+            session=session,
+            current_user=_user(session, 2),
+        )
 
-    assert task.create_by == 2
-    assert task.status == 1
+    assert exc_info.value.status_code == 403
 
 
 def test_teacher_assignment_persists_target_class(session):
@@ -351,3 +350,161 @@ def test_student_cannot_submit_closed_task(session):
         )
 
     assert exc_info.value.status_code == 409
+
+
+def _generated_self_practice() -> dict:
+    suffix = str(datetime.now().timestamp())
+    return {
+        "questions": [
+            {
+                "id": -1,
+                "type": "single_choice",
+                "stem": f"自主练习题一-{suffix}",
+                "options": [
+                    {"key": "A", "text": "正确选项"},
+                    {"key": "B", "text": "错误选项"},
+                ],
+                "answer": "A",
+                "explanation": "选择 A",
+                "knowledgePoint": "红黑树",
+            },
+            {
+                "id": -2,
+                "type": "judge",
+                "stem": f"自主练习题二-{suffix}",
+                "answer": "true",
+                "explanation": "该说法正确",
+                "knowledgePoint": "红黑树",
+            },
+        ],
+        "meta": {"model": "test-model", "elapsedMs": 10},
+    }
+
+
+def _create_open_self_practice(session) -> AnswerTask:
+    task = _create_task(session, [1])
+    task.task_name = f"【自主练习】{datetime.now().timestamp()}"
+    task.create_by = 2
+    session.add(task)
+    session.commit()
+    return task
+
+
+def test_student_self_practice_start_hides_solutions_and_submit_uses_saved_answers(
+    session, monkeypatch
+):
+    generated = _generated_self_practice()
+    monkeypatch.setattr(
+        quiz,
+        "generate_exercises_proxy",
+        lambda *args, **kwargs: generated,
+    )
+
+    started = quiz.start_self_practice(
+        quiz.GenerateExercisesRequest(
+            courseId=1,
+            knowledgePoints=["红黑树"],
+            questionTypes=["single_choice", "judge"],
+            questionCount=2,
+        ),
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assignment = started["assignment"]
+    question_ids = [question["id"] for question in assignment["questions"]]
+
+    assert assignment["title"].startswith("【自主练习】")
+    assert all(question["answer"] == "" for question in assignment["questions"])
+    assert all(question["explanation"] == "" for question in assignment["questions"])
+    persisted_questions = [session.get(AiQuestion, question_id) for question_id in question_ids]
+    assert [question.correct_answer for question in persisted_questions] == ["A", "true"]
+
+    result = quiz.submit_self_practice(
+        quiz.SelfPracticeSubmitRequest(
+            taskId=assignment["id"],
+            answers={str(question_ids[0]): "A", str(question_ids[1]): "false"},
+        ),
+        session=session,
+        current_user=_user(session, 2),
+    )
+
+    task = session.get(AnswerTask, result["taskId"])
+    records = session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.task_id == result["taskId"],
+        )
+    ).all()
+    assert task.create_by == 2
+    assert task.status == 2
+    assert result["score"] == 50
+    assert result["correctCount"] == 1
+    assert len(records) == 2
+    assert {record.student_id for record in records} == {1}
+    assert {record.question_id for record in records} == set(question_ids)
+    assert len(result["questionResults"]) == 2
+    assert result["questionResults"][0]["question"]["answer"] == "A"
+
+
+def test_teacher_cannot_submit_self_practice(session):
+    task = _create_open_self_practice(session)
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.submit_self_practice(
+            quiz.SelfPracticeSubmitRequest(taskId=task.task_id, answers={"1": "C"}),
+            session=session,
+            current_user=_user(session, 1),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_self_practice_cannot_be_submitted_through_generic_answer_api(session):
+    task = _create_open_self_practice(session)
+
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.submit_answers(
+            quiz.SubmitAnswersRequest(
+                task_id=task.task_id,
+                student_id=1,
+                answers={"1": "C"},
+            ),
+            session=session,
+            current_user=_user(session, 2),
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+def test_student_cannot_submit_another_students_self_practice(session):
+    task = _create_open_self_practice(session)
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.submit_self_practice(
+            quiz.SelfPracticeSubmitRequest(taskId=task.task_id, answers={"1": "C"}),
+            session=session,
+            current_user=_user(session, 3),
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_self_practice_rolls_back_task_when_grading_fails(session, monkeypatch):
+    task = _create_open_self_practice(session)
+
+    def fail_grading(*args, **kwargs):
+        raise RuntimeError("grading failed")
+
+    monkeypatch.setattr(quiz, "_grade_task_answers", fail_grading)
+    with pytest.raises(RuntimeError, match="grading failed"):
+        quiz.submit_self_practice(
+            quiz.SelfPracticeSubmitRequest(taskId=task.task_id, answers={"1": "C"}),
+            session=session,
+            current_user=_user(session, 2),
+        )
+
+    persisted_task = session.get(AnswerTask, task.task_id)
+    assert persisted_task.status == 1
+    assert not session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.student_id == 1,
+        )
+    ).all()

@@ -10,7 +10,7 @@ import {
   fetchStudentQuizzes,
   submitQuizAnswers,
   submitSelfQuiz,
-  generateQuizQuestions,
+  startSelfPractice,
 } from '@/api/quiz'
 import { fetchCourses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
@@ -112,8 +112,7 @@ async function handleGenerateSelfQuiz(): Promise<void> {
   generating.value = true
   generateMeta.value = null
   try {
-    const course = courseOptions.value.find((c) => c.value === selfForm.value.courseId)
-    const genResult = await generateQuizQuestions({
+    const startResult = await startSelfPractice({
       courseId: selfForm.value.courseId,
       classId: userStore.userInfo?.classId || 0,
       knowledgePoints: selfForm.value.knowledgePoints,
@@ -123,30 +122,17 @@ async function handleGenerateSelfQuiz(): Promise<void> {
       extraRequirements: selfForm.value.extraRequirements,
     })
 
-    if (!genResult.questions.length) {
+    if (!startResult.assignment.questions.length) {
       ElMessage.warning('未生成有效题目，请调整参数后重试')
       return
     }
 
-    generateMeta.value = genResult.meta
-    activeQuiz.value = {
-      id: 0,
-      title: '自主练习',
-      courseId: selfForm.value.courseId,
-      courseName: course?.label || '',
-      classId: userStore.userInfo?.classId || 0,
-      className: '',
-      teacherName: '',
-      knowledgePoints: selfForm.value.knowledgePoints,
-      questionCount: genResult.questions.length,
-      totalScore: 100,
-      status: 'published',
-      questions: genResult.questions,
-    }
+    generateMeta.value = startResult.meta
+    activeQuiz.value = startResult.assignment
     quizMode.value = 'self'
-    initAnswers(genResult.questions)
+    initAnswers(startResult.assignment.questions)
     result.value = null
-    ElMessage.success(`已生成 ${genResult.questions.length} 道练习题，请开始作答`)
+    ElMessage.success(`已生成 ${startResult.assignment.questions.length} 道练习题，请开始作答`)
   } catch {
     ElMessage.error('AI 服务暂不可用，请稍后重试')
   } finally {
@@ -240,10 +226,7 @@ async function handleSubmit(): Promise<void> {
     if (quizMode.value === 'self') {
       const submission = await submitSelfQuiz({
         studentId,
-        courseId: activeQuiz.value.courseId,
-        courseName: activeQuiz.value.courseName,
-        knowledgePoints: activeQuiz.value.knowledgePoints,
-        questions: activeQuiz.value.questions,
+        taskId: activeQuiz.value.id,
         answers: answers.value,
       })
       applySubmissionResult(submission)

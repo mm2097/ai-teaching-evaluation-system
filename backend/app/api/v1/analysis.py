@@ -38,6 +38,11 @@ def _check_profile_access(
     if role_code == "admin":
         return
 
+    # 校验学生是否存在（admin 跳过，可查看不存在的 student_id 统一返回 null）
+    target_student = session.get(Student, student_id)
+    if not target_student:
+        raise HTTPException(status_code=404, detail=f"学生不存在（student_id={student_id}）")
+
     # 学生：只能看自己（Analysis.Profile.UserValid.Logined）
     if role_code == "student":
         student = session.exec(

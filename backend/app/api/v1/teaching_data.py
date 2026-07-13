@@ -26,6 +26,7 @@ from app.models import (
     SysUser, Teacher, SysRole,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx
+from app.services.analysis_refresh import refresh_course_analysis
 
 router = APIRouter()
 
@@ -422,6 +423,12 @@ def upload_teaching_data(
             create_by=current_user.user_id,
         )
 
+        # 导入成功后自动刷新课程分析数据
+        # （学情画像、知识点掌握度、学习质量评价、学情预警）
+        analysis_refresh: dict = {}
+        if result.success_count > 0:
+            analysis_refresh = refresh_course_analysis(session, course_id)
+
     finally:
         # 清理临时文件
         if os.path.exists(tmp_path):
@@ -445,6 +452,7 @@ def upload_teaching_data(
             }
             for e in result.errors
         ],
+        "analysisRefresh": analysis_refresh,
     }
 
 

@@ -209,21 +209,57 @@ def get_knowledge_heatmap(
     class_id: int | None = Query(default=None),
     student_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """获取知识点热力图数据。"""
-    # 获取该课程的知识点
+    """获取知识点热力图数据（Analysis.Knowledge）。
+
+    支持班级整体与个人两种视角（Analysis.Knowledge.Compare），
+    返回每知识点掌握分数、等级、模块归属、薄弱清单。
+
+    权限（Analysis.Knowledge.UserValid）：
+    - 管理员和对应课程授课教师可查看班級数据
+    - 学生仅可查看自己的热力图
+    """
+    # 按角色分流权限：学生走自助查询，教师/管理员走课程校验
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+
+    if role_code == "student":
+        student_rec = session.exec(
+            select(Student).where(Student.user_id == current_user.user_id)
+        ).first()
+        if not student_rec:
+            raise HTTPException(status_code=403, detail="当前账号未关联学生信息")
+        if student_id and student_id != student_rec.student_id:
+            raise HTTPException(status_code=403, detail="学生仅可查看自己的知识点热力图")
+        student_id = student_rec.student_id
+    else:
+        _check_course_access(session, current_user, course_id)
+
+    # 获取该课程的知识模块与知识点
     modules = session.exec(
         select(KnowledgeModule).where(KnowledgeModule.course_id == course_id)
     ).all()
     module_ids = [m.module_id for m in modules]
+    module_map = {m.module_id: m.module_name for m in modules}
+    point_module_map: dict[int, int] = {}  # point_id → module_id
+
     points = session.exec(
         select(KnowledgePoint).where(KnowledgePoint.module_id.in_(module_ids))  # type: ignore
     ).all() if module_ids else []
+    for p in points:
+        point_module_map[p.point_id] = p.module_id
+
     kp_names = [p.point_name for p in points]
     kp_ids = [p.point_id for p in points]
 
     if not kp_names:
-        return {"knowledgePoints": [], "students": [], "data": []}
+        return {
+            "knowledgePoints": [], "students": [], "data": [], "levels": [],
+            "pointMeta": [], "moduleSummary": [],
+            "weakPoints": [], "weakModules": [],
+            "levelLabels": {"1": "薄弱", "2": "一般", "3": "良好"},
+        }
 
     # 获取该课程/班级的学生
     if student_id:
@@ -237,52 +273,150 @@ def get_knowledge_heatmap(
             stmt = stmt.where(CourseStudent.student_id.in_(stu_in_class))  # type: ignore
         student_ids = session.exec(stmt).all()
 
-    students_data = []
+    # 批量查询所有掌握度（避免 N+1）
+    all_masteries = session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.course_id == course_id,
+            KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
+        )
+    ).all()
+    # 构建 (student_id, point_id) → score 索引
+    mastery_index: dict[tuple[int, int], float] = {}
+    for m in all_masteries:
+        mastery_index[(m.student_id, m.point_id)] = m.mastery_score
+
     student_names = []
     for sid in student_ids:
         student = session.get(Student, sid)
-        if not student:
-            continue
-        student_names.append(student.real_name)
-        row = []
-        for kp_idx, kpid in enumerate(kp_ids):
-            mastery = session.exec(
-                select(KnowledgeMastery).where(
-                    KnowledgeMastery.course_id == course_id,
-                    KnowledgeMastery.student_id == sid,
-                    KnowledgeMastery.point_id == kpid,
-                )
-            ).first()
-            row.append(kp_idx)
-            row.append(sid)
-            row.append(mastery.mastery_score if mastery else 0)
-            students_data.append(row)
-            row = []  # reset for next point
+        student_names.append(student.real_name if student else "?")
 
-    # 重新构建 data
-    data = []
+    # 辅助：score → (level_code, level_label)
+    def score_level(s: float) -> tuple[int, str]:
+        if s >= 80:
+            return 3, "良好"
+        if s >= 60:
+            return 2, "一般"
+        return 1, "薄弱"
+
+    # 构建 ECharts heatmap data + levels（student_idx 按 student_ids 顺序）
+    data: list[list] = []
+    levels: list[list] = []
     for sid_idx, sid in enumerate(student_ids):
         for kp_idx, kpid in enumerate(kp_ids):
-            mastery = session.exec(
-                select(KnowledgeMastery).where(
-                    KnowledgeMastery.course_id == course_id,
-                    KnowledgeMastery.student_id == sid,
-                    KnowledgeMastery.point_id == kpid,
-                )
-            ).first()
-            data.append([kp_idx, sid_idx, mastery.mastery_score if mastery else 0])
+            score = mastery_index.get((sid, kpid), 0.0)
+            level_code, _ = score_level(score)
+            data.append([kp_idx, sid_idx, score])
+            levels.append([kp_idx, sid_idx, level_code])
 
-    # 班级平均
-    class_avg = []
-    for kp_idx in range(len(kp_ids)):
-        vals = [d[2] for d in data if d[0] == kp_idx]
+    # 班级平均（基于课程/班级全部学生，不受 student_id 筛选影响）
+    # 获取用于计算班级平均的全体学生
+    avg_stmt = select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    if class_id:
+        avg_in_class = session.exec(
+            select(Student.student_id).where(Student.class_id == class_id)
+        ).all()
+        if avg_in_class:
+            avg_stmt = avg_stmt.where(CourseStudent.student_id.in_(avg_in_class))  # type: ignore
+    avg_student_ids = session.exec(avg_stmt).all()
+
+    # 查询全部学生的掌握度用于计算班级平均
+    avg_masteries = session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.course_id == course_id,
+            KnowledgeMastery.student_id.in_(avg_student_ids),  # type: ignore
+        )
+    ).all() if avg_student_ids else []
+    avg_index: dict[tuple[int, int], float] = {}
+    for m in avg_masteries:
+        avg_index[(m.student_id, m.point_id)] = m.mastery_score
+
+    class_avg: list[float] = []
+    for kp_idx, kpid in enumerate(kp_ids):
+        vals = [avg_index.get((sid, kpid), 0.0) for sid in avg_student_ids]
         class_avg.append(round(sum(vals) / len(vals), 1) if vals else 0)
+
+    # ── 新增字段 ──
+
+    # pointMeta：每知识点的元信息（Analysis.Knowledge.Module）
+    point_meta = []
+    for kp_idx, pt in enumerate(points):
+        mid = point_module_map.get(pt.point_id)
+        point_meta.append({
+            "index": kp_idx,
+            "pointId": pt.point_id,
+            "pointName": pt.point_name,
+            "moduleId": mid,
+            "moduleName": module_map.get(mid, "") if mid else "",
+            "classAvg": class_avg[kp_idx] if kp_idx < len(class_avg) else 0,
+            "level": score_level(class_avg[kp_idx])[1] if kp_idx < len(class_avg) else "薄弱",
+        })
+
+    # moduleSummary：模块整体掌握度（Analysis.Knowledge.Module）
+    module_scores: dict[int, list[float]] = {}
+    for kp_idx, pt in enumerate(points):
+        mid = point_module_map.get(pt.point_id)
+        if mid is not None:
+            module_scores.setdefault(mid, []).append(class_avg[kp_idx] if kp_idx < len(class_avg) else 0)
+    module_summary = []
+    for mid, scs in module_scores.items():
+        avg = round(sum(scs) / len(scs), 1) if scs else 0
+        level_label = score_level(avg)[1]
+        module_summary.append({
+            "moduleId": mid,
+            "moduleName": module_map.get(mid, ""),
+            "avgScore": avg,
+            "level": level_label,
+            "weakCount": sum(1 for s in scs if s < 60),
+        })
+
+    # weakPoints：班级薄弱知识点（classAvg < 60）
+    weak_points = [
+        {
+            "pointName": pt.point_name,
+            "moduleName": module_map.get(point_module_map.get(pt.point_id), ""),
+            "classAvg": class_avg[kp_idx] if kp_idx < len(class_avg) else 0,
+        }
+        for kp_idx, pt in enumerate(points)
+        if kp_idx < len(class_avg) and class_avg[kp_idx] < 60
+    ]
+
+    # weakModules：模块整体薄弱（module avg < 60）
+    weak_modules = [
+        m for m in module_summary if m["avgScore"] < 60
+    ]
+
+    # studentDetail：个人视角时的逐知识点对比详情（Analysis.Knowledge.Compare）
+    student_detail = None
+    if student_id and len(student_ids) == 1:
+        student_detail = []
+        for kp_idx, pt in enumerate(points):
+            score = mastery_index.get((student_id, pt.point_id), 0.0)
+            level_code, level_label = score_level(score)
+            avg = class_avg[kp_idx] if kp_idx < len(class_avg) else 0
+            student_detail.append({
+                "pointId": pt.point_id,
+                "pointName": pt.point_name,
+                "moduleName": module_map.get(point_module_map.get(pt.point_id), ""),
+                "score": score,
+                "level": level_label,
+                "levelCode": level_code,
+                "classAvg": avg,
+                "gap": round(score - avg, 1),
+            })
 
     return {
         "knowledgePoints": kp_names,
         "students": student_names,
         "data": data,
         "classAvgByKp": class_avg,
+        # 新增
+        "levels": levels,
+        "pointMeta": point_meta,
+        "moduleSummary": module_summary,
+        "weakPoints": weak_points,
+        "weakModules": weak_modules,
+        "studentDetail": student_detail,
+        "levelLabels": {"1": "薄弱", "2": "一般", "3": "良好"},
     }
 
 

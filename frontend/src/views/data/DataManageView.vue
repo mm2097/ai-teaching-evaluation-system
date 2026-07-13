@@ -8,33 +8,68 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Delete, Document } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchSemesters, fetchDepartments } from '@/api/dict'
-import request from '@/utils/request'
+import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
+import { fetchTeachingData } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
+import { useUserStore } from '@/stores/user'
 import type { LinkedStudentOption, TeachingDataRecord } from '@/types'
 
 const dataFlowStore = useDataFlowStore()
+const userStore = useUserStore()
 const { deptId, majorId, classId, majorOptions, classOptions } = useDictCascade()
 
 const semesterOptions = ref<{ label: string; value: string }[]>([])
 const departmentOptions = ref<{ label: string; value: number; id?: number }[]>([])
-const teachingDataList = ref<any[]>([])
+const courseOptions = ref<{ label: string; value: number }[]>([])
+const courseId = ref<number | undefined>()
+const loading = ref(false)
 const dataTypeLabels: Record<string, string> = { score: '成绩', attendance: '考勤', assignment: '作业' }
+
+async function loadTeachingData(): Promise<void> {
+  if (!courseId.value) {
+    tableData.value = []
+    return
+  }
+  const courseName = courseOptions.value.find((c) => c.value === courseId.value)?.label || ''
+  loading.value = true
+  try {
+    const { list } = await fetchTeachingData(
+      {
+        courseId: courseId.value,
+        dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance'
+          ? query.value.dataType
+          : undefined,
+        pageSize: 200,
+      },
+      courseName,
+    )
+    tableData.value = list
+    if (tableData.value.length) {
+      editForm.value = { ...tableData.value[0]! }
+    }
+  } catch {
+    tableData.value = []
+  } finally {
+    loading.value = false
+  }
+}
 
 onMounted(async () => {
   try {
-    const [semRes, deptRes, dataRes] = await Promise.all([
+    const [semRes, deptRes, courses] = await Promise.all([
       fetchSemesters(),
       fetchDepartments(),
-      request.get('/v1/teaching-data'),
+      fetchCourses({
+        teacherId: userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined,
+      }),
     ])
     semesterOptions.value = semRes.map(s => ({ label: s.semesterName, value: s.semesterCode }))
     departmentOptions.value = deptRes.map(d => ({ label: d.deptName, value: d.id, id: d.id }))
-    teachingDataList.value = dataRes.data?.list ?? dataRes.data ?? []
-    tableData.value = [...teachingDataList.value]
-    if (tableData.value.length) {
-      editForm.value = { ...tableData.value[0]! }
+    courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+    if (courseOptions.value.length) {
+      courseId.value = courseOptions.value[0]!.value
+      await loadTeachingData()
     }
   } catch { /* empty */ }
 })
@@ -100,9 +135,18 @@ const sourceFileOptions = computed(() => {
   return files as string[]
 })
 
+watch(courseId, async () => {
+  currentPage.value = 1
+  await loadTeachingData()
+})
+
 watch([query, deptId, majorId, classId, selectedStudentId], () => {
   currentPage.value = 1
 }, { deep: true })
+
+watch(() => query.value.dataType, async () => {
+  await loadTeachingData()
+})
 
 watch([deptId, majorId, classId], () => {
   if (
@@ -164,6 +208,9 @@ function filterByCurrentFile(): void {
     <div class="content-card">
       <div class="table-toolbar">
         <div class="filter-bar" style="margin-bottom: 0">
+          <el-select v-model="courseId" placeholder="课程" style="width: 200px">
+            <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
+          </el-select>
           <StudentLinkedPicker
             v-model="selectedStudentId"
             :students="studentPickerOptions"
@@ -212,6 +259,7 @@ function filterByCurrentFile(): void {
       </div>
 
       <el-table
+        v-loading="loading"
         :data="pagedData"
         stripe
         border

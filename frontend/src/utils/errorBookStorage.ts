@@ -27,13 +27,14 @@ export function buildErrorBookItems(
     question: QuizQuestion
     correct: boolean
     userAnswer: string | boolean
+    manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
   }[],
 ): ErrorBookItem[] {
   const now = new Date().toLocaleString('zh-CN', { hour12: false })
   return details
-    .filter((d) => !d.correct)
+    .filter((d) => !d.correct && !d.manualRequired)
     .map((d) => ({
       quizQuestion: d.question,
       userAnswer: String(d.userAnswer ?? ''),

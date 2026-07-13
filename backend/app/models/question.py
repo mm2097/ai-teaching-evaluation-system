@@ -51,6 +51,17 @@ class TaskQuestion(SQLModel, table=True):
     create_time: datetime = Field(default_factory=datetime.now)
 
 
+class AnswerTaskClass(SQLModel, table=True):
+    """答题任务的目标班级；没有关联记录表示课程内全部班级。"""
+
+    __tablename__ = "answer_task_class"
+
+    rel_id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="answer_task.task_id", unique=True, index=True)
+    class_id: int = Field(foreign_key="class_info.class_id", index=True)
+    create_time: datetime = Field(default_factory=datetime.now)
+
+
 class StudentAnswerRecord(SQLModel, table=True):
     """学生答题记录表 student_answer_record。"""
 

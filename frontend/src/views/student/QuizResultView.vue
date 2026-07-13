@@ -19,6 +19,7 @@ interface QuestionResult {
   question: QuizQuestion
   userAnswer: string | string[]
   isCorrect: boolean
+  manualRequired?: boolean
   aiScore?: number | null
   aiReason?: string
 }
@@ -29,12 +30,17 @@ const totalScore = ref(0)
 const questionResults = ref<QuestionResult[]>([])
 const correctCount = ref(0)
 const wrongCount = ref(0)
+const pendingCount = ref(0)
 
 const accuracy = computed(() =>
   totalScore.value > 0 ? Math.round((score.value / totalScore.value) * 100) : 0,
 )
 
 const wrongQuestions = computed(() =>
+  questionResults.value.filter((q) => !q.isCorrect && !q.manualRequired),
+)
+
+const reviewQuestions = computed(() =>
   questionResults.value.filter((q) => !q.isCorrect),
 )
 
@@ -77,7 +83,10 @@ onMounted(async () => {
     totalScore.value = result.totalScore
     questionResults.value = result.questionResults
     correctCount.value = questionResults.value.filter((q) => q.isCorrect).length
-    wrongCount.value = questionResults.value.length - correctCount.value
+    pendingCount.value = questionResults.value.filter((q) => q.manualRequired).length
+    wrongCount.value = questionResults.value.filter(
+      (q) => !q.isCorrect && !q.manualRequired,
+    ).length
   } finally {
     loading.value = false
   }
@@ -106,6 +115,9 @@ function backToQuiz(): void {
           <el-icon :size="20" color="#ef4444"><Close /></el-icon>
           <span>错误 {{ wrongCount }} 题</span>
         </div>
+        <div v-if="pendingCount" class="stat-item">
+          <span>待人工批改 {{ pendingCount }} 题</span>
+        </div>
         <div class="stat-item">
           <span class="stat-percent">正确率 {{ accuracy }}%</span>
         </div>
@@ -130,14 +142,14 @@ function backToQuiz(): void {
     </div>
 
     <!-- 错题详情 -->
-    <div v-if="wrongQuestions.length" class="content-card">
+    <div v-if="reviewQuestions.length" class="content-card">
       <div class="content-card__title">
-        错题回顾
-        <span class="wrong-count">共 {{ wrongQuestions.length }} 题</span>
+        {{ pendingCount ? '错题与待批改题目' : '错题回顾' }}
+        <span class="wrong-count">共 {{ reviewQuestions.length }} 题</span>
       </div>
-      <div v-for="(item, idx) in wrongQuestions" :key="item.question.id" class="error-question">
+      <div v-for="(item, idx) in reviewQuestions" :key="item.question.id" class="error-question">
         <div class="eq-header">
-          <span class="eq-num">错题 {{ idx + 1 }}</span>
+          <span class="eq-num">{{ item.manualRequired ? '待批改' : `错题 ${idx + 1}` }}</span>
           <el-tag size="small">{{ typeLabel[item.question.type] }}</el-tag>
           <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
         </div>
@@ -165,16 +177,16 @@ function backToQuiz(): void {
         <div class="eq-answers">
           <div class="eq-my-answer">
             <span class="label">你的答案：</span>
-            <span class="value wrong">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
+            <span class="value" :class="{ wrong: !item.manualRequired }">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
           </div>
-          <div class="eq-correct-answer">
+          <div v-if="!item.manualRequired" class="eq-correct-answer">
             <span class="label">正确答案：</span>
             <span class="value correct">{{ Array.isArray(item.question.answer) ? item.question.answer.join('、') : item.question.answer }}</span>
           </div>
           <!-- 简答题 AI 判分依据 -->
           <div v-if="item.question.type === 'short_answer' && item.aiReason" class="eq-ai-judge">
             <div class="eq-ai-header">
-              <el-tag size="small" type="warning">AI 判分</el-tag>
+              <el-tag size="small" type="warning">{{ item.manualRequired ? '待人工批改' : 'AI 判分' }}</el-tag>
               <span v-if="item.aiScore !== null && item.aiScore !== undefined" class="eq-ai-score">
                 建议分：{{ item.aiScore }} / 10
               </span>

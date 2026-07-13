@@ -15,6 +15,15 @@ import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion, QuizS
 export type QuizAssignmentRecord = QuizAssignment
 export type QuizSubmissionRecord = QuizSubmission
 
+interface QuizQuestionResult {
+  question: QuizQuestion
+  userAnswer: string | string[]
+  isCorrect: boolean
+  manualRequired?: boolean
+  aiScore?: number | null
+  aiReason?: string
+}
+
 /** 答题任务查询参数 */
 export interface QuizAssignmentQuery {
   courseId?: number
@@ -50,11 +59,7 @@ export async function fetchQuizResult(
 ): Promise<{
   score: number
   totalScore: number
-  questionResults: {
-    question: QuizQuestion
-    userAnswer: string | string[]
-    isCorrect: boolean
-  }[]
+  questionResults: QuizQuestionResult[]
 }> {
   if (USE_MOCK) {
     return mockQuizResult(submissionId)
@@ -184,6 +189,7 @@ export interface QuizSubmitResult {
     question: QuizQuestion
     correct: boolean
     userAnswer: string | boolean
+    manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
   }[]
@@ -202,14 +208,14 @@ function mapAnswersByIndex(
   originalQuestions: QuizQuestion[],
   savedQuestions: QuizQuestion[],
   answers: Record<number, string | boolean>,
-): Record<string, string> {
-  const mapped: Record<string, string> = {}
+): Record<number, string | boolean> {
+  const mapped: Record<number, string | boolean> = {}
   savedQuestions.forEach((sq, idx) => {
     const orig = originalQuestions[idx]
     if (!orig) return
     const ans = answers[orig.id]
     if (ans === undefined) return
-    mapped[String(sq.id)] = typeof ans === 'boolean' ? (ans ? 'true' : 'false') : String(ans)
+    mapped[sq.id] = ans
   })
   return mapped
 }
@@ -219,11 +225,34 @@ export function buildSubmitDetails(
   questions: QuizQuestion[],
   answers: Record<number, string | boolean>,
   backendCorrectCount?: number,
+  manualQuestionIds: number[] = [],
+  backendQuestionResults: QuizQuestionResult[] = [],
 ): QuizSubmitResult['details'] {
+  if (backendQuestionResults.length) {
+    return backendQuestionResults.map((result) => ({
+      question: result.question,
+      correct: result.isCorrect,
+      userAnswer: Array.isArray(result.userAnswer)
+        ? result.userAnswer.join('')
+        : result.userAnswer,
+      manualRequired: result.manualRequired,
+      aiScore: result.aiScore,
+      aiReason: result.aiReason,
+    }))
+  }
+
+  const manualQuestionSet = new Set(manualQuestionIds)
   const details = questions.map((q) => {
     const userAnswer = answers[q.id] ?? ''
     if (q.type === 'short_answer') {
-      return { question: q, correct: false, userAnswer, aiReason: '简答题已由 AI 判分' }
+      const manualRequired = manualQuestionSet.has(q.id)
+      return {
+        question: q,
+        correct: false,
+        userAnswer,
+        manualRequired,
+        aiReason: manualRequired ? 'AI 判分暂不可用，等待人工批改' : '简答题已由 AI 判分',
+      }
     }
     return { question: q, correct: judgeAnswer(q, userAnswer), userAnswer }
   })
@@ -231,7 +260,9 @@ export function buildSubmitDetails(
   // 若后端返回了 correctCount，尝试将简答题对错补齐（按得分差额推断）
   if (backendCorrectCount !== undefined) {
     const objectiveCorrect = details.filter((d) => d.question.type !== 'short_answer' && d.correct).length
-    const shortItems = details.filter((d) => d.question.type === 'short_answer')
+    const shortItems = details.filter(
+      (d) => d.question.type === 'short_answer' && !d.manualRequired,
+    )
     let remaining = backendCorrectCount - objectiveCorrect
     shortItems.forEach((d) => {
       d.correct = remaining > 0
@@ -254,7 +285,13 @@ export async function submitQuizAnswers(
     student_id: studentId,
     answers: normalizeAnswers(answers),
   })
-  const details = buildSubmitDetails(questions, answers as Record<number, string | boolean>, data.correctCount)
+  const details = buildSubmitDetails(
+    questions,
+    answers as Record<number, string | boolean>,
+    data.correctCount,
+    data.manualQuestionIds,
+    data.questionResults,
+  )
   syncWrongAnswersToErrorBook(studentId, details)
   return { ...data, details }
 }
@@ -285,10 +322,16 @@ export async function submitSelfQuiz(params: SubmitSelfQuizParams): Promise<Quiz
   const { data } = await request.post('/v1/answer-records', {
     task_id: task.id,
     student_id: params.studentId,
-    answers: mappedAnswers,
+    answers: normalizeAnswers(mappedAnswers),
   })
 
-  const details = buildSubmitDetails(savedQuestions, params.answers, data.correctCount)
+  const details = buildSubmitDetails(
+    savedQuestions,
+    mappedAnswers,
+    data.correctCount,
+    data.manualQuestionIds,
+    data.questionResults,
+  )
   syncWrongAnswersToErrorBook(params.studentId, details)
   return {
     ...data,

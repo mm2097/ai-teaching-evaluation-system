@@ -51,6 +51,7 @@ const result = ref<{
     question: QuizQuestion
     correct: boolean
     userAnswer: string | boolean
+    manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
   }[]
@@ -193,6 +194,7 @@ function applySubmissionResult(submission: {
     question: QuizQuestion
     correct: boolean
     userAnswer: string | boolean
+    manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
   }[]
@@ -204,8 +206,13 @@ function applySubmissionResult(submission: {
   }
   ElMessage.success('提交成功')
   if (submission.correctCount !== undefined) {
-    const wrong = (submission.details?.length || 0) - submission.correctCount
-    if (wrong > 0) {
+    const manual = submission.details?.filter((detail) => detail.manualRequired).length || 0
+    const wrong = submission.details?.filter(
+      (detail) => !detail.correct && !detail.manualRequired,
+    ).length || 0
+    if (manual > 0) {
+      ElMessage.info(`答对 ${submission.correctCount} 题，答错 ${wrong} 题，${manual} 题待人工批改`)
+    } else if (wrong > 0) {
       ElMessage.info(`答对 ${submission.correctCount} 题，${wrong} 道错题已加入错题本`)
     } else {
       ElMessage.info(`全部答对，共 ${submission.correctCount} 题`)
@@ -257,11 +264,17 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct).length ?? 0)
+const wrongCount = computed(
+  () => result.value?.details.filter((d) => !d.correct && !d.manualRequired).length ?? 0,
+)
+const manualCount = computed(
+  () => result.value?.details.filter((d) => d.manualRequired).length ?? 0,
+)
 
 const resultSubtitle = computed(() => {
-  const correct = (result.value?.details.length ?? 0) - wrongCount.value
-  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题 · 结果已同步至知识点掌握度`
+  const correct = (result.value?.details.length ?? 0) - wrongCount.value - manualCount.value
+  const pending = manualCount.value ? `，待人工批改 ${manualCount.value} 题` : ''
+  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题${pending}`
   if (quizMode.value === 'self' && wrongCount.value > 0) {
     return `${base} · 错题已加入错题本`
   }
@@ -393,13 +406,13 @@ const resultSubtitle = computed(() => {
             v-for="(item, idx) in result.details"
             :key="item.question.id"
             class="review-card"
-            :class="{ wrong: !item.correct }"
+            :class="{ wrong: !item.correct && !item.manualRequired }"
           >
             <div class="review-header">
               <span class="q-num">{{ idx + 1 }}.</span>
               <el-tag size="small">{{ exerciseTypeLabels[item.question.type] }}</el-tag>
-              <el-tag :type="item.correct ? 'success' : 'danger'" size="small">
-                {{ item.correct ? '正确' : '错误' }}
+              <el-tag :type="item.manualRequired ? 'warning' : item.correct ? 'success' : 'danger'" size="small">
+                {{ item.manualRequired ? '待批改' : item.correct ? '正确' : '错误' }}
               </el-tag>
               <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
             </div>
@@ -407,12 +420,12 @@ const resultSubtitle = computed(() => {
             <p class="answer-line">
               你的答案：<strong>{{ formatAnswer(item.question, item.userAnswer) }}</strong>
             </p>
-            <p v-if="!item.correct" class="answer-line correct">
+            <p v-if="!item.correct && !item.manualRequired" class="answer-line correct">
               正确答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
             </p>
             <div v-if="item.question.type === 'short_answer' && item.aiReason" class="ai-judge">
               <div class="ai-judge__header">
-                <el-tag size="small" type="warning">AI 判分</el-tag>
+                <el-tag size="small" type="warning">{{ item.manualRequired ? '待人工批改' : 'AI 判分' }}</el-tag>
                 <span v-if="item.aiScore !== null && item.aiScore !== undefined" class="ai-score">
                   得分：{{ item.aiScore }} / 10
                 </span>

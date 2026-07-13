@@ -72,7 +72,8 @@ request.interceptors.request.use(
 request.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const isLoginRequest = error.config?.url === '/login'
+    if (error.response?.status === 401 && !isLoginRequest) {
       ElMessage.error('登录已过期，请重新登录')
       router.push('/login')
     }

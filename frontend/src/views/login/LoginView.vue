@@ -25,8 +25,8 @@ const loading = ref(false)
 /** 演示账号列表（与 backend seed 数据一致） */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
-  { username: 'teacher', role: '任课教师' },
-  { username: 'student', role: '学生用户' },
+  { username: 'teacher1', role: '任课教师' },
+  { username: 'stu01', role: '学生用户' },
 ]
 
 /**

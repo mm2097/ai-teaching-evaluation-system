@@ -4,3 +4,5 @@ loguru
 sqlmodel
 pydantic-settings
 pyjwt
+httpx
+chromadb

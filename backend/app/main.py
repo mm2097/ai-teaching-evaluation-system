@@ -21,6 +21,7 @@ from app.api.v1.question_bank import router as question_bank_router
 from app.api.v1.judge import router as judge_router
 from app.api.v1.agent import router as agent_router
 from app.api.v1.report import router as report_router
+from app.api.v1.vector_admin import router as vector_admin_router
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -31,6 +32,16 @@ async def lifespan(app: FastAPI):
     # 启动:初始化日志 + 建表
     setup_logging()
     init_db()
+    # 向量索引初始化（空则全量同步，非阻塞）
+    try:
+        from sqlmodel import Session
+        from app.core.database import engine
+        from app.services.rag_service import get_rag_service
+        with Session(engine) as s:
+            get_rag_service().init_if_empty(s)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(f"向量索引初始化跳过: {e}")
     yield
 
 
@@ -67,3 +78,4 @@ app.include_router(question_bank_router, prefix="/api/v1", tags=["题库管理"]
 app.include_router(judge_router, prefix="/api/v1", tags=["AI 判题"])
 app.include_router(agent_router, prefix="/api/v1", tags=["AI Agent"])
 app.include_router(report_router, prefix="/api/v1", tags=["报告生成"])
+app.include_router(vector_admin_router, prefix="/api/v1", tags=["向量索引"])

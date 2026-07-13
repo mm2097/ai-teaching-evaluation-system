@@ -48,6 +48,16 @@ def _difficulty_str(score: int) -> str:
     return "hard"
 
 
+def _sync_vector(session: Session, course_id: int, question_id: int, action: str = "upsert") -> None:
+    """增量同步单题到向量索引（失败不影响主流程）。"""
+    try:
+        from app.services.rag_service import get_rag_service
+        get_rag_service().sync_question(session, course_id, question_id, action)
+    except Exception as e:  # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).warning(f"向量索引同步失败 ({action} {question_id}): {e}")
+
+
 # ===== 请求/响应模型 =====
 
 class AddQuestionItem(BaseModel):
@@ -232,6 +242,18 @@ def add_questions_to_bank(
         added += 1
 
     session.commit()
+    # 向量索引增量同步：提交后获取新 ID 再同步
+    if added:
+        # 查最新插入的题目
+        from sqlmodel import select as _select
+        recent_qs = session.exec(
+            _select(AiQuestion)
+            .where(AiQuestion.course_id == req.questions[0].courseId if req.questions else 0)
+            .order_by(AiQuestion.question_id.desc())
+            .limit(added)
+        ).all()
+        for rq in recent_qs:
+            _sync_vector(session, rq.course_id, rq.question_id, "upsert")
     return {"added": added, "skipped": skipped}
 
 
@@ -318,6 +340,7 @@ def update_question(
 
     session.add(q)
     session.commit()
+    _sync_vector(session, q.course_id, q.question_id, "upsert")
     return {"id": q.question_id, "message": "更新成功"}
 
 
@@ -331,6 +354,8 @@ def delete_question(
     if not q:
         raise HTTPException(status_code=404, detail="题目不存在")
 
+    course_id = q.course_id
+
     # 清理 task_question 关联
     from app.models import TaskQuestion
     links = session.exec(
@@ -341,6 +366,7 @@ def delete_question(
 
     session.delete(q)
     session.commit()
+    _sync_vector(session, course_id, question_id, "delete")
     return {"id": question_id, "message": "已删除"}
 
 
@@ -436,6 +462,17 @@ def import_questions_from_file(
         added += 1
 
     session.commit()
+    # 向量索引增量同步
+    if added:
+        from sqlmodel import select as _select
+        recent_qs = session.exec(
+            _select(AiQuestion)
+            .where(AiQuestion.course_id == req.courseId)
+            .order_by(AiQuestion.question_id.desc())
+            .limit(added)
+        ).all()
+        for rq in recent_qs:
+            _sync_vector(session, rq.course_id, rq.question_id, "upsert")
     return {"imported": added, "skipped": skipped}
 
 
@@ -524,4 +561,15 @@ def import_questions_from_builtin(
         added += 1
 
     session.commit()
+    # 向量索引增量同步
+    if added:
+        from sqlmodel import select as _select
+        recent_qs = session.exec(
+            _select(AiQuestion)
+            .where(AiQuestion.course_id == req.courseId)
+            .order_by(AiQuestion.question_id.desc())
+            .limit(added)
+        ).all()
+        for rq in recent_qs:
+            _sync_vector(session, rq.course_id, rq.question_id, "upsert")
     return {"imported": added, "skipped": skipped}

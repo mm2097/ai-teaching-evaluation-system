@@ -11,10 +11,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
+import json
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
@@ -508,75 +509,48 @@ def _retrieve_reference_questions(
     knowledge_points: list[str],
     difficulty: str,
     top_k: int = 5,
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     """从题库按知识点+难度检索相似题作为 RAG 参考样本。
 
-    检索策略：
-        1. 按知识点名称匹配 KnowledgePoint → 拿 point_id 列表
-        2. 查 AiQuestion：course_id + point_id IN (...) + difficulty
-        3. 不足时跨知识点补充（同课程任意知识点，同难度）
-    返回：[{type, stem, options, answer, explanation, knowledge_point, difficulty}]
+    委托 RagService（向量检索优先，回退 SQL）。
+    返回：(reference_questions, rag_references)
+        - reference_questions: 注入 LLM prompt 的参考题
+        - rag_references: 返回前端的匹配信息（题号/相似度/知识点）
     """
-    import json as _json
+    from app.services.rag_service import get_rag_service
 
-    # 步骤 1：按知识点名称找 point_id
-    point_ids: list[int] = []
-    if knowledge_points:
-        kps = session.exec(
-            select(KnowledgePoint)
-            .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
-            .where(
-                KnowledgeModule.course_id == course_id,
-                KnowledgePoint.point_name.in_(knowledge_points),
-            )
-        ).all()
-        point_ids = [kp.point_id for kp in kps]
+    rag = get_rag_service()
+    refs = rag.retrieve_reference_questions(session, course_id, knowledge_points, difficulty, top_k)
 
-    # 步骤 2：精确匹配（知识点 + 难度）
-    matched: list[AiQuestion] = []
-    if point_ids:
-        matched = list(session.exec(
-            select(AiQuestion).where(
-                AiQuestion.course_id == course_id,
-                AiQuestion.point_id.in_(point_ids),
-                AiQuestion.difficulty == difficulty,
-            ).limit(top_k)
-        ).all())
+    # 构建 rag_references（前端展示用）
+    rag_references = []
+    for item in refs:
+        qid_str = item.get("_question_id", "")
+        sim_str = item.get("_similarity", "0")
+        try:
+            qid = int(qid_str) if qid_str else 0
+        except (ValueError, TypeError):
+            qid = 0
+        try:
+            sim = float(sim_str)
+        except (ValueError, TypeError):
+            sim = 0.0
+        if qid > 0 and sim > 0:
+            rag_references.append({
+                "questionId": qid,
+                "stem": item.get("stem", "")[:60],
+                "similarity": round(sim, 4),
+                "knowledgePoint": item.get("knowledge_point", ""),
+                "difficulty": item.get("difficulty", difficulty),
+            })
 
-    # 步骤 3：不足时跨知识点补充（同课程，同难度）
-    if len(matched) < top_k:
-        existing_ids = {q.question_id for q in matched}
-        extra = list(session.exec(
-            select(AiQuestion).where(
-                AiQuestion.course_id == course_id,
-                AiQuestion.difficulty == difficulty,
-                ~AiQuestion.question_id.in_(existing_ids) if existing_ids else True,
-            ).limit(top_k - len(matched))
-        ).all())
-        matched.extend(extra)
+    # 清理内部字段，返回干净格式
+    clean_refs = []
+    for item in refs:
+        clean = {k: v for k, v in item.items() if not k.startswith("_")}
+        clean_refs.append(clean)
 
-    # 组装返回
-    result = []
-    for q in matched[:top_k]:
-        kp = session.get(KnowledgePoint, q.point_id)
-        # 解析 options
-        options_text = ""
-        if q.options:
-            try:
-                opts = _json.loads(q.options)
-                options_text = "；".join(opts) if isinstance(opts, list) else str(opts)
-            except (ValueError, TypeError):
-                options_text = q.options or ""
-        result.append({
-            "type": _TYPE_MAP.get(q.type, "single_choice"),
-            "stem": q.content,
-            "options": options_text,
-            "answer": q.correct_answer,
-            "explanation": q.analysis or "",
-            "knowledge_point": kp.point_name if kp else "",
-            "difficulty": q.difficulty or "medium",
-        })
-    return result
+    return clean_refs, rag_references
 
 
 class GenerateExercisesRequest(BaseModel):
@@ -585,8 +559,53 @@ class GenerateExercisesRequest(BaseModel):
     knowledgePoints: list[str] = []
     questionTypes: list[str] = []
     questionCount: int = 5
-    difficulty: str = "medium"
+    difficulty: str = "medium"  # 单一难度（兼容旧前端）
+    difficultyDistribution: dict[str, int] | None = None  # {"easy": 2, "medium": 2, "hard": 1}
     extraRequirements: str = ""
+
+
+def _distribute_question_types(total: int, types: list[str]) -> dict[str, int]:
+    """将 total 道题均匀分配到各题型。"""
+    type_map: dict[str, int] = {}
+    if not types:
+        types = ["single_choice"]
+    for i in range(total):
+        t = types[i % len(types)]
+        type_map[t] = type_map.get(t, 0) + 1
+    return type_map
+
+
+def _call_algo_generate(
+    course_id: int,
+    course_name: str,
+    knowledge_points: list[str],
+    difficulty: str,
+    question_types_map: dict[str, int],
+    reference_questions: list[dict],
+    extra_requirements: str,
+) -> list[dict]:
+    """调用一次算法服务生成题目，返回 raw questions 列表。"""
+    payload = {
+        "course_id": course_id,
+        "course_name": course_name,
+        "knowledge_points": knowledge_points,
+        "difficulty": difficulty,
+        "extra_requirements": extra_requirements,
+        "question_types": question_types_map,
+        "reference_questions": reference_questions,
+    }
+    try:
+        resp = httpx.post("http://127.0.0.1:8001/generate_exercises", json=payload, timeout=60.0)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("questions", [])
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="AI 算法服务未启动（8001 端口）")
+    except httpx.HTTPStatusError as e:
+        detail = e.response.text[:200] if e.response.text else "AI 服务错误"
+        raise HTTPException(status_code=503, detail=f"AI 服务错误: {detail}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail=f"算法服务不可达: {e}")
 
 
 @router.post("/exercises/generate", tags=["AI 出题"])
@@ -596,57 +615,62 @@ def generate_exercises_proxy(
 ) -> dict:
     """代理调用算法服务 8001 的 /generate_exercises。
 
-    将响应转换为前端 QuizQuestion[] 格式。
+    支持两种模式：
+    1. 难度分布模式（推荐）：req.difficultyDistribution = {easy, medium, hard}
+       按每种难度分别调用，合并结果。
+    2. 单一难度模式（兼容旧前端）：req.difficulty + req.questionCount 一次调用。
     """
     # 查课程名
     course = session.get(Course, req.courseId)
     course_name = course.course_name if course else "未知课程"
 
-    # 按题型分布：均匀分配
-    type_map = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0, "short_answer": 0}
+    knowledge_points = req.knowledgePoints or ["综合"]
     types = req.questionTypes or ["single_choice"]
-    for i in range(req.questionCount):
-        t = types[i % len(types)]
-        if t in type_map:
-            type_map[t] += 1
+    extra = req.extraRequirements or ""
 
-    # RAG 检索：从题库拉参考题注入 prompt（题库为空时返回空列表，算法服务回退纯 LLM）
-    reference_questions = _retrieve_reference_questions(
-        session, req.courseId, req.knowledgePoints or [], req.difficulty
-    )
+    # 收集 RAG 参考（合并各难度的检索结果，去重）
+    rag_references: list[dict] = []
+    seen_qids: set[int] = set()
 
-    payload = {
-        "course_id": req.courseId,
-        "course_name": course_name,
-        "knowledge_points": req.knowledgePoints or ["综合"],
-        "difficulty": req.difficulty,
-        "extra_requirements": req.extraRequirements,
-        "question_types": type_map,
-        "reference_questions": reference_questions,
-    }
+    raw_questions: list[dict] = []
 
-    try:
-        resp = httpx.post(
-            "http://127.0.0.1:8001/generate_exercises",
-            json=payload,
-            timeout=60.0,
+    if req.difficultyDistribution:
+        # ===== 难度分布模式：按 easy/medium/hard 分别生成 =====
+        for difficulty, count in req.difficultyDistribution.items():
+            if not count or count <= 0:
+                continue
+            type_map = _distribute_question_types(count, types)
+            ref_qs, ref_metas = _retrieve_reference_questions(
+                session, req.courseId, req.knowledgePoints or [], difficulty
+            )
+            for r in ref_metas:
+                if r.get("questionId") not in seen_qids:
+                    seen_qids.add(r.get("questionId"))
+                    rag_references.append(r)
+            batch = _call_algo_generate(
+                req.courseId, course_name, knowledge_points, difficulty,
+                type_map, ref_qs, extra,
+            )
+            # 记录每题的目标难度（LLM 可能不遵守，后处理强制覆盖）
+            raw_questions.extend((difficulty, q) for q in batch)
+    else:
+        # ===== 单一难度模式（兼容旧前端）=====
+        type_map = _distribute_question_types(req.questionCount, types)
+        ref_qs, rag_references = _retrieve_reference_questions(
+            session, req.courseId, req.knowledgePoints or [], req.difficulty
         )
-        resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
-    except httpx.ConnectError:
-        raise HTTPException(status_code=503, detail="AI 算法服务未启动（8001 端口）")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.text[:200] if e.response.text else "AI 服务错误"
-        raise HTTPException(status_code=503, detail=f"AI 服务错误: {detail}")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"算法服务不可达: {e}")
+        batch = _call_algo_generate(
+            req.courseId, course_name, knowledge_points, req.difficulty,
+            type_map, ref_qs, extra,
+        )
+        raw_questions.extend((req.difficulty, q) for q in batch)
 
-    # 转换为前端 QuizQuestion 格式
+    # 转换为前端 QuizQuestion 格式（强制使用请求的难度）
     questions = []
-    raw_questions = data.get("questions", [])
-    for idx, q in enumerate(raw_questions):
+    total = max(len(raw_questions), 1)
+    for idx, (target_difficulty, q) in enumerate(raw_questions):
         questions.append({
-            "id": -(idx + 1),  # 负数 ID 标记为未入库
+            "id": -(idx + 1),
             "courseId": req.courseId,
             "type": q.get("type", "single_choice"),
             "stem": q.get("stem", ""),
@@ -654,18 +678,123 @@ def generate_exercises_proxy(
             "answer": q.get("answer", ""),
             "answerList": q.get("answer_list"),
             "explanation": q.get("explanation", ""),
-            "difficulty": q.get("difficulty", req.difficulty),
+            "difficulty": target_difficulty,  # 强制覆盖：用请求的难度，不信 LLM 返回
             "knowledgePoint": q.get("knowledge_point", ""),
-            "score": round(100.0 / max(len(raw_questions), 1), 1),
+            "score": round(100.0 / total, 1),
             "status": "draft",
             "source": "ai",
         })
 
-    meta_raw = data.get("meta", {})
     return {
         "questions": questions,
+        "ragReferences": rag_references,
         "meta": {
-            "model": meta_raw.get("model", "unknown"),
-            "elapsedMs": meta_raw.get("elapsed_ms", 0),
+            "model": "deepseek-chat",
+            "elapsedMs": 0,
         },
     }
+
+
+def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str, total: int) -> dict:
+    """将算法服务返回的 raw question 转为前端格式。"""
+    return {
+        "id": -(idx + 1),
+        "courseId": course_id,
+        "type": q.get("type", "single_choice"),
+        "stem": q.get("stem", ""),
+        "options": q.get("options"),
+        "answer": q.get("answer", ""),
+        "answerList": q.get("answer_list"),
+        "explanation": q.get("explanation", ""),
+        "difficulty": q.get("difficulty", difficulty_fallback),
+        "knowledgePoint": q.get("knowledge_point", ""),
+        "score": round(100.0 / max(total, 1), 1),
+        "status": "draft",
+        "source": "ai",
+    }
+
+
+@router.post("/exercises/generate/stream", tags=["AI 出题"])
+def generate_exercises_stream(
+    req: GenerateExercisesRequest,
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """SSE 流式生成：按难度逐批调用算法服务，每批完成后立即推送给前端。
+
+    事件格式（data: JSON\\n\\n）：
+      {"type": "stage", "stage": "searching"|"generating", "difficulty": "easy"}
+      {"type": "question", "question": {...}}
+      {"type": "done", "ragReferences": [...], "totalCount": N}
+      {"type": "error", "message": "..."}
+    """
+    course = session.get(Course, req.courseId)
+    course_name = course.course_name if course else "未知课程"
+    knowledge_points = req.knowledgePoints or ["综合"]
+    types = req.questionTypes or ["single_choice"]
+    extra = req.extraRequirements or ""
+
+    def _sse(data: dict) -> str:
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def event_stream():
+        all_questions: list[dict] = []
+        rag_references: list[dict] = []
+        seen_qids: set[int] = set()
+        qidx = 0
+
+        try:
+            # 构建生成计划：[(difficulty, count), ...]
+            if req.difficultyDistribution:
+                plan = [(d, c) for d, c in req.difficultyDistribution.items() if c and c > 0]
+            else:
+                plan = [(req.difficulty, req.questionCount)]
+
+            total_planned = sum(c for _, c in plan)
+
+            for difficulty, count in plan:
+                # 推送阶段事件
+                yield _sse({"type": "stage", "stage": "generating", "difficulty": difficulty})
+
+                type_map = _distribute_question_types(count, types)
+                ref_qs, ref_metas = _retrieve_reference_questions(
+                    session, req.courseId, req.knowledgePoints or [], difficulty
+                )
+                for r in ref_metas:
+                    qid = r.get("questionId")
+                    if qid not in seen_qids:
+                        seen_qids.add(qid)
+                        rag_references.append(r)
+
+                batch = _call_algo_generate(
+                    req.courseId, course_name, knowledge_points, difficulty,
+                    type_map, ref_qs, extra,
+                )
+
+                # 逐题推送
+                for q in batch:
+                    question = _raw_to_question(q, qidx, req.courseId, difficulty, total_planned)
+                    all_questions.append(question)
+                    qidx += 1
+                    yield _sse({"type": "question", "question": question})
+
+            # 重算分数
+            total = max(len(all_questions), 1)
+            for q in all_questions:
+                q["score"] = round(100.0 / total, 1)
+
+            yield _sse({
+                "type": "done",
+                "ragReferences": rag_references,
+                "totalCount": len(all_questions),
+            })
+
+        except HTTPException as e:
+            yield _sse({"type": "error", "message": e.detail})
+        except Exception as e:
+            yield _sse({"type": "error", "message": str(e)})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

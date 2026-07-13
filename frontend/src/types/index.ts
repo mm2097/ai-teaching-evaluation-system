@@ -503,3 +503,15 @@ export interface EvalResult {
   dimensions: { name: string; score: number; weight: number }[]
   rank?: number
 }
+
+/** RAG 参考题匹配信息（向量检索返回） */
+export interface RagReference {
+  questionId: number
+  stem: string
+  similarity: number
+  knowledgePoint: string
+  difficulty: DifficultyLevel
+}
+
+/** 逐题审核状态 */
+export type ReviewStatus = 'pending' | 'accepted' | 'rejected' | 'edited'

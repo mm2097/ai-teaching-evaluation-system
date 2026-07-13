@@ -2,7 +2,7 @@
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
 import request, { USE_MOCK } from '@/utils/request'
-import type { DifficultyLevel, ExerciseType, QuizQuestion } from '@/types'
+import type { DifficultyLevel, ExerciseType, QuizQuestion, RagReference } from '@/types'
 
 export interface QuizAssignmentRecord {
   id: number
@@ -107,13 +107,15 @@ export interface GenerateQuizParams {
   knowledgePoints: string[]
   questionTypes: ExerciseType[]
   questionCount: number
-  difficulty: DifficultyLevel
+  difficulty?: DifficultyLevel  // 兼容旧前端单一难度
+  difficultyDistribution?: { easy: number; medium: number; hard: number }
   extraRequirements?: string
 }
 
 /** AI 生成练习题响应 */
 export interface GenerateQuizResult {
   questions: QuizQuestion[]
+  ragReferences: RagReference[]
   meta: {
     model: string
     elapsedMs: number
@@ -135,15 +137,84 @@ export interface SaveQuizAssignmentParams {
 
 /** AI 生成练习题（经后端代理调用算法服务 8001） */
 export async function generateQuizQuestions(params: GenerateQuizParams): Promise<GenerateQuizResult> {
-  const res = await request.post('/v1/exercises/generate', {
+  const payload: Record<string, any> = {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
     questionTypes: params.questionTypes,
     questionCount: params.questionCount,
-    difficulty: params.difficulty,
     extraRequirements: params.extraRequirements || '',
+  }
+  // 优先使用难度分布，回退到单一难度（兼容旧前端）
+  if (params.difficultyDistribution) {
+    payload.difficultyDistribution = params.difficultyDistribution
+  } else {
+    payload.difficulty = params.difficulty || 'medium'
+  }
+  const res = await request.post('/v1/exercises/generate', payload)
+  const data = res.data
+  // 向后兼容：旧后端可能不返回 ragReferences
+  if (!data.ragReferences) {
+    data.ragReferences = []
+  }
+  return data
+}
+
+/** SSE 流式生成回调 */
+export interface StreamCallbacks {
+  onStage?: (stage: string, difficulty?: string) => void
+  onQuestion?: (question: QuizQuestion) => void
+  onDone?: (ragReferences: RagReference[], totalCount: number) => void
+  onError?: (message: string) => void
+}
+
+/** SSE 流式生成练习题（逐题推送，前端实时展示） */
+export async function generateQuizStream(params: GenerateQuizParams, callbacks: StreamCallbacks): Promise<void> {
+  const payload: Record<string, any> = {
+    courseId: params.courseId,
+    knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
+    questionTypes: params.questionTypes,
+    questionCount: params.questionCount,
+    extraRequirements: params.extraRequirements || '',
+  }
+  if (params.difficultyDistribution) {
+    payload.difficultyDistribution = params.difficultyDistribution
+  } else {
+    payload.difficulty = params.difficulty || 'medium'
+  }
+
+  const response = await fetch('/api/v1/exercises/generate/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   })
-  return res.data
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => 'AI 服务不可用')
+    callbacks.onError?.(errText)
+    return
+  }
+
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      try {
+        const event = JSON.parse(line.slice(6))
+        if (event.type === 'stage') callbacks.onStage?.(event.stage, event.difficulty)
+        else if (event.type === 'question') callbacks.onQuestion?.(event.question)
+        else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0)
+        else if (event.type === 'error') callbacks.onError?.(event.message || '生成失败')
+      } catch { /* skip malformed */ }
+    }
+  }
 }
 
 /** 保存练习任务（草稿或已发布） */

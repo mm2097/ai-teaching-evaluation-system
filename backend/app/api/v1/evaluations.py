@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 from app.core.database import get_session
 from app.models import (
     StudentEvaluationResult, EvalDimensionScore,
-    Student, Course, EvalDimension,
+    Student, Course, EvalDimension, EvalIndex,
 )
 
 router = APIRouter()
@@ -38,10 +38,16 @@ def list_evaluations(
         dimensions = []
         for ds in dim_scores:
             dim = session.get(EvalDimension, ds.dimension_id)
+            # 从 EvalIndex 读取真实权重
+            indexes = session.exec(
+                select(EvalIndex).where(EvalIndex.dimension_id == ds.dimension_id)
+            ).all()
+            weight_sum = round(sum(i.weight for i in indexes), 1) if indexes else 0
             dimensions.append({
                 "name": dim.dimension_name if dim else "",
+                "dimensionId": ds.dimension_id,
                 "score": ds.dimension_score,
-                "weight": 0,  # 可扩展
+                "weight": weight_sum,
             })
 
         data.append({

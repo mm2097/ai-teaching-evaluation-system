@@ -1,20 +1,46 @@
 <!--
   在线答题页面
-  学生在线作答练习题，系统按规则自动判分并展示解析
+  学生可作答教师布置练习，也可通过 AI 自主出题自学
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Edit, Check } from '@element-plus/icons-vue'
-import { fetchStudentQuizzes, submitQuizAnswers } from '@/api/quiz'
+import { Edit, Check, MagicStick } from '@element-plus/icons-vue'
+import {
+  fetchStudentQuizzes,
+  submitQuizAnswers,
+  submitSelfQuiz,
+  generateQuizQuestions,
+} from '@/api/quiz'
+import { fetchCourses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { exerciseTypeLabels, judgeAnswer } from '@/utils/exerciseJudge'
-import type { QuizAssignment, QuizQuestion } from '@/types'
+import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
 
+/** 列表 Tab：教师布置 / 自主练习 */
+const listTab = ref<'assigned' | 'self'>('assigned')
+
+/** 教师布置练习 */
 const quizList = ref<QuizAssignment[]>([])
 const activeQuiz = ref<QuizAssignment | null>(null)
+const quizMode = ref<'assigned' | 'self'>('assigned')
+
+/** 自主练习配置 */
+const courseOptions = ref<{ label: string; value: number }[]>([])
+const selfForm = ref({
+  courseId: undefined as number | undefined,
+  knowledgePoints: [] as string[],
+  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank'] as ExerciseType[],
+  questionCount: 5,
+  difficulty: 'medium' as DifficultyLevel,
+  extraRequirements: '',
+})
+const generating = ref(false)
+const generateMeta = ref<{ model: string; elapsedMs: number } | null>(null)
+
+/** 作答状态 */
 const answers = ref<Record<number, string | boolean>>({})
 const multiAnswers = ref<Record<number, string[]>>({})
 const submitting = ref(false)
@@ -30,26 +56,107 @@ const result = ref<{
   }[]
 } | null>(null)
 
+const questionTypeOptions = [
+  { label: exerciseTypeLabels.single_choice, value: 'single_choice' as ExerciseType },
+  { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
+  { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
+  { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
+  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
+]
+
+const difficultyOptions = [
+  { label: difficultyLabels.easy, value: 'easy' as DifficultyLevel },
+  { label: difficultyLabels.medium, value: 'medium' as DifficultyLevel },
+  { label: difficultyLabels.hard, value: 'hard' as DifficultyLevel },
+]
+
 onMounted(async () => {
   const studentId = userStore.userInfo?.studentId || 1
-  quizList.value = await fetchStudentQuizzes(studentId)
+  quizList.value = (await fetchStudentQuizzes(studentId)) as QuizAssignment[]
+
+  const courses = await fetchCourses({ deptId: 1, semesterId: 1 })
+  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+  if (courseOptions.value.length) {
+    selfForm.value.courseId = courseOptions.value[0]!.value
+  }
 })
 
-function startQuiz(quiz: QuizAssignment): void {
-  activeQuiz.value = quiz
+function initAnswers(questions: QuizQuestion[]): void {
   answers.value = {}
   multiAnswers.value = {}
-  quiz.questions.forEach((q) => {
+  questions.forEach((q) => {
     if (q.type === 'multi_choice') {
       multiAnswers.value[q.id] = []
     }
   })
+}
+
+function startQuiz(quiz: QuizAssignment): void {
+  activeQuiz.value = quiz
+  quizMode.value = 'assigned'
+  initAnswers(quiz.questions)
   result.value = null
+}
+
+async function handleGenerateSelfQuiz(): Promise<void> {
+  if (!selfForm.value.courseId) {
+    ElMessage.warning('请选择课程')
+    return
+  }
+  if (!selfForm.value.questionTypes.length) {
+    ElMessage.warning('请至少选择一种题型')
+    return
+  }
+
+  generating.value = true
+  generateMeta.value = null
+  try {
+    const course = courseOptions.value.find((c) => c.value === selfForm.value.courseId)
+    const genResult = await generateQuizQuestions({
+      courseId: selfForm.value.courseId,
+      classId: userStore.userInfo?.classId || 0,
+      knowledgePoints: selfForm.value.knowledgePoints,
+      questionTypes: selfForm.value.questionTypes,
+      questionCount: selfForm.value.questionCount,
+      difficulty: selfForm.value.difficulty,
+      extraRequirements: selfForm.value.extraRequirements,
+    })
+
+    if (!genResult.questions.length) {
+      ElMessage.warning('未生成有效题目，请调整参数后重试')
+      return
+    }
+
+    generateMeta.value = genResult.meta
+    activeQuiz.value = {
+      id: 0,
+      title: '自主练习',
+      courseId: selfForm.value.courseId,
+      courseName: course?.label || '',
+      classId: userStore.userInfo?.classId || 0,
+      className: '',
+      teacherName: '',
+      knowledgePoints: selfForm.value.knowledgePoints,
+      questionCount: genResult.questions.length,
+      totalScore: 100,
+      status: 'published',
+      questions: genResult.questions,
+    }
+    quizMode.value = 'self'
+    initAnswers(genResult.questions)
+    result.value = null
+    ElMessage.success(`已生成 ${genResult.questions.length} 道练习题，请开始作答`)
+  } catch {
+    ElMessage.error('AI 服务暂不可用，请稍后重试')
+  } finally {
+    generating.value = false
+  }
 }
 
 function backToList(): void {
   activeQuiz.value = null
   result.value = null
+  quizMode.value = 'assigned'
 }
 
 function syncMultiAnswer(questionId: number): void {
@@ -78,6 +185,34 @@ function formatCorrectAnswer(q: QuizQuestion): string {
   return q.answer
 }
 
+function applySubmissionResult(submission: {
+  score: number
+  totalScore: number
+  correctCount?: number
+  details?: {
+    question: QuizQuestion
+    correct: boolean
+    userAnswer: string | boolean
+    aiScore?: number | null
+    aiReason?: string
+  }[]
+}): void {
+  result.value = {
+    score: submission.score,
+    totalScore: submission.totalScore,
+    details: submission.details || [],
+  }
+  ElMessage.success('提交成功')
+  if (submission.correctCount !== undefined) {
+    const wrong = (submission.details?.length || 0) - submission.correctCount
+    if (wrong > 0) {
+      ElMessage.info(`答对 ${submission.correctCount} 题，${wrong} 道错题已加入错题本`)
+    } else {
+      ElMessage.info(`全部答对，共 ${submission.correctCount} 题`)
+    }
+  }
+}
+
 async function handleSubmit(): Promise<void> {
   if (!activeQuiz.value) return
 
@@ -93,27 +228,27 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   try {
-    const submission = await submitQuizAnswers(
-      activeQuiz.value.id,
-      userStore.userInfo?.studentId || 1,
-      userStore.userInfo?.name || '学生',
-      answers.value,
-    )
-    // 简答题不使用前端 judgeAnswer，标记 correct 为 submission 结果
-    const details = activeQuiz.value.questions.map((q) => ({
-      question: q,
-      correct: q.type === 'short_answer' ? true : judgeAnswer(q, answers.value[q.id]),
-      userAnswer: answers.value[q.id] ?? '',
-      // 简答题的 AI 判分结果会由后端返回，这里先用占位（展示层依赖后端数据）
-    }))
-    result.value = {
-      score: submission.score,
-      totalScore: submission.totalScore,
-      details,
-    }
-    ElMessage.success('提交成功')
-    if (submission.correctCount !== undefined) {
-      ElMessage.info(`答对 ${submission.correctCount} 题`)
+    const studentId = userStore.userInfo?.studentId || 1
+
+    if (quizMode.value === 'self') {
+      const submission = await submitSelfQuiz({
+        studentId,
+        courseId: activeQuiz.value.courseId,
+        courseName: activeQuiz.value.courseName,
+        knowledgePoints: activeQuiz.value.knowledgePoints,
+        questions: activeQuiz.value.questions,
+        answers: answers.value,
+      })
+      applySubmissionResult(submission)
+    } else {
+      const submission = await submitQuizAnswers(
+        activeQuiz.value.id,
+        studentId,
+        userStore.userInfo?.name || '学生',
+        answers.value,
+        activeQuiz.value.questions,
+      )
+      applySubmissionResult(submission)
     }
   } catch {
     ElMessage.error('提交失败，请稍后重试')
@@ -123,31 +258,125 @@ async function handleSubmit(): Promise<void> {
 }
 
 const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct).length ?? 0)
+
+const resultSubtitle = computed(() => {
+  const correct = (result.value?.details.length ?? 0) - wrongCount.value
+  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题 · 结果已同步至知识点掌握度`
+  if (quizMode.value === 'self' && wrongCount.value > 0) {
+    return `${base} · 错题已加入错题本`
+  }
+  return base
+})
 </script>
 
 <template>
   <div class="page-container">
-    <div v-if="!activeQuiz" class="content-card">
-      <div class="content-card__title">待完成练习</div>
-      <el-empty v-if="!quizList.length" description="暂无已发布的练习" />
+    <!-- 列表页：双入口 -->
+    <template v-if="!activeQuiz">
+      <div class="content-card">
+        <div class="content-card__title">在线答题</div>
+        <el-tabs v-model="listTab">
+          <el-tab-pane label="教师布置练习" name="assigned" />
+          <el-tab-pane label="自主出题练习" name="self" />
+        </el-tabs>
 
-      <div v-for="quiz in quizList" :key="quiz.id" class="quiz-card">
-        <div class="quiz-info">
-          <h3>{{ quiz.title }}</h3>
-          <p>{{ quiz.courseName }} · {{ quiz.className }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
-          <div class="quiz-tags">
-            <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">{{ kp }}</el-tag>
+        <!-- 教师布置 -->
+        <div v-if="listTab === 'assigned'">
+          <el-empty v-if="!quizList.length" description="暂无已发布的练习" />
+          <div v-for="quiz in quizList" :key="quiz.id" class="quiz-card">
+            <div class="quiz-info">
+              <h3>{{ quiz.title }}</h3>
+              <p>{{ quiz.courseName }} · {{ quiz.className }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
+              <div class="quiz-tags">
+                <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">{{ kp }}</el-tag>
+              </div>
+              <p v-if="quiz.deadline" class="deadline">截止时间：{{ quiz.deadline }}</p>
+            </div>
+            <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
           </div>
-          <p v-if="quiz.deadline" class="deadline">截止时间：{{ quiz.deadline }}</p>
         </div>
-        <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
-      </div>
-    </div>
 
+        <!-- 自主练习配置 -->
+        <div v-else class="self-quiz-form">
+          <el-alert
+            title="自主出题仅供个人自学使用，不会发布给其他同学；作答结果与教师布置练习一样统计，错题自动加入错题本。"
+            type="info"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 20px"
+          />
+
+          <el-form label-width="100px">
+            <el-form-item label="课程" required>
+              <el-select v-model="selfForm.courseId" placeholder="选择课程" style="width: 100%">
+                <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
+              </el-select>
+            </el-form-item>
+
+            <el-form-item label="知识点">
+              <el-select
+                v-model="selfForm.knowledgePoints"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="输入或选择知识点（可留空）"
+                style="width: 100%"
+              />
+            </el-form-item>
+
+            <el-form-item label="题型" required>
+              <el-checkbox-group v-model="selfForm.questionTypes">
+                <el-checkbox v-for="opt in questionTypeOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </el-checkbox>
+              </el-checkbox-group>
+            </el-form-item>
+
+            <el-form-item label="题量">
+              <el-input-number v-model="selfForm.questionCount" :min="1" :max="20" />
+            </el-form-item>
+
+            <el-form-item label="难度">
+              <el-radio-group v-model="selfForm.difficulty">
+                <el-radio v-for="opt in difficultyOptions" :key="opt.value" :value="opt.value">
+                  {{ opt.label }}
+                </el-radio>
+              </el-radio-group>
+            </el-form-item>
+
+            <el-form-item label="补充要求">
+              <el-input
+                v-model="selfForm.extraRequirements"
+                type="textarea"
+                :rows="2"
+                placeholder="可选：如侧重某章节、避免某类题等"
+              />
+            </el-form-item>
+
+            <el-form-item>
+              <el-button
+                type="primary"
+                :icon="MagicStick"
+                :loading="generating"
+                @click="handleGenerateSelfQuiz"
+              >
+                AI 生成并开始练习
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </div>
+      </div>
+    </template>
+
+    <!-- 作答页 -->
     <div v-else>
       <div class="content-card quiz-header">
-        <el-button link @click="backToList">← 返回列表</el-button>
-        <h2>{{ activeQuiz.title }}</h2>
+        <el-button link @click="backToList">← 返回</el-button>
+        <h2>
+          {{ activeQuiz.title }}
+          <el-tag v-if="quizMode === 'self'" size="small" type="warning" effect="plain">自主练习</el-tag>
+        </h2>
         <span v-if="!result" class="progress">已答 {{ answeredCount }} / {{ activeQuiz.questions.length }}</span>
       </div>
 
@@ -155,7 +384,7 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
         <el-result
           icon="success"
           :title="`得分：${result.score} / ${result.totalScore}`"
-          :sub-title="`答对 ${result.details.length - wrongCount} 题，答错 ${wrongCount} 题 · 结果已同步至知识点掌握度`"
+          :sub-title="resultSubtitle"
         />
 
         <div class="content-card">
@@ -181,7 +410,6 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
             <p v-if="!item.correct" class="answer-line correct">
               正确答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
             </p>
-            <!-- 简答题 AI 判分依据 -->
             <div v-if="item.question.type === 'short_answer' && item.aiReason" class="ai-judge">
               <div class="ai-judge__header">
                 <el-tag size="small" type="warning">AI 判分</el-tag>
@@ -194,12 +422,20 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
             <p v-if="item.question.explanation" class="explanation">解析：{{ item.question.explanation }}</p>
           </div>
           <div class="submit-bar">
-            <el-button type="primary" @click="backToList">返回练习列表</el-button>
+            <el-button v-if="quizMode === 'self'" type="primary" @click="backToList(); listTab = 'self'">
+              继续自主练习
+            </el-button>
+            <el-button v-else type="primary" @click="backToList()">返回练习列表</el-button>
           </div>
         </div>
       </template>
 
       <template v-else>
+        <div v-if="quizMode === 'self' && generateMeta" class="content-card meta-bar">
+          <el-tag size="small" type="info">AI 模型：{{ generateMeta.model }}</el-tag>
+          <el-tag size="small">生成耗时：{{ generateMeta.elapsedMs }} ms</el-tag>
+        </div>
+
         <div v-for="(q, idx) in activeQuiz.questions" :key="q.id" class="content-card question-block">
           <div class="q-title">
             <span class="q-num">{{ idx + 1 }}.</span>
@@ -271,13 +507,31 @@ const wrongCount = computed(() => result.value?.details.filter((d) => !d.correct
   .deadline { font-size: 12px; color: #ef4444; }
 }
 
+.self-quiz-form {
+  max-width: 640px;
+  padding-top: 8px;
+}
+
 .quiz-header {
   display: flex;
   align-items: center;
   gap: 16px;
 
-  h2 { flex: 1; font-size: 18px; margin: 0; }
+  h2 {
+    flex: 1;
+    font-size: 18px;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .progress { color: #64748b; font-size: 14px; }
+}
+
+.meta-bar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
 }
 
 .question-block {

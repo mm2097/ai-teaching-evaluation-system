@@ -2,7 +2,15 @@
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
 import request, { USE_MOCK } from '@/utils/request'
-import type { DifficultyLevel, ExerciseType, QuizQuestion } from '@/types'
+import {
+  appendLocalErrorBook,
+  buildErrorBookItems,
+  isSelfPracticeTask,
+  loadLocalErrorBook,
+  SELF_PRACTICE_PREFIX,
+} from '@/utils/errorBookStorage'
+import { judgeAnswer } from '@/utils/exerciseJudge'
+import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 export interface QuizAssignmentRecord {
   id: number
@@ -15,6 +23,8 @@ export interface QuizAssignmentRecord {
   deadline: string
   submittedCount: number
   averageScore: number
+  status?: string
+  questions?: QuizQuestion[]
 }
 
 export interface QuizSubmissionRecord {
@@ -73,29 +83,35 @@ export async function fetchQuizResult(
   if (USE_MOCK) {
     return mockQuizResult(submissionId)
   }
-  // 真实后端路径（预留）
   const res = await request.get('/v1/answer-records/' + submissionId)
   return res.data
 }
 
-/** 错题本（按学生聚合所有已提交练习的错题） */
-export async function fetchErrorBook(studentId: number): Promise<{
+/** 错题本条目 */
+export interface ErrorBookItem {
   quizQuestion: QuizQuestion
   userAnswer: string | string[]
   correctAnswer: string | string[]
   submitTime: string
   knowledgePoint: string
-}[]> {
+  aiScore?: number | null
+  aiReason?: string
+}
+
+/** 错题本（本地存储，聚合教师布置 + 自主练习错题） */
+export async function fetchErrorBook(studentId: number): Promise<ErrorBookItem[]> {
   if (USE_MOCK) {
     return mockErrorBook(studentId)
   }
-  // 真实后端路径（预留）
-  try {
-    const res = await request.get('/v1/answer-records', { params: { student_id: studentId } })
-    return res.data
-  } catch {
-    return []
-  }
+  return loadLocalErrorBook(studentId)
+}
+
+/** 提交后将错题写入本地错题本 */
+export function syncWrongAnswersToErrorBook(
+  studentId: number,
+  details: QuizSubmitResult['details'],
+): void {
+  appendLocalErrorBook(studentId, buildErrorBookItems(details))
 }
 
 // ===== QuizManageView 使用的接口 =====
@@ -162,130 +178,245 @@ export async function closeQuizAssignment(id: number): Promise<void> {
   await request.post(`/v1/answer-tasks/${id}/close`)
 }
 
-/** 获取学生的答题任务列表 */
-export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssignmentRecord[]> {
-  return fetchQuizAssignments()
+/** 获取学生的答题任务列表（前端过滤：仅已发布、非自主练习） */
+export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssignment[]> {
+  const tasks = await fetchQuizAssignments()
+  return tasks.filter(
+    (t) => t.status === 'published' && !isSelfPracticeTask(t.title),
+  ) as QuizAssignment[]
 }
 
-/** 提交答题答案 */
+/** 学生自主练习提交参数 */
+export interface SubmitSelfQuizParams {
+  studentId: number
+  courseId: number
+  courseName: string
+  knowledgePoints: string[]
+  questions: QuizQuestion[]
+  answers: Record<number, string | boolean>
+}
+
+/** 答题提交结果（含逐题详情，详情由前端组装） */
+export interface QuizSubmitResult {
+  submissionId: number
+  score: number
+  totalScore: number
+  correctCount: number
+  taskId?: number
+  taskTitle?: string
+  details: {
+    question: QuizQuestion
+    correct: boolean
+    userAnswer: string | boolean
+    aiScore?: number | null
+    aiReason?: string
+  }[]
+}
+
+function normalizeAnswers(answers: Record<number, string | string[] | boolean>): Record<string, string> {
+  const normalized: Record<string, string> = {}
+  for (const [k, v] of Object.entries(answers)) {
+    normalized[String(k)] = typeof v === 'boolean' ? (v ? 'true' : 'false') : String(v)
+  }
+  return normalized
+}
+
+/** 按题目顺序将临时 ID 答案映射到入库后的真实 question_id */
+function mapAnswersByIndex(
+  originalQuestions: QuizQuestion[],
+  savedQuestions: QuizQuestion[],
+  answers: Record<number, string | boolean>,
+): Record<string, string> {
+  const mapped: Record<string, string> = {}
+  savedQuestions.forEach((sq, idx) => {
+    const orig = originalQuestions[idx]
+    if (!orig) return
+    const ans = answers[orig.id]
+    if (ans === undefined) return
+    mapped[String(sq.id)] = typeof ans === 'boolean' ? (ans ? 'true' : 'false') : String(ans)
+  })
+  return mapped
+}
+
+/** 前端组装逐题判分详情（客观题规则判分，简答题标记待 AI 结果） */
+export function buildSubmitDetails(
+  questions: QuizQuestion[],
+  answers: Record<number, string | boolean>,
+  backendCorrectCount?: number,
+): QuizSubmitResult['details'] {
+  const details = questions.map((q) => {
+    const userAnswer = answers[q.id] ?? ''
+    if (q.type === 'short_answer') {
+      return { question: q, correct: false, userAnswer, aiReason: '简答题已由 AI 判分' }
+    }
+    return { question: q, correct: judgeAnswer(q, userAnswer), userAnswer }
+  })
+
+  // 若后端返回了 correctCount，尝试将简答题对错补齐（按得分差额推断）
+  if (backendCorrectCount !== undefined) {
+    const objectiveCorrect = details.filter((d) => d.question.type !== 'short_answer' && d.correct).length
+    const shortItems = details.filter((d) => d.question.type === 'short_answer')
+    let remaining = backendCorrectCount - objectiveCorrect
+    shortItems.forEach((d) => {
+      d.correct = remaining > 0
+      if (d.correct) remaining -= 1
+    })
+  }
+  return details
+}
+
+/** 提交答题答案（教师布置练习） */
 export async function submitQuizAnswers(
   taskId: number,
-  _studentId: number,
+  studentId: number,
   _studentName: string,
-  answers: Record<number, string | string[]>,
-): Promise<{ submissionId: number; score: number; totalScore: number; correctCount: number }> {
+  answers: Record<number, string | string[] | boolean>,
+  questions: QuizQuestion[],
+): Promise<QuizSubmitResult> {
   const { data } = await request.post('/v1/answer-records', {
     task_id: taskId,
-    answers,
+    student_id: studentId,
+    answers: normalizeAnswers(answers),
   })
-  return data
+  const details = buildSubmitDetails(questions, answers as Record<number, string | boolean>, data.correctCount)
+  syncWrongAnswersToErrorBook(studentId, details)
+  return { ...data, details }
+}
+
+/** 学生自主练习：复用现有 answer-tasks + answer-records 接口 */
+export async function submitSelfQuiz(params: SubmitSelfQuizParams): Promise<QuizSubmitResult> {
+  const title = `${SELF_PRACTICE_PREFIX}${new Date().toLocaleString('zh-CN', { hour12: false })}`
+  const task = await saveQuizAssignment({
+    title,
+    courseId: params.courseId,
+    courseName: params.courseName,
+    classId: 0,
+    className: '',
+    teacherName: '学生自学',
+    knowledgePoints: params.knowledgePoints,
+    status: 'published',
+    questions: params.questions,
+  })
+
+  const allTasks = await fetchQuizAssignments()
+  const saved = allTasks.find((t) => t.id === task.id)
+  const savedQuestions = (saved?.questions || []) as QuizQuestion[]
+  if (!savedQuestions.length) {
+    throw new Error('自主练习任务创建失败')
+  }
+
+  const mappedAnswers = mapAnswersByIndex(params.questions, savedQuestions, params.answers)
+  const { data } = await request.post('/v1/answer-records', {
+    task_id: task.id,
+    student_id: params.studentId,
+    answers: mappedAnswers,
+  })
+
+  const details = buildSubmitDetails(savedQuestions, params.answers, data.correctCount)
+  syncWrongAnswersToErrorBook(params.studentId, details)
+  return {
+    ...data,
+    details,
+    taskId: task.id,
+    taskTitle: title,
+  }
 }
 
 /* ============================================================
  * Mock 数据（USE_MOCK=true 时由 fetchQuizResult / fetchErrorBook 使用）
  * ============================================================ */
 
-/** mock 答题结果（5 题，3 对 2 错） */
 function mockQuizResult(_submissionId: number): {
   score: number
   totalScore: number
-  questionResults: { question: any; userAnswer: string | string[]; isCorrect: boolean }[]
+  questionResults: { question: QuizQuestion; userAnswer: string | string[]; isCorrect: boolean }[]
 } {
-  const questions = [
+  const questions: QuizQuestion[] = [
     {
-      id: 1, type: 'single', content: '在长度为 n 的顺序表中删除一个元素，平均需要移动多少个元素？',
-      options: ['(n-1)/2', 'n/2', '(n+1)/2', 'n'], answer: '(n-1)/2',
-      knowledgePoint: '线性表', score: 20,
+      id: 1, type: 'single_choice', stem: '在长度为 n 的顺序表中删除一个元素，平均需要移动多少个元素？',
+      options: [
+        { key: 'A', text: '(n-1)/2' }, { key: 'B', text: 'n/2' },
+        { key: 'C', text: '(n+1)/2' }, { key: 'D', text: 'n' },
+      ],
+      answer: 'A', difficulty: 'medium', knowledgePoint: '线性表', score: 20,
     },
     {
-      id: 2, type: 'multiple', content: '以下属于线性数据结构的有？',
-      options: ['数组', '二叉树', '链表', '队列'], answer: ['数组', '链表', '队列'],
-      knowledgePoint: '线性表', score: 20,
+      id: 2, type: 'multi_choice', stem: '以下属于线性数据结构的有？',
+      options: [
+        { key: 'A', text: '数组' }, { key: 'B', text: '二叉树' },
+        { key: 'C', text: '链表' }, { key: 'D', text: '队列' },
+      ],
+      answer: 'ACD', difficulty: 'medium', knowledgePoint: '线性表', score: 20,
     },
     {
-      id: 3, type: 'fill', content: '队列的特点是____。',
-      options: undefined, answer: '先进先出', knowledgePoint: '栈与队列', score: 20,
+      id: 3, type: 'fill_blank', stem: '队列的特点是____。',
+      answer: '先进先出', difficulty: 'medium', knowledgePoint: '栈与队列', score: 20,
     },
     {
-      id: 4, type: 'single', content: '深度为 k 的完全二叉树至少有多少个结点？',
-      options: ['2^k - 1', '2^(k-1)', '2^(k-1) - 1', '2^k'], answer: '2^(k-1)',
-      knowledgePoint: '树与二叉树', score: 20,
+      id: 4, type: 'single_choice', stem: '深度为 k 的完全二叉树至少有多少个结点？',
+      options: [
+        { key: 'A', text: '2^k - 1' }, { key: 'B', text: '2^(k-1)' },
+        { key: 'C', text: '2^(k-1) - 1' }, { key: 'D', text: '2^k' },
+      ],
+      answer: 'B', difficulty: 'medium', knowledgePoint: '树与二叉树', score: 20,
     },
     {
-      id: 5, type: 'fill', content: '堆排序的最坏时间复杂度为____。',
-      options: undefined, answer: 'O(n log n)', knowledgePoint: '排序算法', score: 20,
+      id: 5, type: 'fill_blank', stem: '堆排序的最坏时间复杂度为____。',
+      answer: 'O(n log n)', difficulty: 'medium', knowledgePoint: '排序算法', score: 20,
     },
   ]
 
-  const userAnswers: Record<number, string | string[]> = {
-    1: '(n-1)/2',        // 对
-    2: ['数组', '队列'],  // 错（漏选链表）
-    3: '先进先出',        // 对
-    4: '2^k - 1',        // 错
-    5: 'O(n log n)',     // 对
+  const userAnswers: Record<number, string> = {
+    1: 'A', 2: 'AD', 3: '先进先出', 4: 'A', 5: 'O(n log n)',
   }
 
-  const questionResults = questions.map((q) => {
-    const ua = userAnswers[q.id]!
-    let isCorrect = false
-    if (Array.isArray(q.answer)) {
-      isCorrect = Array.isArray(ua) && [...ua].sort().join(',') === [...q.answer].sort().join(',')
-    } else {
-      isCorrect = String(ua).trim() === String(q.answer).trim()
-    }
-    return { question: q, userAnswer: ua, isCorrect }
-  })
+  const questionResults = questions.map((q) => ({
+    question: q,
+    userAnswer: userAnswers[q.id]!,
+    isCorrect: judgeAnswer(q, userAnswers[q.id]),
+  }))
 
   const correctCount = questionResults.filter((r) => r.isCorrect).length
-  return {
-    score: correctCount * 20,
-    totalScore: 100,
-    questionResults,
-  }
+  return { score: correctCount * 20, totalScore: 100, questionResults }
 }
 
-/** mock 错题本（3 道错题） */
-function mockErrorBook(_studentId: number): {
-  quizQuestion: any
-  userAnswer: string | string[]
-  correctAnswer: string | string[]
-  submitTime: string
-  knowledgePoint: string
-}[] {
+function mockErrorBook(_studentId: number): ErrorBookItem[] {
   return [
     {
       quizQuestion: {
-        id: 2, type: 'multiple', content: '以下属于线性数据结构的有？',
-        options: ['数组', '二叉树', '链表', '队列'],
-        answer: ['数组', '链表', '队列'], knowledgePoint: '线性表', score: 20,
+        id: 2, type: 'multi_choice', stem: '以下属于线性数据结构的有？',
+        options: [
+          { key: 'A', text: '数组' }, { key: 'B', text: '二叉树' },
+          { key: 'C', text: '链表' }, { key: 'D', text: '队列' },
+        ],
+        answer: 'ACD', difficulty: 'medium', knowledgePoint: '线性表', score: 20,
       },
-      userAnswer: ['数组', '队列'],
-      correctAnswer: ['数组', '链表', '队列'],
-      submitTime: '2026-03-15 10:30:00',
-      knowledgePoint: '线性表',
+      userAnswer: 'AD', correctAnswer: 'ACD',
+      submitTime: '2026-03-15 10:30:00', knowledgePoint: '线性表',
     },
     {
       quizQuestion: {
-        id: 4, type: 'single', content: '深度为 k 的完全二叉树至少有多少个结点？',
-        options: ['2^k - 1', '2^(k-1)', '2^(k-1) - 1', '2^k'],
-        answer: '2^(k-1)', knowledgePoint: '树与二叉树', score: 20,
+        id: 4, type: 'single_choice', stem: '深度为 k 的完全二叉树至少有多少个结点？',
+        options: [
+          { key: 'A', text: '2^k - 1' }, { key: 'B', text: '2^(k-1)' },
+          { key: 'C', text: '2^(k-1) - 1' }, { key: 'D', text: '2^k' },
+        ],
+        answer: 'B', difficulty: 'medium', knowledgePoint: '树与二叉树', score: 20,
       },
-      userAnswer: '2^k - 1',
-      correctAnswer: '2^(k-1)',
-      submitTime: '2026-03-15 10:30:00',
-      knowledgePoint: '树与二叉树',
+      userAnswer: 'A', correctAnswer: 'B',
+      submitTime: '2026-03-15 10:30:00', knowledgePoint: '树与二叉树',
     },
     {
       quizQuestion: {
-        id: 7, type: 'single', content: '若进栈序列为 1,2,3,4，则以下哪个不可能是出栈序列？',
-        options: ['3,2,1,4', '4,3,2,1', '1,2,3,4', '4,1,2,3'],
-        answer: '4,1,2,3', knowledgePoint: '栈与队列', score: 20,
+        id: 7, type: 'single_choice', stem: '若进栈序列为 1,2,3,4，则以下哪个不可能是出栈序列？',
+        options: [
+          { key: 'A', text: '3,2,1,4' }, { key: 'B', text: '4,3,2,1' },
+          { key: 'C', text: '1,2,3,4' }, { key: 'D', text: '4,1,2,3' },
+        ],
+        answer: 'D', difficulty: 'medium', knowledgePoint: '栈与队列', score: 20,
       },
-      userAnswer: '4,3,2,1',
-      correctAnswer: '4,1,2,3',
-      submitTime: '2026-03-14 16:00:00',
-      knowledgePoint: '栈与队列',
+      userAnswer: 'B', correctAnswer: 'D',
+      submitTime: '2026-03-14 16:00:00', knowledgePoint: '栈与队列',
     },
   ]
 }
-

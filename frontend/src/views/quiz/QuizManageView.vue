@@ -18,6 +18,7 @@ import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank } from '@/a
 import { fetchCourses, fetchClasses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { isSelfPracticeTask } from '@/utils/errorBookStorage'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
@@ -86,7 +87,8 @@ onMounted(async () => {
   await loadClassOptions()
   syncKnowledgePoints()
   await loadBankQuestions()
-  assignmentList.value = await fetchQuizAssignments({ teacherId })
+  assignmentList.value = (await fetchQuizAssignments({ teacherId }))
+    .filter((t) => !isSelfPracticeTask(t.title)) as QuizAssignment[]
 })
 
 const questionTypeOptions = [
@@ -94,6 +96,7 @@ const questionTypeOptions = [
   { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
   { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
   { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
+  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
 ]
 
 const difficultyOptions = [

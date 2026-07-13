@@ -650,7 +650,10 @@ function generateOneQuestion(type: string, kp: string, difficulty: string, id: n
 }
 
 function handleAnswerTasks(params: Record<string, unknown>) {
-  let result = answerTasks
+  let result = answerTasks.filter((t) => !t.title.startsWith('【自主练习】'))
+  if (params.for_student) {
+    result = result.filter((t) => t.status === 'published')
+  }
   if (params.courseId || params.course_id) {
     const cid = Number(params.courseId || params.course_id)
     result = result.filter((t) => t.courseId === cid)

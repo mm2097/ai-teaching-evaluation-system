@@ -1,100 +1,345 @@
-"""教学数据接口：文件上传导入、聚合查询。
+"""教学数据接口：文件上传导入、模板下载、数据查询、编辑、导出。
 
-文件上传流程（对应需求规格说明书 3.2.6 节）：
-  1. 登录验证（Data.FileUpload.UserValid）
-  2. 权限验证：仅授课教师可上传（Data.FileUpload.UserValid.Logined）
-  3. 格式校验：仅 .xlsx / UTF-8 逗号分隔 .txt（Data.FileUpload.Format）
-  4. 表头字段校验（Data.FileUpload.Check）
-  5. 返回导入结果 + 错误明细（Data.FileUpload.Result）
+需求对应：
+  3.2.5  模板下载    Data.Template.*
+  3.2.6  文件上传    Data.FileUpload.*
+  3.2.7  查询与管理  Data.Query.*
 """
 
+import io as _io
 import os
 import tempfile
 import uuid
-
+from datetime import datetime
 from urllib.parse import quote
 
+import openpyxl
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from sqlmodel import Session, select
+from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import (
-    ScoreRecord, AttendanceRecord, Course, Student, CourseStudent,
+    ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx
 
 router = APIRouter()
 
-# 允许的文件扩展名
 ALLOWED_EXTENSIONS = {".xlsx", ".txt"}
 
 
 # ============================================================================
-# 查询接口
+# 权限校验辅助
 # ============================================================================
+
+def _require_teacher_for_course(
+    current_user: SysUser,
+    course_id: int,
+    session: Session,
+) -> Teacher:
+    """校验当前用户是指定课程的授课教师，返回 Teacher 记录。"""
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+
+    teacher = session.exec(
+        select(Teacher).where(Teacher.user_id == current_user.user_id)
+    ).first()
+    if not teacher:
+        raise HTTPException(status_code=403, detail="仅任课教师可操作，当前账号未关联教师")
+
+    if course.teacher_id != teacher.teacher_id:
+        raise HTTPException(
+            status_code=403,
+            detail=f"仅授课教师可操作。课程「{course.course_name}」不属于您",
+        )
+    return teacher
+
+
+# ============================================================================
+# 查询接口（3.2.7 节：Data.Query, Data.Query.Fuzzy, Data.Query.Filter）
+# ============================================================================
+
+STATUS_MAP = {0: "正常", 1: "迟到", 2: "早退", 3: "缺勤", 4: "请假"}
 
 
 @router.get("/teaching-data", tags=["教学数据"])
-def get_teaching_data(session: Session = Depends(get_session)) -> list[dict]:
-    """返回所有教学数据（成绩 + 考勤），供数据管理页面展示。"""
-    result: list[dict] = []
-    row_id = 1
+def query_teaching_data(
+    course_id: int = Query(..., description="课程 ID"),
+    keyword: str | None = Query(default=None, description="学生姓名/学号模糊搜索"),
+    data_type: str | None = Query(default=None, description="数据类型: score / attendance"),
+    batch_id: int | None = Query(default=None, description="考核批次 ID（仅 dataType=score 时生效）"),
+    page: int = Query(default=1, ge=1, description="页码"),
+    page_size: int = Query(default=50, ge=1, le=200, description="每页条数"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """查询教学数据，支持模糊搜索与组合筛选。
 
-    # 成绩记录
-    scores = session.exec(select(ScoreRecord)).all()
-    for s in scores:
-        course = session.get(Course, s.course_id)
-        student = session.get(Student, s.student_id)
-        if not course or not student:
-            continue
-        result.append({
-            "id": row_id,
-            "dataType": "score",
-            "studentId": student.student_no,
-            "studentName": student.real_name,
-            "courseId": course.course_code,
-            "courseName": course.course_name,
-            "semester": course.semester,
-            "score": s.score,
-            "attendance": None,
-            "homework": None,
-            "sourceFileName": "seed_data",
-            "classId": student.class_id,
-            "deptId": 1,
-            "majorId": 0,
-        })
-        row_id += 1
+    权限（Data.Query.UserValid）：仅授课教师可查询自己课程的数据。
+    模糊搜索（Data.Query.Fuzzy）：keyword 匹配学生姓名或学号。
+    组合筛选（Data.Query.Filter）：dataType + batchId。
+    """
+    # 权限校验
+    _require_teacher_for_course(current_user, course_id, session)
 
-    # 考勤记录
-    attendances = session.exec(select(AttendanceRecord)).all()
-    status_map = {0: "正常", 1: "迟到", 2: "早退", 3: "缺勤", 4: "请假"}
-    for a in attendances:
-        course = session.get(Course, a.course_id)
-        student = session.get(Student, a.student_id)
-        if not course or not student:
-            continue
-        result.append({
-            "id": row_id,
-            "dataType": "attendance",
-            "studentId": student.student_no,
-            "studentName": student.real_name,
-            "courseId": course.course_code,
-            "courseName": course.course_name,
-            "semester": course.semester,
-            "score": None,
-            "attendance": status_map.get(a.status, "正常"),
-            "homework": None,
-            "sourceFileName": "seed_data",
-            "classId": student.class_id,
-            "deptId": 1,
-            "majorId": 0,
-        })
-        row_id += 1
+    # 构建基础学生查询（模糊匹配）
+    student_stmt = select(Student)
+    if keyword:
+        like = f"%{keyword}%"
+        student_stmt = student_stmt.where(
+            or_(Student.real_name.like(like), Student.student_no.like(like))
+        )
+    matched_students = session.exec(student_stmt).all()
+    student_ids = {s.student_id for s in matched_students}
 
-    return result
+    rows: list[dict] = []
+
+    # ── 成绩数据 ──
+    if data_type is None or data_type == "score":
+        stmt = select(ScoreRecord).where(ScoreRecord.course_id == course_id)
+        if student_ids:
+            # SQLite 不支持 .in_() 的巨量参数，48个学生没问题
+            stmt = stmt.where(ScoreRecord.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if batch_id:
+            stmt = stmt.where(ScoreRecord.batch_id == batch_id)
+        if keyword and not student_ids:
+            stmt = stmt.where(ScoreRecord.student_id == -1)  # 无匹配学生时返回空
+
+        for s in session.exec(stmt).all():
+            student = session.get(Student, s.student_id)
+            batch = session.get(ExamBatch, s.batch_id)
+            if not student:
+                continue
+            rows.append({
+                "id": f"score_{s.score_id}",
+                "recordId": s.score_id,
+                "dataType": "score",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",  # 由前端用 course_id 自行关联
+                "semester": "",
+                "batchId": s.batch_id,
+                "batchName": batch.batch_name if batch else "",
+                "score": s.score,
+                "isPass": s.is_pass,
+                "remark": s.remark,
+            })
+
+    # ── 考勤数据 ──
+    if data_type is None or data_type == "attendance":
+        stmt = select(AttendanceRecord).where(AttendanceRecord.course_id == course_id)
+        if student_ids:
+            stmt = stmt.where(AttendanceRecord.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if keyword and not student_ids:
+            stmt = stmt.where(AttendanceRecord.student_id == -1)
+
+        for a in session.exec(stmt).all():
+            student = session.get(Student, a.student_id)
+            if not student:
+                continue
+            rows.append({
+                "id": f"attendance_{a.attendance_id}",
+                "recordId": a.attendance_id,
+                "dataType": "attendance",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",
+                "semester": "",
+                "attendanceDate": a.attendance_date.isoformat() if a.attendance_date else None,
+                "status": STATUS_MAP.get(a.status, "未知"),
+                "statusCode": a.status,
+                "remark": a.remark,
+            })
+
+    # 分页
+    total = len(rows)
+    start = (page - 1) * page_size
+    end = start + page_size
+    paged = rows[start:end]
+
+    return {
+        "total": total,
+        "page": page,
+        "pageSize": page_size,
+        "totalPages": (total + page_size - 1) // page_size if total else 0,
+        "data": paged,
+    }
+
+
+# ============================================================================
+# 编辑接口（3.2.7 节：Data.Query.Edit）
+# ============================================================================
+
+
+@router.put("/teaching-data/{record_type}/{record_id}", tags=["教学数据"])
+def edit_teaching_data(
+    record_type: str,
+    record_id: int,
+    score: float | None = Query(default=None, description="成绩值（score 类型）"),
+    status_code: int | None = Query(default=None, description="考勤状态: 0=出勤 1=迟到 2=早退 3=缺勤 4=请假"),
+    remark: str | None = Query(default=None, description="备注"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """编辑单条教学数据（Data.Query.Edit）。
+
+    支持修改成绩值、考勤状态、备注。仅授课教师可修改自己课程的数据。
+    """
+    if record_type == "score":
+        record = session.get(ScoreRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="成绩记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+
+        if score is not None:
+            record.score = score
+            record.is_pass = 1 if score >= 60 else 0
+        if remark is not None:
+            record.remark = remark
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return {
+            "recordType": "score",
+            "recordId": record.score_id,
+            "score": record.score,
+            "isPass": record.is_pass,
+            "remark": record.remark,
+        }
+
+    elif record_type == "attendance":
+        record = session.get(AttendanceRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+
+        if status_code is not None:
+            if status_code not in STATUS_MAP:
+                raise HTTPException(status_code=400, detail=f"无效的考勤状态: {status_code}，有效值: 0-4")
+            record.status = status_code
+        if remark is not None:
+            record.remark = remark
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return {
+            "recordType": "attendance",
+            "recordId": record.attendance_id,
+            "status": STATUS_MAP.get(record.status, "未知"),
+            "statusCode": record.status,
+            "remark": record.remark,
+        }
+
+    else:
+        raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, attendance")
+
+
+# ============================================================================
+# 导出接口（3.2.7 节：Data.Query.Export）
+# ============================================================================
+
+
+@router.get("/teaching-data/export", tags=["教学数据"])
+def export_teaching_data(
+    course_id: int = Query(..., description="课程 ID"),
+    keyword: str | None = Query(default=None, description="学生姓名/学号模糊搜索"),
+    data_type: str | None = Query(default=None, description="数据类型: score / attendance"),
+    batch_id: int | None = Query(default=None, description="考核批次 ID"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> Response:
+    """将查询结果导出为 Excel 文件（Data.Query.Export）。
+
+    权限：仅授课教师可导出自己课程的数据。
+    """
+    _require_teacher_for_course(current_user, course_id, session)
+    course = session.get(Course, course_id)
+
+    # 复用查询逻辑获取数据
+    result = query_teaching_data(
+        course_id=course_id,
+        keyword=keyword,
+        data_type=data_type,
+        batch_id=batch_id,
+        page=1,
+        page_size=10000,  # 导出全部
+        session=session,
+        current_user=current_user,
+    )
+    rows: list[dict] = result["data"]
+
+    # 生成 Excel
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "教学数据"
+
+    # 表头样式
+    header_font = openpyxl.styles.Font(bold=True, size=11)
+    header_fill = openpyxl.styles.PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    if not rows:
+        ws.cell(row=1, column=1, value="无匹配数据").font = header_font
+    else:
+        # 根据第一条决定列
+        if rows[0]["dataType"] == "score":
+            headers = ["序号", "学号", "姓名", "数据类型", "考核批次", "成绩", "是否及格", "备注"]
+        else:
+            headers = ["序号", "学号", "姓名", "数据类型", "考勤日期", "出勤状态", "备注"]
+
+        for ci, h in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=ci, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+
+        for ri, row in enumerate(rows, start=2):
+            if row["dataType"] == "score":
+                vals = [
+                    ri - 1, row["studentId"], row["studentName"], "成绩",
+                    row.get("batchName", ""), row.get("score", ""),
+                    "是" if row.get("isPass") else "否", row.get("remark", ""),
+                ]
+            else:
+                vals = [
+                    ri - 1, row["studentId"], row["studentName"], "考勤",
+                    row.get("attendanceDate", ""), row.get("status", ""),
+                    row.get("remark", ""),
+                ]
+            for ci, v in enumerate(vals, start=1):
+                ws.cell(row=ri, column=ci, value=v)
+
+    # 调整列宽
+    for ci in range(1, 15):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = 16
+
+    output = _io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    safe_name = f"{course.course_name}_教学数据.xlsx" if course else "教学数据导出.xlsx"
+    encoded = quote(safe_name, safe="")
+    ascii_name = "teaching_data_export.xlsx"
+
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; "
+                f"filename*=UTF-8''{encoded}"
+            ),
+        },
+    )
 
 
 # ============================================================================

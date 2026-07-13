@@ -1,16 +1,98 @@
 """分析 API：学情画像、知识点热力图、预警、成绩预测。"""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
+from app.core.operation_log import get_current_user
 from app.models import (
     Student, Course, CourseStudent, ClassInfo,
     KnowledgeMastery, KnowledgePoint, KnowledgeModule,
     StudyWarning, StudentProfile,
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult,
+    SysUser, Teacher, SysRole,
 )
 
 router = APIRouter()
+
+
+# ============================================================================
+# 权限校验辅助
+# ============================================================================
+
+def _check_profile_access(
+    current_user: SysUser,
+    student_id: int,
+    course_id: int | None,
+    session: Session,
+) -> None:
+    """校验学情画像查看权限（Analysis.Profile.UserValid）。
+
+    - 管理员（admin）：可查看所有学生画像
+    - 任课教师（teacher）：仅可查看自己授课课程内的学生画像
+    - 学生（student）：仅可查看自己的画像
+    """
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+
+    # 管理员：全部放行
+    if role_code == "admin":
+        return
+
+    # 学生：只能看自己（Analysis.Profile.UserValid.Logined）
+    if role_code == "student":
+        student = session.exec(
+            select(Student).where(Student.user_id == current_user.user_id)
+        ).first()
+        if not student or student.student_id != student_id:
+            raise HTTPException(
+                status_code=403,
+                detail="学生仅可查看自己的学情画像",
+            )
+        return
+
+    # 任课教师：只能看自己授课课程的学生
+    if role_code == "teacher":
+        teacher = session.exec(
+            select(Teacher).where(Teacher.user_id == current_user.user_id)
+        ).first()
+        if not teacher:
+            raise HTTPException(status_code=403, detail="当前账号未关联教师信息")
+
+        if course_id is not None:
+            # 指定课程：校验教师是否是该课程授课教师
+            course = session.get(Course, course_id)
+            if not course:
+                raise HTTPException(status_code=404, detail="课程不存在")
+            if course.teacher_id != teacher.teacher_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"仅授课教师可查看课程「{course.course_name}」的学情画像",
+                )
+        else:
+            # 未指定课程：校验该学生是否选修了当前教师授课的任意课程
+            taught_course_ids = session.exec(
+                select(Course.course_id).where(Course.teacher_id == teacher.teacher_id)
+            ).all()
+            if not taught_course_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="您当前未教授任何课程，无法查看学情画像",
+                )
+            enrollment = session.exec(
+                select(CourseStudent).where(
+                    CourseStudent.student_id == student_id,
+                    CourseStudent.course_id.in_(taught_course_ids),  # type: ignore[arg-type]
+                )
+            ).first()
+            if not enrollment:
+                raise HTTPException(
+                    status_code=403,
+                    detail="该学生未选修您授课的课程，无法查看学情画像",
+                )
+        return
+
+    # 其他未授权角色
+    raise HTTPException(status_code=403, detail="无权查看学情画像")
 
 
 @router.get("/analysis/profile", tags=["学情分析"])
@@ -18,8 +100,17 @@ def get_student_profile(
     student_id: int = Query(...),
     course_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> dict | None:
-    """获取学情画像。"""
+    """获取学情画像。
+
+    权限（Analysis.Profile.UserValid）：
+    - 管理员可查看所有学生画像
+    - 任课教师仅可查看自己授课课程内的学生画像
+    - 学生仅可查看自己的画像
+    """
+    _check_profile_access(current_user, student_id, course_id, session)
+
     stmt = select(StudentProfile).where(StudentProfile.student_id == student_id)
     if course_id:
         stmt = stmt.where(StudentProfile.course_id == course_id)

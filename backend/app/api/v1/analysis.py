@@ -12,6 +12,7 @@ from app.models import (
     SysUser, Teacher, SysRole,
 )
 from app.services.predict import predict_student_scores
+from app.services.warning import scan_course_warnings, persist_warnings
 
 router = APIRouter()
 
@@ -420,23 +421,105 @@ def get_knowledge_heatmap(
     }
 
 
+def _parse_warning_type(raw_type: str) -> tuple[str, str]:
+    """解析 warning_type 字段为 (规则码, 显示文本)。
+
+    - 自动扫描格式: "W1:实验报告较上次下滑 17.0 分" → ("W1", "实验报告较上次下滑 17.0 分")
+    - 种子数据格式:  "成绩下滑"                  → ("W1", "成绩下滑")
+    """
+    if raw_type and raw_type[0] == "W" and ":" in raw_type:
+        rule, display = raw_type.split(":", 1)
+        return rule.strip(), display.strip()
+    # 种子数据匹配
+    type_rule_map = {
+        "成绩下滑": "W1", "成绩暴跌": "W2", "缺勤超标": "W3",
+        "作业未提交": "W4", "薄弱": "W5",
+    }
+    for key, rule in type_rule_map.items():
+        if key in (raw_type or ""):
+            return rule, raw_type
+    return "", raw_type or ""
+
+
+def _warning_response(w, student, course, cls) -> dict:
+    """将 StudyWarning 模型转为 API 响应格式。"""
+    rule_code, display_type = _parse_warning_type(w.warning_type)
+    level_label = {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低")
+    status_label = {0: "未处理", 1: "已处理"}.get(w.handle_status, "未知")
+
+    return {
+        "id": w.warning_id,
+        "studentDbId": w.student_id,                          # 数据库 student_id（可用于跳转画像）
+        "studentId": student.student_no if student else "",   # 学号（兼容旧字段）
+        "studentName": student.real_name if student else "",
+        "className": cls.class_name if cls else "",
+        "classId": student.class_id if student else 0,
+        "courseId": w.course_id,
+        "courseName": course.course_name if course else "",
+        "rule": rule_code,                # W1/W2/W3/W4/W5（Analysis.Warning.Rule）
+        "type": display_type,             # 清理后的显示文本
+        "level": level_label,             # 高/中/低（Analysis.Warning.Level）
+        "levelCode": w.warning_level,     # 1/2/3
+        "reason": w.warning_reason,
+        "warningTime": w.create_time.strftime("%Y-%m-%d %H:%M") if w.create_time else "",
+        "status": w.handle_status,
+        "statusLabel": status_label,      # 未处理/已处理
+    }
+
+
 @router.get("/analysis/warnings", tags=["学情分析"])
 def get_warnings(
     course_id: int | None = Query(default=None),
     class_id: int | None = Query(default=None),
-    level: str | None = Query(default=None),
+    level: str | None = Query(default=None, description="高/中/低"),
+    student_id: int | None = Query(default=None, description="按数据库 student_id 筛选"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
-    """获取预警记录。
+    """获取预警记录列表（Analysis.Warning.List）。
 
-    权限：仅管理员和对应课程授课教师可查看。
+    权限（Analysis.Warning.UserValid）：
+    - 管理员可查看全部预警
+    - 任课教师仅可查看自己授课课程的预警
+    - 学生无权查看
     """
-    if course_id:
-        _check_course_access(session, current_user, course_id)
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+
+    if role_code == "teacher":
+        # 教师：限定只看自己授课课程的预警
+        teacher = session.exec(
+            select(Teacher).where(Teacher.user_id == current_user.user_id)
+        ).first()
+        if not teacher:
+            raise HTTPException(status_code=403, detail="当前账号未关联教师信息")
+        taught_ids = session.exec(
+            select(Course.course_id).where(Course.teacher_id == teacher.teacher_id)
+        ).all()
+        if course_id:
+            if course_id not in taught_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="仅授课教师可查看该课程的预警数据",
+                )
+        else:
+            # 未指定课程时自动限定为教师授课课程
+            if not taught_ids:
+                return []
+    elif role_code == "admin":
+        pass  # 管理员：全部放行
+    else:
+        raise HTTPException(status_code=403, detail="无权查看预警数据")
+
+    # 构建查询
     stmt = select(StudyWarning)
     if course_id:
         stmt = stmt.where(StudyWarning.course_id == course_id)
+    elif role_code == "teacher":
+        stmt = stmt.where(StudyWarning.course_id.in_(taught_ids))  # type: ignore[arg-type]
+    if student_id:
+        stmt = stmt.where(StudyWarning.student_id == student_id)
+
     warnings = session.exec(stmt).all()
 
     result = []
@@ -452,24 +535,38 @@ def get_warnings(
             if level_map.get(w.warning_level) != level:
                 continue
 
-        result.append({
-            "id": w.warning_id,
-            "studentId": student.student_no if student else "",
-            "studentName": student.real_name if student else "",
-            "className": cls.class_name if cls else "",
-            "classId": student.class_id if student else 0,
-            "deptId": 0,
-            "courseId": w.course_id,
-            "courseName": course.course_name if course else "",
-            "semesterId": 0,
-            "type": w.warning_type,
-            "level": {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低"),
-            "reason": w.warning_reason,
-            "warningTime": w.create_time.strftime("%Y-%m-%d") if w.create_time else "",
-            "status": w.handle_status,
-        })
+        result.append(_warning_response(w, student, course, cls))
 
     return result
+
+
+@router.post("/analysis/warnings/refresh", tags=["学情分析"])
+def refresh_warnings(
+    course_id: int = Query(...),
+    class_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """手动刷新课程预警列表（Analysis.Warning）。
+
+    重新扫描课程内所有学生的成绩、考勤、作业、知识点数据，
+    匹配 W1-W5 五条预警规则，覆盖更新预警记录。
+
+    权限（Analysis.Warning.UserValid）：仅管理员和课程授课教师可操作。
+    """
+    _check_course_access(session, current_user, course_id)
+
+    results = scan_course_warnings(session, course_id, class_id)
+    count = persist_warnings(session, results, course_id)
+
+    course = session.get(Course, course_id)
+    return {
+        "courseId": course_id,
+        "courseName": course.course_name if course else "",
+        "studentsScanned": len(results),
+        "warningsCreated": count,
+        "message": f"扫描完成：{len(results)} 名学生命中预警规则，共生成 {count} 条预警记录",
+    }
 
 
 @router.get("/analysis/grade-predictions", tags=["学情分析"])

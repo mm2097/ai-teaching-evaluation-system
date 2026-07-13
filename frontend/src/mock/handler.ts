@@ -646,7 +646,8 @@ function generateOneQuestion(type: string, kp: string, difficulty: string, id: n
       explanation: `${kp}的基本操作包括插入、删除和查找。`,
     }),
   }
-  return (templates[type] || templates.single_choice)()
+  const template = templates[type] ?? templates.single_choice
+  return template!()
 }
 
 function handleAnswerTasks(params: Record<string, unknown>) {

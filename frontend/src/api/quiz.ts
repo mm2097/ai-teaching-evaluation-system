@@ -10,36 +10,10 @@ import {
   SELF_PRACTICE_PREFIX,
 } from '@/utils/errorBookStorage'
 import { judgeAnswer } from '@/utils/exerciseJudge'
-import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
+import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion, QuizSubmission } from '@/types'
 
-export interface QuizAssignmentRecord {
-  id: number
-  courseName: string
-  title: string
-  knowledgePoints: string[]
-  questionCount: number
-  totalScore: number
-  assignedTime: string
-  deadline: string
-  submittedCount: number
-  averageScore: number
-  status?: string
-  questions?: QuizQuestion[]
-}
-
-export interface QuizSubmissionRecord {
-  id: number
-  studentName: string
-  studentNo: string
-  courseName: string
-  quizTitle: string
-  score: number
-  totalScore: number
-  submitTime: string
-  isLate: boolean
-  status: string
-  answers: { questionIndex: number; questionContent: string; studentAnswer: string; correctAnswer: string; score: number; isCorrect: boolean }[]
-}
+export type QuizAssignmentRecord = QuizAssignment
+export type QuizSubmissionRecord = QuizSubmission
 
 /** 答题任务查询参数 */
 export interface QuizAssignmentQuery {
@@ -58,9 +32,11 @@ export async function fetchQuizAssignments(params?: QuizAssignmentQuery): Promis
 }
 
 /** 获取答题记录列表 */
-export async function fetchQuizSubmissions(): Promise<QuizSubmissionRecord[]> {
+export async function fetchQuizSubmissions(taskId?: number): Promise<QuizSubmissionRecord[]> {
   try {
-    const res = await request.get('/v1/answer-records')
+    const res = await request.get('/v1/answer-records', {
+      params: taskId ? { task_id: taskId } : undefined,
+    })
     return res.data
   } catch {
     return []

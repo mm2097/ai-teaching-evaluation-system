@@ -8,15 +8,16 @@ import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { evalGradeType } from '@/utils/auth'
 import request from '@/utils/request'
+import type { EvalResult } from '@/types'
 
-const teacherEvalList = ref<any[]>([])
-const selectedTeacher = ref<any>(null)
+const teacherEvalList = ref<EvalResult[]>([])
+const selectedTeacher = ref<EvalResult | null>(null)
 
 onMounted(async () => {
   try {
     const res = await request.get('/v1/evaluations')
-    teacherEvalList.value = res.data.filter((e: any) => e.targetType === 'student') // 暂复用学生评价数据
-    if (teacherEvalList.value.length) selectedTeacher.value = teacherEvalList.value[0]
+    teacherEvalList.value = (res.data as EvalResult[]).filter((e) => e.targetType === 'student') // 暂复用学生评价数据
+    if (teacherEvalList.value.length) selectedTeacher.value = teacherEvalList.value[0]!
   } catch { teacherEvalList.value = [] }
 })
 
@@ -44,7 +45,7 @@ const radarOption = computed<EChartsOption>(() => {
 /**
  * 选择教师查看详情
  */
-function selectTeacher(row: (typeof teacherEvalList)[0]): void {
+function selectTeacher(row: EvalResult): void {
   selectedTeacher.value = row
 }
 </script>

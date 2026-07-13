@@ -5,7 +5,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
 import { Check, Close, Refresh } from '@element-plus/icons-vue'
 import { fetchQuizResult } from '@/api/quiz'
 import { useUserStore } from '@/stores/user'
@@ -142,7 +141,7 @@ function backToQuiz(): void {
           <el-tag size="small">{{ typeLabel[item.question.type] }}</el-tag>
           <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
         </div>
-        <p class="eq-content">{{ item.question.content }}</p>
+        <p class="eq-content">{{ item.question.stem }}</p>
 
         <!-- 选项 -->
         <div v-if="item.question.options" class="eq-options">
@@ -152,14 +151,14 @@ function backToQuiz(): void {
             class="eq-option"
             :class="{
               'is-correct': Array.isArray(item.question.answer)
-                ? item.question.answer.includes(opt)
-                : item.question.answer === opt,
+                ? item.question.answer.includes(opt.key)
+                : item.question.answer === opt.key,
               'is-wrong': Array.isArray(item.userAnswer)
-                ? item.userAnswer.includes(opt) && (Array.isArray(item.question.answer) ? !item.question.answer.includes(opt) : item.question.answer !== opt)
-                : item.userAnswer === opt && item.question.answer !== opt,
+                ? item.userAnswer.includes(opt.key) && (Array.isArray(item.question.answer) ? !item.question.answer.includes(opt.key) : item.question.answer !== opt.key)
+                : item.userAnswer === opt.key && item.question.answer !== opt.key,
             }"
           >
-            {{ getOptionLetter(i) }}. {{ opt }}
+            {{ getOptionLetter(i) }}. {{ opt.text }}
           </div>
         </div>
 
@@ -173,7 +172,7 @@ function backToQuiz(): void {
             <span class="value correct">{{ Array.isArray(item.question.answer) ? item.question.answer.join('、') : item.question.answer }}</span>
           </div>
           <!-- 简答题 AI 判分依据 -->
-          <div v-if="(item.question.type === 'short_answer' || item.question.type === 'short') && item.aiReason" class="eq-ai-judge">
+          <div v-if="item.question.type === 'short_answer' && item.aiReason" class="eq-ai-judge">
             <div class="eq-ai-header">
               <el-tag size="small" type="warning">AI 判分</el-tag>
               <span v-if="item.aiScore !== null && item.aiScore !== undefined" class="eq-ai-score">

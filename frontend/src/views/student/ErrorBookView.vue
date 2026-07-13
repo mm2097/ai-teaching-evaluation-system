@@ -14,10 +14,6 @@ const loading = ref(true)
 const kpFilter = ref('')
 const errors = ref<ErrorBookItem[]>([])
 
-const knowledgePointOptions = computed(() =>
-  [...new Set(errors.value.map((e) => e.knowledgePoint))],
-)
-
 const filteredErrors = computed(() => {
   if (!kpFilter.value) return errors.value
   return errors.value.filter((e) => e.knowledgePoint === kpFilter.value)

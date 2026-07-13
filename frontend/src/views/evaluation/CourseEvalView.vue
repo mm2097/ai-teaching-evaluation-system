@@ -8,21 +8,22 @@ import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { evalGradeType } from '@/utils/auth'
 import request from '@/utils/request'
+import type { EvalResult } from '@/types'
 
-const courseEvalList = ref<any[]>([])
-const selectedCourse = ref<any>(null)
+const courseEvalList = ref<EvalResult[]>([])
+const selectedCourse = ref<EvalResult | null>(null)
 
 onMounted(async () => {
   try {
     const res = await request.get('/v1/evaluations')
     courseEvalList.value = res.data
-    if (courseEvalList.value.length) selectedCourse.value = courseEvalList.value[0]
+    if (courseEvalList.value.length) selectedCourse.value = courseEvalList.value[0]!
   } catch { courseEvalList.value = [] }
 })
 
 /** 课程维度对比柱状图 */
 const barOption = computed<EChartsOption>(() => {
-  const courses = courseEvalList
+  const courses = courseEvalList.value
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: courses.map((c) => c.targetName), top: 0 },
@@ -39,7 +40,7 @@ const barOption = computed<EChartsOption>(() => {
   }
 })
 
-function selectCourse(row: (typeof courseEvalList)[0]): void {
+function selectCourse(row: EvalResult): void {
   selectedCourse.value = row
 }
 </script>

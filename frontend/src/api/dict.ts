@@ -66,7 +66,12 @@ export async function fetchDepartments(): Promise<Department[]> {
 
 /* ---------- 专业（暂无明细表，从班级 college 聚合） ---------- */
 
-export async function fetchMajors(params?: { deptId?: number }): Promise<Major[]> {
+export async function fetchMajors(params?: {
+  deptId?: number
+  semesterCode?: string
+  grade?: string
+  teacherId?: number
+} | number): Promise<Major[]> {
   // 专业暂未独立建表，返回空列表
   return []
 }

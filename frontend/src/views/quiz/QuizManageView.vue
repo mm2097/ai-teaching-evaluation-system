@@ -227,7 +227,8 @@ async function handleAddAllToBank(): Promise<void> {
   }
   addingToBank.value = true
   try {
-    const questions = toAdd.map((q) => ({ ...q, courseId: form.value.courseId }))
+    const courseId = form.value.courseId
+    const questions = toAdd.map((q) => ({ ...q, courseId }))
     const result = await addQuestionsToBank(questions, { source: 'ai' })
     await refreshBankedStatus()
     await loadBankQuestions()

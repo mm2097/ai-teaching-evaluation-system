@@ -245,6 +245,8 @@ export interface ValidationError {
   row: number
   column: string
   message: string
+  /** 多 sheet 文件时标识所属 sheet 名 */
+  sheet?: string
 }
 
 /** 题目类型（对齐后端 Exercise.type） */

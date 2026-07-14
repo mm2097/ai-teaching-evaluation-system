@@ -11,6 +11,7 @@ import QuestionBankImportDialog from '@/components/quiz/QuestionBankImportDialog
 import {
   fetchQuestionBank,
   fetchQuestionBankStats,
+  fetchCourseKnowledgePoints,
   createQuestion,
   updateQuestion,
   deleteQuestion,
@@ -102,17 +103,20 @@ onMounted(async () => {
   if (courseOptions.value.length) {
     filters.value.courseId = courseOptions.value[0]!.value
   }
-  syncKnowledgePoints()
+  await syncKnowledgePoints()
   await loadData()
 })
 
-function syncKnowledgePoints(): void {
-  // Knowledge points will be loaded from the backend when available
-  knowledgePointOptions.value = []
+async function syncKnowledgePoints(): Promise<void> {
+  if (!filters.value.courseId) {
+    knowledgePointOptions.value = []
+    return
+  }
+  knowledgePointOptions.value = await fetchCourseKnowledgePoints(filters.value.courseId)
 }
 
-watch(() => filters.value.courseId, () => {
-  syncKnowledgePoints()
+watch(() => filters.value.courseId, async () => {
+  await syncKnowledgePoints()
   filters.value.knowledgePoint = ''
   currentPage.value = 1
   loadData()
@@ -175,6 +179,7 @@ async function handleSave(question: QuizQuestion): Promise<void> {
     ElMessage.success('题目已更新')
   }
   await loadData()
+  await syncKnowledgePoints()
 }
 
 async function handleDelete(q: QuizQuestion): Promise<void> {
@@ -204,28 +209,40 @@ function sourceLabel(source?: ExerciseSource): string {
       <p class="page-desc">管理课程练习题库，支持手动录入、模板批量导入、AI 生成题入库。智能组卷 Agent 将复用本题库数据。</p>
 
       <el-row :gutter="12" class="stat-row">
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.total ?? 0 }}</span>
             <span class="stat-label">题库总量</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.byType.single_choice ?? 0 }}</span>
             <span class="stat-label">单选题</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.byType.multi_choice ?? 0 }}</span>
             <span class="stat-label">多选题</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
-            <span class="stat-value">{{ (stats?.byType.judge ?? 0) + (stats?.byType.fill_blank ?? 0) }}</span>
-            <span class="stat-label">判断/填空</span>
+            <span class="stat-value">{{ stats?.byType.judge ?? 0 }}</span>
+            <span class="stat-label">判断题</span>
+          </div>
+        </el-col>
+        <el-col :span="4">
+          <div class="stat-item">
+            <span class="stat-value">{{ stats?.byType.fill_blank ?? 0 }}</span>
+            <span class="stat-label">填空题</span>
+          </div>
+        </el-col>
+        <el-col :span="4">
+          <div class="stat-item">
+            <span class="stat-value">{{ stats?.byType.short_answer ?? 0 }}</span>
+            <span class="stat-label">简答题</span>
           </div>
         </el-col>
       </el-row>
@@ -338,7 +355,7 @@ function sourceLabel(source?: ExerciseSource): string {
     <QuestionBankImportDialog
       v-model="importVisible"
       :course-id="filters.courseId"
-      @imported="loadData"
+      @imported="async () => { await loadData(); await syncKnowledgePoints() }"
     />
   </div>
 </template>

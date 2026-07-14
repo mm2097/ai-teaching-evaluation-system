@@ -25,7 +25,7 @@ from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole,
 )
-from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx
+from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
 from app.services.analysis_refresh import refresh_course_analysis
 
 router = APIRouter()
@@ -497,33 +497,47 @@ def list_templates(
 @router.get("/teaching-data/templates/{template_id}", tags=["教学数据"])
 def download_template(
     template_id: str,
+    format: str = Query(default="xlsx", description="下载格式: xlsx / txt"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> Response:
-    """下载指定模板的 .xlsx 文件（Data.Template.Download）。
+    """下载指定模板文件（Data.Template.Download）。
 
-    返回标准模板文件，含表头、示例行、填写说明。
+    支持两种格式：
+      - xlsx（默认）：Excel 格式，含表头样式和填写说明
+      - txt：UTF-8 逗号分隔文本，含注释说明、表头行和示例行
+
     权限：管理员或任课教师。
     """
     _check_template_access(current_user, session)
+
+    fmt = format.strip().lower()
+    if fmt not in ("xlsx", "txt"):
+        raise HTTPException(status_code=400, detail=f"不支持的格式: {format}，仅支持 xlsx 和 txt")
 
     meta = next((m for m in TEMPLATE_META if m["template_id"] == template_id), None)
     if not meta:
         raise HTTPException(status_code=404, detail=f"模板不存在: {template_id}")
 
     try:
-        xlsx_bytes = generate_template_xlsx(template_id)
+        if fmt == "txt":
+            file_bytes = generate_template_txt(template_id)
+            media_type = "text/plain; charset=utf-8"
+            safe_name = f"模板-{meta['name']}.txt"
+            ascii_name = f"template-{template_id}.txt"
+        else:
+            file_bytes = generate_template_xlsx(template_id)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            safe_name = f"模板-{meta['name']}.xlsx"
+            ascii_name = f"template-{template_id}.xlsx"
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     # 文件名含中文，用 RFC 5987 编码
-    safe_name = f"模板-{meta['name']}.xlsx"
     encoded = quote(safe_name, safe="")
-    # ASCII 兜底文件名
-    ascii_name = f"template-{template_id}.xlsx"
     return Response(
-        content=xlsx_bytes,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content=file_bytes,
+        media_type=media_type,
         headers={
             "Content-Disposition": (
                 f"attachment; filename=\"{ascii_name}\"; "

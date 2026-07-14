@@ -22,10 +22,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, ValidationError
 from sqlmodel import Session, func, select
 
+from app.core.config import settings
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import (
     AiQuestion,
+    AiGenerationLog,
     AnswerTask,
     AnswerTaskClass,
     ClassInfo,
@@ -39,6 +41,13 @@ from app.models import (
     SysUser,
     TaskQuestion,
     Teacher,
+)
+from app.models.question import TASK_TYPE_ASSIGNMENT, TASK_TYPE_SELF_PRACTICE
+from app.services.mastery import refresh_student_mastery
+from app.services.question_answers import (
+    answer_for_response,
+    encode_correct_answer,
+    judge_objective_answer,
 )
 
 router = APIRouter()
@@ -102,6 +111,10 @@ def _task_class_id(task_id: int, session: Session) -> int | None:
     return link.class_id if link else None
 
 
+def _is_self_practice(task: AnswerTask) -> bool:
+    return task.task_type == TASK_TYPE_SELF_PRACTICE
+
+
 def _parse_question_options(raw: str | None) -> list[dict[str, str]]:
     """Normalize legacy string options and current object options for the frontend."""
     if not raw:
@@ -135,6 +148,7 @@ def _serialize_question(
     include_solution: bool = True,
 ) -> dict[str, Any]:
     knowledge_point = session.get(KnowledgePoint, question.point_id)
+    answer, answer_list = answer_for_response(question.type, question.correct_answer)
     return {
         "id": question.question_id,
         "stem": question.content,
@@ -142,7 +156,8 @@ def _serialize_question(
         "knowledgePoint": knowledge_point.point_name if knowledge_point else "",
         "score": round(score, 1),
         "options": _parse_question_options(question.options),
-        "answer": question.correct_answer if include_solution else "",
+        "answer": answer if include_solution else "",
+        "answerList": answer_list if include_solution else None,
         "explanation": question.analysis or "" if include_solution else "",
         "difficulty": question.difficulty or "medium",
     }
@@ -181,10 +196,12 @@ def list_answer_tasks(
     for t in tasks:
         if not _can_access_course(current_user, t.course_id, session):
             continue
+        if role_code != "student" and _is_self_practice(t):
+            continue
         if role_code == "student":
             if t.status != 1:
                 continue
-            if t.task_name.startswith(_SELF_PRACTICE_PREFIX) and t.create_by != current_user.user_id:
+            if _is_self_practice(t) and t.create_by != current_user.user_id:
                 continue
             target_class_id = _task_class_id(t.task_id, session)
             if target_class_id and (
@@ -273,6 +290,8 @@ def list_answer_records(
         task = session.get(AnswerTask, tid)
         if not task or not _can_access_course(current_user, task.course_id, session):
             continue
+        if role_code != "student" and _is_self_practice(task):
+            continue
         if role_code == "student" and (not current_student or sid != current_student.student_id):
             continue
 
@@ -315,7 +334,10 @@ def get_answer_record_detail(
     if not task:
         raise HTTPException(status_code=404, detail="答题任务不存在")
     _require_course_access(current_user, task.course_id, session)
-    if _role_code(current_user, session) == "student":
+    role_code = _role_code(current_user, session)
+    if role_code != "student" and _is_self_practice(task):
+        raise HTTPException(status_code=403, detail="自主练习记录仅学生本人可见")
+    if role_code == "student":
         current_student = _student_for_user(current_user, session)
         if not current_student or first_record.student_id != current_student.student_id:
             raise HTTPException(status_code=403, detail="无权查看该答题记录")
@@ -385,7 +407,7 @@ def submit_answers(
     _require_course_access(current_user, task.course_id, session)
     if _role_code(current_user, session) != "student":
         raise HTTPException(status_code=403, detail="只有学生可以提交答案")
-    if task.task_name.startswith(_SELF_PRACTICE_PREFIX):
+    if _is_self_practice(task):
         raise HTTPException(status_code=409, detail="自主练习请使用专用提交接口")
     if task.status != 1:
         raise HTTPException(status_code=409, detail="任务当前不可提交")
@@ -499,6 +521,7 @@ def _grade_task_answers(
             StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
+    refresh_student_mastery(session, student.student_id, task.course_id)
     records_by_question = {record.question_id: record for record in records}
     question_results = []
     for _, question in tq_rows:
@@ -526,31 +549,7 @@ def _grade_task_answers(
 
 def _judge_objective(question: AiQuestion, user_answer: str) -> bool:
     """客观题规则判分。"""
-    correct = question.correct_answer.strip()
-    user = user_answer.strip()
-
-    if question.type == 1:
-        # 单选
-        return user.upper() == correct.upper()
-    elif question.type == 2:
-        # 多选：答案排序后比较
-        import json as _json
-        try:
-            correct_list = _json.loads(correct) if correct.startswith("[") else list(correct)
-            user_list = _json.loads(user) if user.startswith("[") else list(user)
-        except (ValueError, TypeError):
-            correct_list = list(correct)
-            user_list = list(user)
-        return sorted([str(x).upper() for x in correct_list]) == sorted([str(x).upper() for x in user_list])
-    elif question.type == 3:
-        # 判断
-        correct_val = correct in ("正确", "true", "True", "1")
-        user_val = user in ("正确", "true", "True", "1")
-        return correct_val == user_val
-    elif question.type == 4:
-        # 填空：忽略大小写比较
-        return user.lower() == correct.lower()
-    return False
+    return judge_objective_answer(question.type, question.correct_answer, user_answer)
 
 
 def _call_ai_judge(
@@ -701,11 +700,8 @@ def _ensure_question_in_bank(
         session.flush()
     point_id = kp.point_id
 
-    import json
     type_map = {"single_choice": 1, "multi_choice": 2, "judge": 3, "fill_blank": 4, "short_answer": 5}
-    answer = item.answer
-    if item.answerList:
-        answer = ",".join(item.answerList)
+    answer = encode_correct_answer(item.type, item.answer, item.answerList)
 
     q = AiQuestion(
         course_id=course_id,
@@ -737,7 +733,7 @@ def submit_self_practice(
         raise HTTPException(status_code=403, detail="学生信息不存在")
 
     task = session.get(AnswerTask, req.taskId)
-    if not task or not task.task_name.startswith(_SELF_PRACTICE_PREFIX):
+    if not task or not _is_self_practice(task):
         raise HTTPException(status_code=404, detail="自主练习不存在")
     if task.create_by != current_user.user_id:
         raise HTTPException(status_code=403, detail="无权提交他人的自主练习")
@@ -809,6 +805,7 @@ def create_answer_task(
     task = AnswerTask(
         course_id=req.courseId,
         task_name=req.title,
+        task_type=TASK_TYPE_ASSIGNMENT,
         deadline=deadline,
         status=status_int,
         create_by=current_user.user_id,
@@ -983,13 +980,73 @@ class GenerateExercisesRequest(BaseModel):
     extraRequirements: str = ""
 
 
+def _consume_ai_quota(
+    req: GenerateExercisesRequest,
+    session: Session,
+    current_user: SysUser,
+    operation: str,
+) -> AiGenerationLog:
+    """校验并预先记录一次 AI 调用，失败请求也占用额度以阻止成本绕过。"""
+    role_code = _role_code(current_user, session)
+    if role_code == "student":
+        if req.questionCount > settings.AI_STUDENT_MAX_QUESTIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"学生自主练习单次最多生成 {settings.AI_STUDENT_MAX_QUESTIONS} 题",
+            )
+        daily_limit = settings.AI_STUDENT_DAILY_REQUEST_LIMIT
+    else:
+        daily_limit = settings.AI_STAFF_DAILY_REQUEST_LIMIT
+
+    day_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    used = session.exec(
+        select(func.count(AiGenerationLog.usage_id)).where(
+            AiGenerationLog.user_id == current_user.user_id,
+            AiGenerationLog.create_time >= day_start,
+        )
+    ).one()
+    if used >= daily_limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日 AI 出题额度已用完（{daily_limit} 次），请明天再试",
+        )
+
+    usage = AiGenerationLog(
+        user_id=current_user.user_id,
+        course_id=req.courseId,
+        operation=operation,
+        question_count=req.questionCount,
+    )
+    session.add(usage)
+    session.commit()
+    session.refresh(usage)
+    return usage
+
+
 @router.post("/exercises/generate", tags=["AI 出题"])
 def generate_exercises_proxy(
     req: GenerateExercisesRequest,
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """代理调用算法服务 8001 的 /generate_exercises。
+    """教师/管理员代理调用算法服务 8001 的 /generate_exercises。"""
+    if _role_code(current_user, session) not in {"admin", "teacher"}:
+        raise HTTPException(status_code=403, detail="学生请使用自主练习接口")
+    return _generate_exercises(
+        req,
+        session=session,
+        current_user=current_user,
+        operation="teacher_generate",
+    )
+
+
+def _generate_exercises(
+    req: GenerateExercisesRequest,
+    session: Session,
+    current_user: SysUser,
+    operation: str,
+) -> dict:
+    """校验配额后调用算法服务并转换为 QuizQuestion。
 
     将响应转换为前端 QuizQuestion[] 格式。
     """
@@ -999,6 +1056,7 @@ def generate_exercises_proxy(
         raise HTTPException(status_code=404, detail="课程不存在")
     _require_course_access(current_user, req.courseId, session)
     course_name = course.course_name
+    usage = _consume_ai_quota(req, session, current_user, operation)
 
     # 按题型分布：均匀分配
     type_map = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0, "short_answer": 0}
@@ -1038,6 +1096,8 @@ def generate_exercises_proxy(
         raise HTTPException(status_code=503, detail=f"AI 服务错误: {detail}")
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"算法服务不可达: {e}")
+    except ValueError:
+        raise HTTPException(status_code=503, detail="AI 服务返回了无效数据")
 
     # 转换为前端 QuizQuestion 格式
     questions = []
@@ -1060,6 +1120,9 @@ def generate_exercises_proxy(
         })
 
     meta_raw = data.get("meta", {})
+    usage.success = 1
+    session.add(usage)
+    session.commit()
     return {
         "questions": questions,
         "meta": {
@@ -1082,10 +1145,11 @@ def start_self_practice(
     if not student:
         raise HTTPException(status_code=403, detail="学生信息不存在")
 
-    generated = generate_exercises_proxy(
+    generated = _generate_exercises(
         req,
         session=session,
         current_user=current_user,
+        operation="self_practice",
     )
     generated_questions = generated.get("questions", [])
     if not generated_questions:
@@ -1096,6 +1160,7 @@ def start_self_practice(
     task = AnswerTask(
         course_id=req.courseId,
         task_name=f"{_SELF_PRACTICE_PREFIX}{now.strftime('%Y-%m-%d %H:%M:%S')}",
+        task_type=TASK_TYPE_SELF_PRACTICE,
         publish_time=now,
         deadline=now + timedelta(hours=1),
         status=1,

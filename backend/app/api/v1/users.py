@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
+from app.core.security import hash_password
 from app.models import SysUser, UserCreate, UserRead, UserUpdate
 
 router = APIRouter()
@@ -25,7 +26,9 @@ def create_user(
     """创建用户。用户名重复返回 400。"""
     if session.exec(select(SysUser).where(SysUser.username == payload.username)).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
-    user = SysUser(**payload.model_dump())
+    user_data = payload.model_dump()
+    user_data["password"] = hash_password(user_data["password"])
+    user = SysUser(**user_data)
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -61,7 +64,10 @@ def update_user(
     user = session.get(SysUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if "password" in updates:
+        updates["password"] = hash_password(updates["password"])
+    for field, value in updates.items():
         setattr(user, field, value)
     session.add(user)
     session.commit()

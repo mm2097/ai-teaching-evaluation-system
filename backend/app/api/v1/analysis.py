@@ -12,6 +12,7 @@ from app.models import (
     SysUser, Teacher, SysRole,
 )
 from app.services.predict import predict_student_scores
+from app.services.mastery import compute_assignment_accuracy_index
 from app.services.warning import scan_course_warnings, persist_warnings
 
 router = APIRouter()
@@ -274,17 +275,20 @@ def get_knowledge_heatmap(
             stmt = stmt.where(CourseStudent.student_id.in_(stu_in_class))  # type: ignore
         student_ids = session.exec(stmt).all()
 
-    # 批量查询所有掌握度（避免 N+1）
-    all_masteries = session.exec(
-        select(KnowledgeMastery).where(
-            KnowledgeMastery.course_id == course_id,
-            KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
-        )
-    ).all()
-    # 构建 (student_id, point_id) → score 索引
-    mastery_index: dict[tuple[int, int], float] = {}
-    for m in all_masteries:
-        mastery_index[(m.student_id, m.point_id)] = m.mastery_score
+    # 个人视图包含自主练习；班级视图只展示教师任务，避免自主练习污染班级统计。
+    if role_code == "student":
+        all_masteries = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == course_id,
+                KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        mastery_index = {
+            (mastery.student_id, mastery.point_id): mastery.mastery_score
+            for mastery in all_masteries
+        }
+    else:
+        mastery_index = compute_assignment_accuracy_index(session, course_id, student_ids)
 
     student_names = []
     for sid in student_ids:
@@ -316,20 +320,10 @@ def get_knowledge_heatmap(
         avg_in_class = session.exec(
             select(Student.student_id).where(Student.class_id == class_id)
         ).all()
-        if avg_in_class:
-            avg_stmt = avg_stmt.where(CourseStudent.student_id.in_(avg_in_class))  # type: ignore
+        avg_stmt = avg_stmt.where(CourseStudent.student_id.in_(avg_in_class))  # type: ignore
     avg_student_ids = session.exec(avg_stmt).all()
 
-    # 查询全部学生的掌握度用于计算班级平均
-    avg_masteries = session.exec(
-        select(KnowledgeMastery).where(
-            KnowledgeMastery.course_id == course_id,
-            KnowledgeMastery.student_id.in_(avg_student_ids),  # type: ignore
-        )
-    ).all() if avg_student_ids else []
-    avg_index: dict[tuple[int, int], float] = {}
-    for m in avg_masteries:
-        avg_index[(m.student_id, m.point_id)] = m.mastery_score
+    avg_index = compute_assignment_accuracy_index(session, course_id, avg_student_ids)
 
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):

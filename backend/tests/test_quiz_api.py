@@ -16,6 +16,7 @@ from app.models import (
     SysUser,
     TaskQuestion,
 )
+from app.models.question import TASK_TYPE_SELF_PRACTICE
 
 
 def _user(session, user_id: int) -> SysUser:
@@ -384,6 +385,7 @@ def _generated_self_practice() -> dict:
 def _create_open_self_practice(session) -> AnswerTask:
     task = _create_task(session, [1])
     task.task_name = f"【自主练习】{datetime.now().timestamp()}"
+    task.task_type = TASK_TYPE_SELF_PRACTICE
     task.create_by = 2
     session.add(task)
     session.commit()
@@ -396,7 +398,7 @@ def test_student_self_practice_start_hides_solutions_and_submit_uses_saved_answe
     generated = _generated_self_practice()
     monkeypatch.setattr(
         quiz,
-        "generate_exercises_proxy",
+        "_generate_exercises",
         lambda *args, **kwargs: generated,
     )
 

@@ -5,6 +5,9 @@ from typing import Optional
 from sqlalchemy import Text
 from sqlmodel import Field, SQLModel
 
+TASK_TYPE_ASSIGNMENT = "assignment"
+TASK_TYPE_SELF_PRACTICE = "self_practice"
+
 
 class AiQuestion(SQLModel, table=True):
     """AI 题目表 ai_question。"""
@@ -32,6 +35,7 @@ class AnswerTask(SQLModel, table=True):
     task_id: Optional[int] = Field(default=None, primary_key=True)
     course_id: int = Field(foreign_key="course.course_id", index=True)
     task_name: str = Field(max_length=64)
+    task_type: str = Field(default=TASK_TYPE_ASSIGNMENT, max_length=20)
     publish_time: datetime = Field(default_factory=datetime.now)
     deadline: datetime
     status: int = Field(default=0)  # 0=未开始, 1=进行中, 2=已结束

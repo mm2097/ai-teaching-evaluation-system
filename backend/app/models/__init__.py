@@ -15,10 +15,16 @@ from app.models.knowledge import KnowledgeModule, KnowledgePoint
 from app.models.attendance import AttendanceRecord
 from app.models.interaction import InteractionRecord
 from app.models.exam import ExamBatch, ScoreRecord
-from app.models.question import AiQuestion, AnswerTask, AnswerTaskClass, TaskQuestion, StudentAnswerRecord
+from app.models.question import (
+    AiQuestion,
+    AnswerTask,
+    AnswerTaskClass,
+    StudentAnswerRecord,
+    TaskQuestion,
+)
 from app.models.evaluation import EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore
 from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
-from app.models.log import SysOperationLog
+from app.models.log import AiGenerationLog, SysOperationLog
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
@@ -30,5 +36,5 @@ __all__ = [
     "AiQuestion", "AnswerTask", "AnswerTaskClass", "TaskQuestion", "StudentAnswerRecord",
     "EvalDimension", "EvalIndex", "StudentEvaluationResult", "EvalDimensionScore",
     "KnowledgeMastery", "StudyWarning", "StudentProfile",
-    "SysOperationLog",
+    "AiGenerationLog", "SysOperationLog",
 ]

@@ -149,7 +149,7 @@ async function handleGenerateSelfQuiz(): Promise<void> {
     result.value = null
     ElMessage.success(`已生成 ${startResult.assignment.questions.length} 道练习题，请开始作答`)
   } catch {
-    ElMessage.error('AI 服务暂不可用，请稍后重试')
+    // 请求拦截器会展示后端的具体错误，包括当日额度与题量限制。
   } finally {
     generating.value = false
   }
@@ -347,7 +347,8 @@ const resultSubtitle = computed(() => {
             </el-form-item>
 
             <el-form-item label="题量">
-              <el-input-number v-model="selfForm.questionCount" :min="1" :max="20" />
+              <el-input-number v-model="selfForm.questionCount" :min="1" :max="10" />
+              <el-text type="info" size="small">单次最多 10 题，每日最多生成 5 次</el-text>
             </el-form-item>
 
             <el-form-item label="难度">

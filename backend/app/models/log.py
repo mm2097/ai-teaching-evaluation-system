@@ -17,3 +17,17 @@ class SysOperationLog(SQLModel, table=True):
     content: str = Field(max_length=255)
     ip_address: Optional[str] = Field(default=None, max_length=64)
     operation_time: datetime = Field(default_factory=datetime.now)
+
+
+class AiGenerationLog(SQLModel, table=True):
+    """AI 出题调用记录，用于持久化配额与审计。"""
+
+    __tablename__ = "ai_generation_log"
+
+    usage_id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="sys_user.user_id", index=True)
+    course_id: int = Field(foreign_key="course.course_id", index=True)
+    operation: str = Field(max_length=32)
+    question_count: int
+    success: int = Field(default=0)
+    create_time: datetime = Field(default_factory=datetime.now, index=True)

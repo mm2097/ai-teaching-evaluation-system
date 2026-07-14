@@ -19,11 +19,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Query as QueryParam
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
-from app.models import SysUser
+from app.models import SysUser, SysRole, Student, Teacher, Course
 from app.api.v1.analysis import _check_course_access
 from app.services.report_template import (
     build_class_context,
@@ -48,6 +48,67 @@ _REPORT_TYPE_NAMES: dict[int, str] = {
     3: "课程知识点分析报告",
     4: "学生学习质量报告",
 }
+
+# 学生可访问的报告类型（仅限查看本人数据）
+_STUDENT_REPORT_TYPES = {2, 3, 4}
+
+
+# ============================================================================
+# 权限校验
+# ============================================================================
+
+def _check_report_access(
+    session: Session,
+    current_user: SysUser,
+    course_id: int,
+    report_type: int,
+    student_id: int | None,
+) -> None:
+    """报告生成权限校验（Report.UserValid）。
+
+    - 管理员（admin）：全部放行
+    - 任课教师（teacher）：仅可查看自己授课课程的报告
+    - 学生（student）：仅可生成类型 2（个人学情）/ 4（学习质量），且只能看自己
+    """
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+
+    if role_code == "admin":
+        return
+
+    if role_code == "teacher":
+        _check_course_access(session, current_user, course_id)
+        return
+
+    if role_code == "student":
+        if report_type not in _STUDENT_REPORT_TYPES:
+            raise HTTPException(
+                status_code=403,
+                detail="学生仅可生成个人学情报告（类型2）和学习质量报告（类型4）",
+            )
+        student = session.exec(
+            select(Student).where(Student.user_id == current_user.user_id)
+        ).first()
+        if not student:
+            raise HTTPException(status_code=403, detail="当前账号未关联学生信息")
+        if student_id is not None and student_id != student.student_id:
+            raise HTTPException(status_code=403, detail="学生仅可生成自己的报告")
+        # 校验课程：学生必须选修了该课程
+        from app.models import CourseStudent
+        enrollment = session.exec(
+            select(CourseStudent).where(
+                CourseStudent.student_id == student.student_id,
+                CourseStudent.course_id == course_id,
+            )
+        ).first()
+        if not enrollment:
+            raise HTTPException(
+                status_code=403,
+                detail="您未选修该课程，无法生成报告",
+            )
+        return
+
+    raise HTTPException(status_code=403, detail="无权生成报告")
 
 
 # ============================================================================
@@ -104,6 +165,7 @@ def _assemble_report(
     class_id: int | None,
     student_id: int | None,
     use_llm: bool,
+    current_user: SysUser | None = None,
 ) -> tuple[dict, any]:
     """组装报告 JSON 和上下文对象。返回 (report_dict, ReportContext)。"""
     scope = _REPORT_TYPE_SCOPE.get(report_type, "class")
@@ -113,11 +175,23 @@ def _assemble_report(
     _class_id = class_id if not isinstance(class_id, QueryParam) else None
     _student_id = student_id if not isinstance(student_id, QueryParam) else None
 
+    # 学生角色：类型 2/4 自动取本人 student_id
+    if current_user:
+        role = session.get(SysRole, current_user.role_id)
+        role_code = role.role_code if role else ""
+        if role_code == "student" and report_type in _STUDENT_REPORT_TYPES:
+            student = session.exec(
+                select(Student).where(Student.user_id == current_user.user_id)
+            ).first()
+            if student:
+                _student_id = student.student_id
+                scope = "student"
+
     if report_type == 2:
         if not _student_id:
             raise HTTPException(status_code=400, detail="学生个人报告必须提供 student_id")
         ctx = build_student_context(session, _student_id, course_id)
-    elif report_type == 4 and _student_id:
+    elif report_type in (3, 4) and _student_id:
         ctx = build_student_context(session, _student_id, course_id)
         scope = "student"
     else:
@@ -151,11 +225,14 @@ def get_report(
 ) -> dict:
     """统一报告生成接口（Report.Generate）。
 
-    权限（Report.UserValid）：仅管理员和课程授课教师可生成报告。
+    权限（Report.UserValid）：
+    - 管理员可生成所有报告
+    - 任课教师可生成本课程报告
+    - 学生可生成类型 2/4 的个人报告（仅限本人）
     """
-    _check_course_access(session, current_user, course_id)
+    _check_report_access(session, current_user, course_id, report_type, student_id)
 
-    report, _ = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm)
+    report, _ = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
     return report
 
 
@@ -195,11 +272,14 @@ def preview_report(
 
     返回可直接在浏览器中展示的完整 HTML 页面。
 
-    权限（Report.UserValid）：仅管理员和课程授课教师可预览报告。
+    权限（Report.UserValid）：
+    - 管理员可预览所有报告
+    - 任课教师可预览本课程报告
+    - 学生可预览类型 2/4 的个人报告（仅限本人）
     """
-    _check_course_access(session, current_user, course_id)
+    _check_report_access(session, current_user, course_id, report_type, student_id)
 
-    report, ctx = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm)
+    report, ctx = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
     type_name = _REPORT_TYPE_NAMES.get(report_type, "报告")
 
     # 核心指标卡片
@@ -293,11 +373,14 @@ def export_report(
     - Sheet2: 核心指标数据
     - Sheet3: 知识点详情（如有）
 
-    权限（Report.UserValid）：仅管理员和课程授课教师可导出报告。
+    权限（Report.UserValid）：
+    - 管理员可导出所有报告
+    - 任课教师可导出本课程报告
+    - 学生可导出类型 2/4 的个人报告（仅限本人）
     """
-    _check_course_access(session, current_user, course_id)
+    _check_report_access(session, current_user, course_id, report_type, student_id)
 
-    report, ctx = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm)
+    report, ctx = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
     type_name = _REPORT_TYPE_NAMES.get(report_type, "报告")
 
     wb = openpyxl.Workbook()

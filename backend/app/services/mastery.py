@@ -12,17 +12,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
+from sqlalchemy import or_
 from sqlmodel import Session, func, select
 
 from app.models import (
     AiQuestion,
+    AnswerTask,
     CourseStudent,
     KnowledgeMastery,
     KnowledgeModule,
     KnowledgePoint,
+    Student,
     StudentAnswerRecord,
 )
+from app.models.question import TASK_TYPE_ASSIGNMENT
 
 
 @dataclass
@@ -76,6 +81,7 @@ def compute_student_mastery(
             .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
             .where(
                 StudentAnswerRecord.student_id == student_id,
+                AiQuestion.course_id == course_id,
                 AiQuestion.point_id == p.point_id,
             )
         ).one()
@@ -107,6 +113,83 @@ def compute_student_mastery(
     return results
 
 
+def refresh_student_mastery(session: Session, student_id: int, course_id: int) -> None:
+    """按该生全部答题记录刷新持久化个人掌握度。"""
+    session.flush()
+    rows = session.exec(
+        select(
+            AiQuestion.point_id,
+            func.count(StudentAnswerRecord.answer_id),
+            func.sum(StudentAnswerRecord.is_correct),
+        )
+        .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .where(
+            StudentAnswerRecord.student_id == student_id,
+            AiQuestion.course_id == course_id,
+        )
+        .group_by(AiQuestion.point_id)
+    ).all()
+
+    for point_id, total, correct in rows:
+        if not total:
+            continue
+        score = round((correct or 0) * 100.0 / total, 1)
+        mastery = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == course_id,
+                KnowledgeMastery.student_id == student_id,
+                KnowledgeMastery.point_id == point_id,
+            )
+        ).first()
+        if not mastery:
+            mastery = KnowledgeMastery(
+                course_id=course_id,
+                student_id=student_id,
+                point_id=point_id,
+                mastery_score=score,
+                mastery_level=_mastery_level(score),
+            )
+        else:
+            mastery.mastery_score = score
+            mastery.mastery_level = _mastery_level(score)
+            mastery.update_time = datetime.now()
+        session.add(mastery)
+
+
+def compute_assignment_accuracy_index(
+    session: Session,
+    course_id: int,
+    student_ids: list[int],
+) -> dict[tuple[int, int], float]:
+    """计算教师任务的学生/知识点正确率，严格排除自主练习。"""
+    if not student_ids:
+        return {}
+    rows = session.exec(
+        select(
+            StudentAnswerRecord.student_id,
+            AiQuestion.point_id,
+            func.count(StudentAnswerRecord.answer_id),
+            func.sum(StudentAnswerRecord.is_correct),
+        )
+        .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .outerjoin(AnswerTask, StudentAnswerRecord.task_id == AnswerTask.task_id)
+        .where(
+            StudentAnswerRecord.student_id.in_(student_ids),  # type: ignore
+            AiQuestion.course_id == course_id,
+            or_(
+                AnswerTask.task_id.is_(None),
+                AnswerTask.task_type == TASK_TYPE_ASSIGNMENT,
+            ),
+        )
+        .group_by(StudentAnswerRecord.student_id, AiQuestion.point_id)
+    ).all()
+    return {
+        (student_id, point_id): round((correct or 0) * 100.0 / total, 1)
+        for student_id, point_id, total, correct in rows
+        if total
+    }
+
+
 def compute_class_mastery(
     session: Session, course_id: int, class_id: int | None = None
 ) -> list[MasteryStat]:
@@ -124,40 +207,24 @@ def compute_class_mastery(
     if not points:
         return []
 
-    # 选学生（class_id 筛选交由调用方处理，这里只取课程全体）
-    stmt = select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    student_ids = session.exec(stmt).all()
+    stmt = (
+        select(CourseStudent.student_id)
+        .join(Student, CourseStudent.student_id == Student.student_id)
+        .where(CourseStudent.course_id == course_id)
+    )
+    if class_id is not None:
+        stmt = stmt.where(Student.class_id == class_id)
+    student_ids = list(session.exec(stmt).all())
+    accuracy_index = compute_assignment_accuracy_index(session, course_id, student_ids)
 
     results: list[MasteryStat] = []
     for p in points:
-        accs: list[float] = []
-        for sid in student_ids:
-            total, correct = session.exec(
-                select(
-                    func.count(StudentAnswerRecord.answer_id),
-                    func.sum(StudentAnswerRecord.is_correct),
-                )
-                .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
-                .where(
-                    StudentAnswerRecord.student_id == sid,
-                    AiQuestion.point_id == p.point_id,
-                )
-            ).one()
-            if total and total > 0:
-                accs.append((correct or 0) * 100.0 / total)
-
-        if accs:
-            avg_acc = sum(accs) / len(accs)
-        else:
-            # 兜底：KnowledgeMastery 班级均值
-            kms = session.exec(
-                select(KnowledgeMastery.mastery_score)
-                .where(
-                    KnowledgeMastery.course_id == course_id,
-                    KnowledgeMastery.point_id == p.point_id,
-                )
-            ).all()
-            avg_acc = sum(kms) / len(kms) if kms else 0.0
+        accs = [
+            accuracy_index[(sid, p.point_id)]
+            for sid in student_ids
+            if (sid, p.point_id) in accuracy_index
+        ]
+        avg_acc = sum(accs) / len(accs) if accs else 0.0
 
         level, color = accuracy_to_level(avg_acc)
         results.append(
@@ -171,3 +238,11 @@ def compute_class_mastery(
             )
         )
     return results
+
+
+def _mastery_level(score: float) -> int:
+    if score >= 80:
+        return 3
+    if score >= 60:
+        return 2
+    return 1

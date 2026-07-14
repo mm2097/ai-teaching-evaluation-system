@@ -12,6 +12,7 @@ from datetime import date, datetime
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import engine, init_db
+from app.core.security import hash_password
 from app.models import (
     SysUser, SysRole, Teacher, Student, ClassInfo, Course, CourseStudent,
     KnowledgeModule, KnowledgePoint,
@@ -65,6 +66,8 @@ def seed() -> None:
             SysUser(username="stu09", password="123456", real_name="王志强", role_id=3, status=1),
             SysUser(username="stu10", password="123456", real_name="李思琪", role_id=3, status=1),
         ]
+        for user in users:
+            user.password = hash_password(user.password)
         session.add_all(users)
         session.commit()
         print(f"  用户: {len(users)} 条")
@@ -143,6 +146,8 @@ def seed() -> None:
             SysUser(username="201826010229", password="123456", real_name="鄢蝶", role_id=3, status=1),
             SysUser(username="201826010230", password="123456", real_name="麦麦提·阿卜杜赛米", role_id=3, status=1),
         ]
+        for user in test_student_users:
+            user.password = hash_password(user.password)
         session.add_all(test_student_users)
         session.commit()
         print(f"  测试学生用户: {len(test_student_users)} 条")

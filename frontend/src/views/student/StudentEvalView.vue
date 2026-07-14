@@ -1,33 +1,33 @@
 <!--
   学生个人学习评价页
-  展示个人综合得分、各维度评价详情
+  对接 evaluations.py：/evaluations/results、/evaluations
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { scoreToGrade, evalGradeType } from '@/utils/auth'
-import request from '@/utils/request'
+import {
+  evalGradeTagType,
+  fetchEvaluationResults,
+  fetchEvaluations,
+} from '@/api/evaluations'
 
 const userStore = useUserStore()
 const loading = ref(true)
+const courseId = ref<number>()
+const courseOptions = ref<{ label: string; value: number }[]>([])
 
 const evalData = ref({
   targetName: userStore.userInfo?.name || '同学',
-  totalScore: 88.5,
-  grade: '优秀' as const,
-  dimensions: [
-    { name: '学业成绩', score: 90, weight: 40 },
-    { name: '学习态度', score: 85, weight: 25 },
-    { name: '学习进步', score: 92, weight: 20 },
-    { name: '知识掌握', score: 86, weight: 15 },
-  ],
+  courseName: '',
+  totalScore: 0,
+  grade: '—',
+  dimensions: [] as { name: string; score: number; weight: number }[],
 })
 
-const gradeTagType = computed(() => evalGradeType(evalData.value.grade))
+const gradeTagType = computed(() => evalGradeTagType(evalData.value.grade))
 
-/** 各维度得分柱状图 */
 const barOption = computed<EChartsOption>(() => ({
   tooltip: { trigger: 'axis' },
   grid: { left: 100, right: 20, top: 10, bottom: 30 },
@@ -45,7 +45,7 @@ const barOption = computed<EChartsOption>(() => ({
     data: evalData.value.dimensions.map((d) => ({
       value: d.score,
       itemStyle: {
-        color: d.score >= 90 ? '#10b981' : d.score >= 80 ? '#2563eb' : d.score >= 70 ? '#f59e0b' : '#ef4444',
+        color: d.score >= 85 ? '#10b981' : d.score >= 75 ? '#2563eb' : d.score >= 60 ? '#f59e0b' : '#ef4444',
         borderRadius: [0, 6, 6, 0],
       },
     })),
@@ -53,97 +53,192 @@ const barOption = computed<EChartsOption>(() => ({
   }],
 }))
 
-/** 评价体系说明（静态配置） */
-const evalIndicatorConfig = [
-  { id: 1, name: '学业成绩', weight: 40, rule: '基于课程考核加权平均分' },
-  { id: 2, name: '学习态度', weight: 25, rule: '考勤率 + 作业提交率 + 课堂互动' },
-  { id: 3, name: '学习进步', weight: 20, rule: '近三次测验成绩变化趋势' },
-  { id: 4, name: '知识掌握', weight: 15, rule: '知识点测试掌握率' },
-]
+async function loadCourses(): Promise<void> {
+  const studentId = userStore.userInfo?.studentId
+  if (!studentId) {
+    courseOptions.value = []
+    return
+  }
+
+  const list = await fetchEvaluations({ studentId })
+  const courseMap = new Map<number, string>()
+  for (const item of list) {
+    courseMap.set(item.courseId, item.courseName)
+  }
+
+  if (!courseMap.size) {
+    const results = await fetchEvaluationResults({ studentId })
+    for (const r of results) {
+      if (!courseMap.has(r.courseId)) {
+        courseMap.set(r.courseId, `课程 ${r.courseId}`)
+      }
+    }
+  }
+
+  courseOptions.value = [...courseMap.entries()].map(([value, label]) => ({ value, label }))
+
+  if (!courseId.value && courseOptions.value.length) {
+    courseId.value = courseOptions.value[0]!.value
+  }
+  if (courseId.value && !courseOptions.value.some((c) => c.value === courseId.value)) {
+    courseId.value = courseOptions.value[0]?.value
+  }
+}
+
+async function loadEvalData(): Promise<void> {
+  const studentId = userStore.userInfo?.studentId
+  if (!studentId || !courseId.value) {
+    evalData.value = {
+      targetName: userStore.userInfo?.name || '同学',
+      courseName: '',
+      totalScore: 0,
+      grade: '—',
+      dimensions: [],
+    }
+    return
+  }
+
+  loading.value = true
+  try {
+    const [results, list] = await Promise.all([
+      fetchEvaluationResults({ studentId, courseId: courseId.value }),
+      fetchEvaluations({ studentId, courseId: courseId.value }),
+    ])
+
+    const detail = list.find((item) => item.courseId === courseId.value) ?? list[0]
+    const latest = results.length ? results[results.length - 1]! : null
+
+    if (detail || latest) {
+      const courseName = detail?.courseName || courseOptions.value.find((c) => c.value === courseId.value)?.label || ''
+      if (detail?.courseName && courseId.value) {
+        const opt = courseOptions.value.find((c) => c.value === courseId.value)
+        if (opt) opt.label = detail.courseName
+      }
+      evalData.value = {
+        targetName: detail?.studentName || latest?.studentName || evalData.value.targetName,
+        courseName,
+        totalScore: detail?.totalScore ?? latest?.totalScore ?? 0,
+        grade: detail?.grade ?? latest?.grade ?? '—',
+        dimensions: detail?.dimensions.map((d) => ({
+          name: d.name,
+          score: d.score,
+          weight: d.weight,
+        })) ?? [],
+      }
+    } else {
+      evalData.value = {
+        targetName: userStore.userInfo?.name || '同学',
+        courseName: courseOptions.value.find((c) => c.value === courseId.value)?.label || '',
+        totalScore: 0,
+        grade: '—',
+        dimensions: [],
+      }
+    }
+  } catch {
+    evalData.value.dimensions = []
+  } finally {
+    loading.value = false
+  }
+}
 
 onMounted(async () => {
-  try {
-    const res = await request.get('/v1/evaluations/results', {
-      params: { student_id: userStore.userInfo?.studentId, dept_id: 1 },
-    })
-    const results = res.data ?? []
-    if (results.length) {
-      const latest = results[results.length - 1]
-      evalData.value.totalScore = latest.total_score ?? 0
-      evalData.value.grade = (latest.grade || '及格') as typeof evalData.value.grade
-    }
-  } catch { /* empty */ }
-  loading.value = false
+  await loadCourses()
+  await loadEvalData()
+  inited = true
+})
+
+let inited = false
+watch(courseId, async () => {
+  if (!inited) return
+  await loadEvalData()
 })
 </script>
 
 <template>
   <div class="page-container" v-loading="loading">
-    <!-- 总评 -->
-    <div class="content-card score-hero">
-      <div class="hero-left">
-        <h2>学习质量综合评价</h2>
-        <p class="hero-sub">基于学业成绩、学习态度、进步趋势、知识掌握四维评估</p>
-      </div>
-      <div class="hero-right">
-        <div class="total-score">{{ evalData.totalScore }}</div>
-        <div class="total-label">综合得分</div>
-        <el-tag :type="gradeTagType" size="large" effect="dark">{{ evalData.grade }}</el-tag>
-      </div>
+    <div class="content-card filter-row">
+      <span class="filter-label">选择课程</span>
+      <el-select
+        v-model="courseId"
+        placeholder="请选择课程"
+        style="width: 260px"
+        :disabled="!courseOptions.length"
+      >
+        <el-option v-for="opt in courseOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+      </el-select>
     </div>
 
-    <!-- 维度详情 -->
-    <el-row :gutter="16">
-      <el-col :span="14">
-        <div class="content-card">
-          <div class="content-card__title">各维度得分详情</div>
-          <div v-for="dim in evalData.dimensions" :key="dim.name" class="dim-card">
-            <div class="dim-top">
-              <span class="dim-name">{{ dim.name }}</span>
-              <span class="dim-weight">权重 {{ dim.weight }}%</span>
+    <el-empty v-if="!courseOptions.length" description="暂无选修课程" />
+
+    <template v-else>
+      <div class="content-card score-hero">
+        <div class="hero-left">
+          <h2>学习质量综合评价</h2>
+          <p class="hero-sub">
+            <template v-if="evalData.courseName">《{{ evalData.courseName }}》</template>
+            基于多维度数据的综合学习质量评价
+          </p>
+        </div>
+        <div class="hero-right">
+          <div class="total-score">{{ evalData.totalScore || '—' }}</div>
+          <div class="total-label">综合得分</div>
+          <el-tag v-if="evalData.grade !== '—'" :type="gradeTagType" size="large" effect="dark">
+            {{ evalData.grade }}
+          </el-tag>
+          <el-tag v-else type="info" size="large">暂无评价</el-tag>
+        </div>
+      </div>
+
+      <el-row :gutter="16">
+        <el-col :span="14">
+          <div class="content-card">
+            <div class="content-card__title">各维度得分详情</div>
+            <el-empty v-if="!evalData.dimensions.length" description="该课程暂无评价数据" />
+            <div v-for="dim in evalData.dimensions" :key="dim.name" class="dim-card">
+              <div class="dim-top">
+                <span class="dim-name">{{ dim.name }}</span>
+                <span class="dim-weight">权重 {{ dim.weight }}%</span>
+              </div>
+              <div class="dim-progress">
+                <el-progress
+                  :percentage="dim.score"
+                  :stroke-width="10"
+                  :color="dim.score >= 85 ? '#10b981' : dim.score >= 75 ? '#2563eb' : dim.score >= 60 ? '#f59e0b' : '#ef4444'"
+                />
+                <span class="dim-score">{{ dim.score }}分</span>
+              </div>
             </div>
-            <div class="dim-progress">
-              <el-progress
-                :percentage="dim.score"
-                :stroke-width="10"
-                :color="dim.score >= 90 ? '#10b981' : dim.score >= 80 ? '#2563eb' : dim.score >= 70 ? '#f59e0b' : '#ef4444'"
-              />
-              <span class="dim-score">{{ dim.score }}分</span>
-            </div>
-            <p class="dim-desc">
-              <template v-if="dim.name === '学业成绩'">本课程加权平均分排名班级前列</template>
-              <template v-else-if="dim.name === '学习态度'">考勤率高、作业按时提交、课堂参与积极</template>
-              <template v-else-if="dim.name === '学习进步'">近三次测验成绩持续提升，进步趋势明显</template>
-              <template v-else>核心知识点掌握度较高，薄弱项需加强</template>
-            </p>
           </div>
-        </div>
-      </el-col>
-      <el-col :span="10">
-        <div class="content-card">
-          <div class="content-card__title">评价体系说明</div>
-          <div v-for="indicator in evalIndicatorConfig" :key="indicator.id" class="indicator-item">
-            <div class="ind-header">
-              <span class="ind-name">{{ indicator.name }}</span>
-              <el-tag size="small" type="info">{{ indicator.weight }}%</el-tag>
-            </div>
-            <p class="ind-rule">{{ indicator.rule }}</p>
+        </el-col>
+        <el-col :span="10">
+          <div v-if="evalData.dimensions.length" class="content-card">
+            <div class="content-card__title">维度得分可视化</div>
+            <BaseChart :option="barOption" height="280px" />
           </div>
-        </div>
-        <div class="content-card" style="margin-top: 16px">
-          <div class="content-card__title">维度得分可视化</div>
-          <BaseChart :option="barOption" height="280px" />
-        </div>
-      </el-col>
-    </el-row>
+        </el-col>
+      </el-row>
+    </template>
   </div>
 </template>
 
 <style scoped lang="scss">
+.filter-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+
+  .filter-label {
+    font-size: 14px;
+    color: #64748b;
+  }
+}
+
 .score-hero {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 16px;
 
   .hero-left {
     h2 { font-size: 20px; margin-bottom: 6px; }
@@ -177,31 +272,9 @@ onMounted(async () => {
     display: flex;
     align-items: center;
     gap: 12px;
-    margin-bottom: 8px;
 
     .el-progress { flex: 1; }
-
     .dim-score { font-weight: 700; color: #2563eb; font-size: 16px; }
   }
-
-  .dim-desc { font-size: 13px; color: #64748b; line-height: 1.5; }
-}
-
-.indicator-item {
-  padding: 12px;
-  background: #f8fafc;
-  border-radius: 8px;
-  margin-bottom: 8px;
-
-  .ind-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 6px;
-
-    .ind-name { font-size: 14px; font-weight: 500; }
-  }
-
-  .ind-rule { font-size: 12px; color: #94a3b8; line-height: 1.5; }
 }
 </style>

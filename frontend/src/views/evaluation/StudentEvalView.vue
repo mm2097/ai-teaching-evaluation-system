@@ -425,7 +425,10 @@ onMounted(async () => {
   .dim-val {
     font-weight: 600;
     color: #2563eb;
-    width: 24px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 36px;
+    text-align: right;
   }
 }
 </style>

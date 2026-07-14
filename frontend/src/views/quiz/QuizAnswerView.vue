@@ -3,7 +3,7 @@
   学生可作答教师布置练习，也可通过 AI 自主出题自学
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Edit, Check, MagicStick } from '@element-plus/icons-vue'
 import {
@@ -13,8 +13,9 @@ import {
   startSelfPractice,
 } from '@/api/quiz'
 import { fetchCourses } from '@/api/dict'
+import { fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { useUserStore } from '@/stores/user'
-import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
@@ -29,10 +30,11 @@ const quizMode = ref<'assigned' | 'self'>('assigned')
 
 /** 自主练习配置 */
 const courseOptions = ref<{ label: string; value: number }[]>([])
+const knowledgePointOptions = ref<string[]>([])
 const selfForm = ref({
   courseId: undefined as number | undefined,
   knowledgePoints: [] as string[],
-  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank'] as ExerciseType[],
+  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank', 'short_answer'] as ExerciseType[],
   questionCount: 5,
   difficulty: 'medium' as DifficultyLevel,
   extraRequirements: '',
@@ -57,13 +59,10 @@ const result = ref<{
   }[]
 } | null>(null)
 
-const questionTypeOptions = [
-  { label: exerciseTypeLabels.single_choice, value: 'single_choice' as ExerciseType },
-  { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
-  { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
-  { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
-  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
-]
+const questionTypeOptions = ALL_EXERCISE_TYPES.map((t) => ({
+  label: exerciseTypeLabels[t],
+  value: t,
+}))
 
 const difficultyOptions = [
   { label: difficultyLabels.easy, value: 'easy' as DifficultyLevel },
@@ -80,6 +79,22 @@ onMounted(async () => {
   if (courseOptions.value.length) {
     selfForm.value.courseId = courseOptions.value[0]!.value
   }
+  await syncSelfKnowledgePoints()
+})
+
+async function syncSelfKnowledgePoints(): Promise<void> {
+  if (!selfForm.value.courseId) {
+    knowledgePointOptions.value = []
+    return
+  }
+  knowledgePointOptions.value = await fetchCourseKnowledgePoints(selfForm.value.courseId)
+  selfForm.value.knowledgePoints = selfForm.value.knowledgePoints.filter((kp) =>
+    knowledgePointOptions.value.includes(kp),
+  )
+}
+
+watch(() => selfForm.value.courseId, () => {
+  syncSelfKnowledgePoints()
 })
 
 function initAnswers(questions: QuizQuestion[]): void {
@@ -316,9 +331,11 @@ const resultSubtitle = computed(() => {
                 filterable
                 allow-create
                 default-first-option
-                placeholder="输入或选择知识点（可留空）"
+                placeholder="选择知识点（可留空，默认综合）"
                 style="width: 100%"
-              />
+              >
+                <el-option v-for="kp in knowledgePointOptions" :key="kp" :label="kp" :value="kp" />
+              </el-select>
             </el-form-item>
 
             <el-form-item label="题型" required>
@@ -403,8 +420,11 @@ const resultSubtitle = computed(() => {
             <p class="answer-line">
               你的答案：<strong>{{ formatAnswer(item.question, item.userAnswer) }}</strong>
             </p>
-            <p v-if="!item.correct && !item.manualRequired" class="answer-line correct">
+            <p v-if="!item.correct && !item.manualRequired && item.question.type !== 'short_answer'" class="answer-line correct">
               正确答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
+            </p>
+            <p v-else-if="item.question.type === 'short_answer' && item.question.answer && !item.manualRequired" class="answer-line correct">
+              参考答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
             </p>
             <div v-if="item.question.type === 'short_answer' && item.aiReason" class="ai-judge">
               <div class="ai-judge__header">

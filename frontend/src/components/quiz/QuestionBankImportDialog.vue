@@ -165,7 +165,7 @@ async function handleBuiltinImport(): Promise<void> {
     <el-tabs v-model="importMode">
       <el-tab-pane label="模板文件导入" name="file">
         <div class="import-section">
-          <p class="section-desc">下载标准模板，按格式填写题目后上传。支持单选、多选、判断、填空四种题型。</p>
+          <p class="section-desc">下载标准模板，按格式填写题目后上传。支持单选、多选、判断、填空、简答五种题型。</p>
           <div class="download-btns">
             <el-button :icon="Download" @click="handleDownloadExcel">下载 Excel 模板</el-button>
             <el-button :icon="Download" @click="handleDownloadTxt">下载 Txt 模板</el-button>

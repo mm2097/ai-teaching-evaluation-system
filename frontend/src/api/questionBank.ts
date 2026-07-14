@@ -3,6 +3,7 @@
  */
 import request from '@/utils/request'
 import type { ParsedQuestionRow } from '@/utils/questionTemplateValidator'
+import { ALL_EXERCISE_TYPES, exerciseTypeLabels, normalizeExerciseType } from '@/utils/exerciseJudge'
 import type {
   DifficultyLevel,
   ExerciseSource,
@@ -18,6 +19,9 @@ export interface QuestionRecord {
   knowledgePoint: string
   type: string
   content: string
+  options?: { key: string; text: string }[] | string[]
+  answer?: string
+  explanation?: string
   difficulty: string
   createdTime: string
 }
@@ -27,12 +31,46 @@ export interface QuestionTypeOption {
   label: string
 }
 
-export const questionTypeOptions: QuestionTypeOption[] = [
-  { value: 'single_choice', label: '单选题' },
-  { value: 'multi_choice', label: '多选题' },
-  { value: 'judge', label: '判断题' },
-  { value: 'fill_blank', label: '填空题' },
-]
+export const questionTypeOptions: QuestionTypeOption[] = ALL_EXERCISE_TYPES.map((t) => ({
+  value: t,
+  label: exerciseTypeLabels[t],
+}))
+
+function parseQuestionOptions(raw: QuestionRecord['options']): { key: string; text: string }[] | undefined {
+  if (!raw?.length) return undefined
+  return raw.map((item, index) => {
+    if (typeof item === 'string') {
+      const match = item.match(/^\s*([A-Za-z])\s*[.、．:]\s*(.*)$/)
+      return {
+        key: match?.[1]?.toUpperCase() ?? String.fromCharCode(65 + index),
+        text: match?.[2] ?? item,
+      }
+    }
+    return { key: item.key, text: item.text }
+  })
+}
+
+function mapRecordToQuizQuestion(q: QuestionRecord): QuizQuestion {
+  const answer = q.answer ?? ''
+  const type = normalizeExerciseType(q.type)
+  return {
+    id: q.id,
+    courseId: q.courseId,
+    type,
+    stem: q.content,
+    options: parseQuestionOptions(q.options),
+    answer,
+    answerList: type === 'fill_blank' && answer
+      ? answer.split(/[,、|]/).map((s) => s.trim()).filter(Boolean)
+      : undefined,
+    explanation: q.explanation,
+    knowledgePoint: q.knowledgePoint,
+    difficulty: q.difficulty as DifficultyLevel,
+    score: type === 'short_answer' ? 10 : 5,
+    status: 'published',
+    source: 'manual',
+  }
+}
 
 export interface AddQuestionParams {
   courseName: string
@@ -90,19 +128,10 @@ export async function fetchQuestionBankList(params?: FetchQuestionBankParams): P
 }
 
 /** 获取题库列表（QuizManageView 使用的名字） */
-export async function fetchQuestionBank(params: FetchQuestionBankParams): Promise<import('@/types').QuizQuestion[]> {
+export async function fetchQuestionBank(params: FetchQuestionBankParams): Promise<QuizQuestion[]> {
   const res = await request.get('/v1/question-bank', { params })
   const items = res.data as QuestionRecord[]
-  return items.map((q) => ({
-    id: q.id,
-    courseId: q.courseId,
-    type: q.type as import('@/types').ExerciseType,
-    stem: q.content,
-    answer: q.content,
-    knowledgePoint: q.knowledgePoint,
-    difficulty: q.difficulty as import('@/types').DifficultyLevel,
-    score: 0,
-  }))
+  return items.map(mapRecordToQuizQuestion)
 }
 
 /** 新增单道试题 */
@@ -178,6 +207,38 @@ export async function importQuestionsFromBuiltin(
 
 // ===== QuestionBankView 使用的接口 =====
 
+/** 获取课程知识点选项（课程知识树 + 题库已有题目合并去重） */
+export async function fetchCourseKnowledgePoints(courseId?: number): Promise<string[]> {
+  if (!courseId) return []
+
+  const names = new Set<string>()
+
+  try {
+    const heatmapRes = await request.get<{ knowledgePoints?: string[] }>(
+      '/v1/analysis/knowledge-heatmap',
+      { params: { course_id: courseId } },
+    )
+    for (const kp of heatmapRes.data?.knowledgePoints ?? []) {
+      if (kp?.trim()) names.add(kp.trim())
+    }
+  } catch {
+    // 热力图接口不可用时，继续从题库提取
+  }
+
+  try {
+    const bankRes = await request.get<QuestionRecord[]>('/v1/question-bank', {
+      params: { courseId },
+    })
+    for (const q of bankRes.data ?? []) {
+      if (q.knowledgePoint?.trim()) names.add(q.knowledgePoint.trim())
+    }
+  } catch {
+    // ignore
+  }
+
+  return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
 /** 题库统计（按课程维度） */
 export async function fetchQuestionBankStats(courseId?: number): Promise<QuestionBankStats> {
   const params: FetchQuestionBankParams = courseId ? { courseId } : {}
@@ -190,7 +251,8 @@ export async function fetchQuestionBankStats(courseId?: number): Promise<Questio
     byDifficulty: { easy: 0, medium: 0, hard: 0 },
   }
   for (const q of items) {
-    if (q.type in stats.byType) (stats.byType[q.type as ExerciseType] as number)++
+    const type = normalizeExerciseType(q.type)
+    if (type in stats.byType) (stats.byType[type] as number)++
     if (q.difficulty in stats.byDifficulty) (stats.byDifficulty[q.difficulty as DifficultyLevel] as number)++
   }
   return stats

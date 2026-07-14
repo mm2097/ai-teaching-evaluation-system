@@ -3,8 +3,8 @@
 -->
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
-import type { DifficultyLevel, ExerciseType, QuizQuestion } from '@/types'
-import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import type { DifficultyLevel, QuizQuestion } from '@/types'
+import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 
 const props = defineProps<{
   modelValue: boolean
@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const form = ref<QuizQuestion | null>(null)
 
 const typeOptions = computed(() =>
-  (['single_choice', 'multi_choice', 'judge', 'fill_blank'] as ExerciseType[]).map((t) => ({
+  ALL_EXERCISE_TYPES.map((t) => ({
     label: exerciseTypeLabels[t],
     value: t,
   })),
@@ -32,6 +32,10 @@ const difficultyOptions = computed(() =>
     label: difficultyLabels[d],
     value: d,
   })),
+)
+
+const explanationLabel = computed(() =>
+  form.value?.type === 'short_answer' ? '评分要点' : '解析',
 )
 
 watch(
@@ -66,7 +70,22 @@ function ensureOptions(): void {
 
 watch(
   () => form.value?.type,
-  () => ensureOptions(),
+  (type) => {
+    ensureOptions()
+    if (!form.value) return
+    if (type === 'short_answer') {
+      form.value.options = undefined
+      form.value.answerList = undefined
+    } else if (type === 'judge') {
+      form.value.options = undefined
+      form.value.answerList = undefined
+      if (!form.value.answer) form.value.answer = 'true'
+    } else if (type === 'fill_blank') {
+      form.value.options = undefined
+    } else if (type === 'single_choice' || type === 'multi_choice') {
+      form.value.answerList = undefined
+    }
+  },
 )
 
 function handleSave(): void {
@@ -128,7 +147,7 @@ function close(): void {
         </el-form-item>
       </template>
 
-      <template v-else>
+      <template v-else-if="form.type === 'fill_blank'">
         <el-form-item label="参考答案">
           <el-input v-model="form.answer" />
         </el-form-item>
@@ -141,8 +160,24 @@ function close(): void {
         </el-form-item>
       </template>
 
-      <el-form-item label="解析">
-        <el-input v-model="form.explanation" type="textarea" :rows="2" />
+      <template v-else-if="form.type === 'short_answer'">
+        <el-form-item label="参考答案">
+          <el-input
+            v-model="form.answer"
+            type="textarea"
+            :rows="4"
+            placeholder="供 AI 判分参考的标准答案"
+          />
+        </el-form-item>
+      </template>
+
+      <el-form-item :label="explanationLabel">
+        <el-input
+          v-model="form.explanation"
+          type="textarea"
+          :rows="form.type === 'short_answer' ? 3 : 2"
+          :placeholder="form.type === 'short_answer' ? '可选，AI 判分时的评分依据' : ''"
+        />
       </el-form-item>
     </el-form>
 

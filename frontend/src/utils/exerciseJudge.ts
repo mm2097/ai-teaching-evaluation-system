@@ -59,6 +59,34 @@ export function calcQuizScore(
   }, 0)
 }
 
+/** 全部 5 类题型（与后端 type 1–5 一致） */
+export const ALL_EXERCISE_TYPES: ExerciseType[] = [
+  'single_choice',
+  'multi_choice',
+  'judge',
+  'fill_blank',
+  'short_answer',
+]
+
+const TYPE_INT_TO_STR: Record<number, ExerciseType> = {
+  1: 'single_choice',
+  2: 'multi_choice',
+  3: 'judge',
+  4: 'fill_blank',
+  5: 'short_answer',
+}
+
+/** 将后端题型（字符串或数字）规范为 ExerciseType */
+export function normalizeExerciseType(raw: string | number): ExerciseType {
+  const numeric = typeof raw === 'number' ? raw : Number(raw)
+  if (!Number.isNaN(numeric) && TYPE_INT_TO_STR[numeric]) {
+    return TYPE_INT_TO_STR[numeric]
+  }
+  const text = String(raw) as ExerciseType
+  if (ALL_EXERCISE_TYPES.includes(text)) return text
+  return 'single_choice'
+}
+
 /** 题型中文标签 */
 export const exerciseTypeLabels: Record<ExerciseType, string> = {
   single_choice: '单选题',

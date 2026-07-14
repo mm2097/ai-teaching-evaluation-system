@@ -1,26 +1,135 @@
 <!--
   数据上传页面
   任课教师下载标准模板、填写后上传，系统校验格式
+  模板列表由后端 GET /teaching-data/templates 动态获取，后端有几种前端就展示几种。
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Download, Upload, Document, Right, Warning } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import { executeImport, fetchImportLogs } from '@/api/import'
 import { fetchCourses } from '@/api/dict'
+import { fetchTemplateList } from '@/api/teachingData'
+import type { TemplateMeta } from '@/api/teachingData'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
 import { downloadExcelTemplate, downloadTxtTemplate } from '@/utils/templateDownload'
-import { validateUploadFile } from '@/utils/templateValidator'
+import { validateUploadFile, readHeadersFromFile } from '@/utils/templateValidator'
 import type { DataTemplateType, ImportLog, ValidationError } from '@/types'
 
 const router = useRouter()
 const dataFlowStore = useDataFlowStore()
 const userStore = useUserStore()
 
-const templateType = ref<DataTemplateType>('score')
+// --------------------------------------------------------------------------
+// 模板列表 — 从后端动态获取
+// --------------------------------------------------------------------------
+const templateList = ref<TemplateMeta[]>([])
+const templateId = ref<string>('')
+
+/** 当前选中的模板元信息 */
+const selectedTemplate = computed<TemplateMeta | undefined>(() =>
+  templateList.value.find((t) => t.templateId === templateId.value),
+)
+
+/**
+ * 将后端 template_id 映射为前端 validator 所需的 DataTemplateType。
+ * 用于上传前客户端格式校验。
+ */
+function toDataTemplateType(id: string): DataTemplateType {
+  // 根据后端 dataType 字段判定：考勤 → attendance，其余归入 score
+  const t = templateList.value.find((m) => m.templateId === id)
+  return t?.dataType === '考勤' ? 'attendance' : 'score'
+}
+
+/**
+ * 按列名集合匹配（不要求顺序一致），统计实际表头中包含多少个期望列名。
+ */
+function countMatchingColumns(actual: string[], expected: string[]): number {
+  const actualSet = new Set(actual.filter((h) => h !== ''))
+  return expected.filter((h) => actualSet.has(h)).length
+}
+
+/** 检测到的模板名称，用于给用户提示 */
+const detectedName = ref<string>('')
+
+/**
+ * 自动检测上传文件最可能匹配哪个模板（按列名集合比对数）。
+ * 匹配列数 ≥ 期望列数 × 50% 即视为命中，取匹配数最多的模板。
+ * 返回匹配的 headers，无命中则回退到当前选中模板。
+ */
+async function detectHeaders(file: File): Promise<string[] | null> {
+  const actual = await readHeadersFromFile(file)
+  if (!actual?.length) return null
+
+  let best: { headers: string[]; name: string; count: number } | null = null
+
+  for (const tpl of templateList.value) {
+    const count = countMatchingColumns(actual, tpl.headers)
+    if (best === null || count > best.count) {
+      best = { headers: tpl.headers, name: tpl.name, count }
+    }
+  }
+
+  // 至少匹配半数以上列名才算有效命中
+  if (best && best.count >= best.headers.length * 0.5) {
+    detectedName.value = best.name
+    return best.headers
+  }
+
+  // 无命中时回退到当前选中模板
+  detectedName.value = ''
+  return selectedTemplate.value?.headers ?? null
+}
+
+onMounted(async () => {
+  // 并行拉取模板列表、导入历史、课程列表
+  const [templates, logs] = await Promise.all([
+    fetchTemplateList(),
+    fetchImportLogs(),
+  ])
+  templateList.value = templates
+  importHistory.value = logs
+
+  // 默认选中第一个模板
+  if (templates.length > 0) {
+    templateId.value = templates[0]!.templateId
+  }
+
+  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
+  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
+  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
+  if (courseOptions.value.length) courseId.value = courseOptions.value[0]!.value
+})
+
+// --------------------------------------------------------------------------
+// 下载
+// --------------------------------------------------------------------------
+async function handleDownloadExcel(): Promise<void> {
+  if (!templateId.value) return
+  try {
+    await downloadExcelTemplate(templateId.value)
+    ElMessage.success('Excel 模板已下载')
+  } catch {
+    ElMessage.error('Excel 模板下载失败，请稍后重试')
+  }
+}
+
+async function handleDownloadTxt(): Promise<void> {
+  if (!templateId.value) return
+  try {
+    await downloadTxtTemplate(templateId.value)
+    ElMessage.success('Txt 模板已下载')
+  } catch {
+    ElMessage.error('Txt 模板下载失败，请稍后重试')
+  }
+}
+
+// --------------------------------------------------------------------------
+// 上传 & 校验
+// --------------------------------------------------------------------------
 const courseId = ref<number | undefined>()
 const courseOptions = ref<{ label: string; value: number }[]>([])
 const uploadFile = ref<File | null>(null)
@@ -29,31 +138,6 @@ const validating = ref(false)
 const importing = ref(false)
 const importResult = ref<ImportLog | null>(null)
 const importHistory = ref<ImportLog[]>([])
-
-const templateTypes = [
-  { label: '成绩数据', value: 'score' as const, desc: '考试成绩、测验分数' },
-  { label: '考勤数据', value: 'attendance' as const, desc: '到课、迟到、缺勤记录' },
-  { label: '作业数据', value: 'assignment' as const, desc: '作业提交与得分' },
-  { label: '课堂问答', value: 'qa' as const, desc: '课堂提问、随堂测验情况' },
-]
-
-onMounted(async () => {
-  importHistory.value = await fetchImportLogs()
-  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
-  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
-  courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-  if (courseOptions.value.length) courseId.value = courseOptions.value[0]!.value
-})
-
-function handleDownloadExcel(): void {
-  downloadExcelTemplate(templateType.value)
-  ElMessage.success('Excel 模板已下载')
-}
-
-function handleDownloadTxt(): void {
-  downloadTxtTemplate(templateType.value)
-  ElMessage.success('Txt 模板已下载')
-}
 
 async function beforeUpload(file: File): Promise<boolean> {
   const ext = file.name.split('.').pop()?.toLowerCase()
@@ -72,7 +156,16 @@ async function beforeUpload(file: File): Promise<boolean> {
   uploadFile.value = file
 
   try {
-    const result = await validateUploadFile(file, templateType.value)
+    const headers = await detectHeaders(file)
+    if (!headers?.length) {
+      ElMessage.warning('无法识别文件表头，请在左侧确认已选择正确的模板类型')
+      validating.value = false
+      return false
+    }
+    if (detectedName.value) {
+      ElMessage.success(`已自动识别为「${detectedName.value}」模板`)
+    }
+    const result = await validateUploadFile(file, headers)
     validationErrors.value = result.errors
     if (result.valid) {
       ElMessage.success(`格式校验通过，共 ${result.rowCount} 条数据，可以上传`)
@@ -99,7 +192,7 @@ async function handleImport(): Promise<void> {
   importing.value = true
   const ext = uploadFile.value.name.split('.').pop()?.toLowerCase()
   const log = await executeImport({
-    importType: templateType.value === 'qa' ? 'assignment' : templateType.value as 'score' | 'attendance' | 'assignment',
+    importType: toDataTemplateType(templateId.value) as 'score' | 'attendance',
     dataSource: ext === 'txt' ? 'txt' : 'excel',
     fileName: uploadFile.value.name,
     totalCount: 0,
@@ -143,12 +236,12 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
           <div class="content-card__title">1. 下载标准模板</div>
           <el-form label-width="90px">
             <el-form-item label="数据类型">
-              <el-radio-group v-model="templateType">
-                <el-radio v-for="t in templateTypes" :key="t.value" :value="t.value">
-                  {{ t.label }}
+              <el-radio-group v-model="templateId">
+                <el-radio v-for="t in templateList" :key="t.templateId" :value="t.templateId">
+                  {{ t.name }}
                 </el-radio>
               </el-radio-group>
-              <p class="type-desc">{{ templateTypes.find(t => t.value === templateType)?.desc }}</p>
+              <p v-if="selectedTemplate" class="type-desc">{{ selectedTemplate.description }}</p>
             </el-form-item>
             <el-form-item label="所属课程">
               <el-select v-model="courseId" placeholder="选择您授课的课程" style="width: 100%">
@@ -157,8 +250,12 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
             </el-form-item>
             <el-form-item label="下载模板">
               <div class="download-btns">
-                <el-button :icon="Download" @click="handleDownloadExcel">下载 Excel 模板 (.xlsx)</el-button>
-                <el-button :icon="Download" @click="handleDownloadTxt">下载 Txt 模板 (.txt)</el-button>
+                <el-button :icon="Download" :disabled="!templateId" @click="handleDownloadExcel">
+                  下载 Excel 模板 (.xlsx)
+                </el-button>
+                <el-button :icon="Download" :disabled="!templateId" @click="handleDownloadTxt">
+                  下载 Txt 模板 (.txt)
+                </el-button>
               </div>
             </el-form-item>
           </el-form>
@@ -181,6 +278,9 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
               <div class="el-upload__tip">
                 仅支持 .xlsx（Excel）和 .txt（UTF-8 英文逗号分隔）格式
               </div>
+              <div class="el-upload__tip" style="margin-top:4px;color:#e6a23c">
+                上传前请在左侧确认已选中与文件对应的模板类型，系统将自动识别并校验。
+              </div>
             </template>
           </el-upload>
 
@@ -197,6 +297,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
               格式错误（请修正后重新上传）：
             </div>
             <el-table :data="validationErrors.slice(0, 20)" stripe border size="small">
+              <el-table-column prop="sheet" label="Sheet" width="100" align="center" />
               <el-table-column prop="row" label="行号" width="70" align="center" />
               <el-table-column prop="column" label="字段" width="120" />
               <el-table-column prop="message" label="错误说明" />

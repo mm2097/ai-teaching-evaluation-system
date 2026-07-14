@@ -13,14 +13,12 @@ import { executeImport, fetchImportLogs } from '@/api/import'
 import { fetchCourses } from '@/api/dict'
 import { fetchTemplateList } from '@/api/teachingData'
 import type { TemplateMeta } from '@/api/teachingData'
-import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
 import { downloadExcelTemplate, downloadTxtTemplate } from '@/utils/templateDownload'
 import { validateUploadFile, readHeadersFromFile } from '@/utils/templateValidator'
-import type { DataTemplateType, ImportLog, ValidationError } from '@/types'
+import type { ImportLog, ValidationError } from '@/types'
 
 const router = useRouter()
-const dataFlowStore = useDataFlowStore()
 const userStore = useUserStore()
 
 // --------------------------------------------------------------------------
@@ -33,16 +31,6 @@ const templateId = ref<string>('')
 const selectedTemplate = computed<TemplateMeta | undefined>(() =>
   templateList.value.find((t) => t.templateId === templateId.value),
 )
-
-/**
- * 将后端 template_id 映射为前端 validator 所需的 DataTemplateType。
- * 用于上传前客户端格式校验。
- */
-function toDataTemplateType(id: string): DataTemplateType {
-  // 根据后端 dataType 字段判定：考勤 → attendance，其余归入 score
-  const t = templateList.value.find((m) => m.templateId === id)
-  return t?.dataType === '考勤' ? 'attendance' : 'score'
-}
 
 /**
  * 按列名集合匹配（不要求顺序一致），统计实际表头中包含多少个期望列名。
@@ -136,7 +124,6 @@ const uploadFile = ref<File | null>(null)
 const validationErrors = ref<ValidationError[]>([])
 const validating = ref(false)
 const importing = ref(false)
-const importResult = ref<ImportLog | null>(null)
 const importHistory = ref<ImportLog[]>([])
 
 async function beforeUpload(file: File): Promise<boolean> {
@@ -184,26 +171,28 @@ async function handleImport(): Promise<void> {
     ElMessage.warning('请先上传文件')
     return
   }
+  if (!courseId.value) {
+    ElMessage.warning('请先选择所属课程')
+    return
+  }
   if (validationErrors.value.length) {
     ElMessage.error('请先修正格式错误后再上传')
     return
   }
 
   importing.value = true
-  const ext = uploadFile.value.name.split('.').pop()?.toLowerCase()
-  const log = await executeImport({
-    importType: toDataTemplateType(templateId.value) as 'score' | 'attendance',
-    dataSource: ext === 'txt' ? 'txt' : 'excel',
-    fileName: uploadFile.value.name,
-    totalCount: 0,
-    operatorName: userStore.userInfo?.name || '未知',
-  })
-
-  importResult.value = log
-  dataFlowStore.setLastImportResult(log)
-  importHistory.value = await fetchImportLogs()
-  importing.value = false
-  ElMessage.success('数据上传成功！')
+  try {
+    const result = await executeImport(uploadFile.value, courseId.value)
+    ElMessage.success(
+      `上传成功！${result.sheetsProcessed.length} 个 Sheet，共导入 ${result.successCount} 条，` +
+        (result.errorCount > 0 ? `失败 ${result.errorCount} 条` : '零错误'),
+    )
+    importHistory.value = await fetchImportLogs()
+  } catch {
+    ElMessage.error('上传失败，请确认文件格式正确且已选择对应课程')
+  } finally {
+    importing.value = false
+  }
 }
 
 function goToManage(): void {
@@ -314,16 +303,10 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
             >
               确认上传
             </el-button>
-            <el-button v-if="importResult" type="success" @click="goToManage">
-              下一步：数据管理 <el-icon><Right /></el-icon>
+            <el-button type="success" @click="goToManage">
+              数据管理 <el-icon><Right /></el-icon>
             </el-button>
           </div>
-
-          <el-result v-if="importResult" icon="success" title="上传完成" style="margin-top: 16px">
-            <template #sub-title>
-              文件 <strong>{{ importResult.fileName }}</strong> 已成功导入
-            </template>
-          </el-result>
         </div>
       </el-col>
     </el-row>

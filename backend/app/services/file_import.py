@@ -1039,3 +1039,31 @@ def generate_template_xlsx(template_id: str) -> bytes:
     wb.save(output)
     output.seek(0)
     return output.getvalue()
+
+
+def generate_template_txt(template_id: str) -> bytes:
+    """根据模板 ID 生成 UTF-8 逗号分隔 .txt 模板文件（含表头+示例行+填写说明）。"""
+    meta = next((m for m in TEMPLATE_META if m["template_id"] == template_id), None)
+    if not meta:
+        raise ValueError(f"未知模板 ID: {template_id}")
+
+    headers = meta["headers"]
+    example = meta["example"]
+    instruction = meta["instruction"]
+
+    lines: list[str] = []
+
+    # 填写说明（以 # 开头作为注释行）
+    lines.append(f"# {instruction}")
+    lines.append(f"# 模板：{meta['name']}")
+
+    # 表头行（逗号分隔）
+    lines.append(", ".join(str(h) for h in headers))
+
+    # 示例数据行（逗号分隔，空值用空字符串）
+    lines.append(", ".join(str(v) if v is not None else "" for v in example))
+
+    content = "\n".join(lines)
+
+    # UTF-8 BOM + 内容（确保 Excel 能正确识别中文）
+    return b"\xef\xbb\xbf" + content.encode("utf-8")

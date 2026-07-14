@@ -14,10 +14,10 @@ import {
   publishQuizAssignment,
   closeQuizAssignment,
 } from '@/api/quiz'
-import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank } from '@/api/questionBank'
+import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank, fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { fetchCourses, fetchClasses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import { isSelfPracticeTask } from '@/utils/errorBookStorage'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
@@ -57,9 +57,13 @@ async function loadClassOptions(): Promise<void> {
   }
 }
 
-function syncKnowledgePoints(): void {
-  // Knowledge points will be loaded from the backend when available
-  knowledgePointOptions.value = []
+async function syncKnowledgePoints(): Promise<void> {
+  if (!form.value.courseId) {
+    knowledgePointOptions.value = []
+    form.value.knowledgePoints = []
+    return
+  }
+  knowledgePointOptions.value = await fetchCourseKnowledgePoints(form.value.courseId)
   form.value.knowledgePoints = form.value.knowledgePoints.filter((kp) =>
     knowledgePointOptions.value.includes(kp),
   )
@@ -85,19 +89,16 @@ onMounted(async () => {
   if (courseOptions.value.length) form.value.courseId = courseOptions.value[0]!.value
 
   await loadClassOptions()
-  syncKnowledgePoints()
+  await syncKnowledgePoints()
   await loadBankQuestions()
   assignmentList.value = (await fetchQuizAssignments({ teacherId }))
     .filter((t) => !isSelfPracticeTask(t.title)) as QuizAssignment[]
 })
 
-const questionTypeOptions = [
-  { label: exerciseTypeLabels.single_choice, value: 'single_choice' as ExerciseType },
-  { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
-  { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
-  { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
-  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
-]
+const questionTypeOptions = ALL_EXERCISE_TYPES.map((t) => ({
+  label: exerciseTypeLabels[t],
+  value: t,
+}))
 
 const difficultyOptions = [
   { label: difficultyLabels.easy, value: 'easy' as DifficultyLevel },
@@ -107,7 +108,7 @@ const difficultyOptions = [
 
 watch(() => form.value.courseId, async () => {
   await loadClassOptions()
-  syncKnowledgePoints()
+  await syncKnowledgePoints()
   await loadBankQuestions()
   bankSelectedIds.value = []
 })

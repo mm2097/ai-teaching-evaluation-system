@@ -30,12 +30,13 @@ from app.models import (
 
 router = APIRouter()
 
-# type 映射
+# type 映射（与 models/question.py、quiz.py 一致：5=简答）
 _TYPE_STR_TO_INT = {
     "single_choice": 1,
     "multi_choice": 2,
     "judge": 3,
     "fill_blank": 4,
+    "short_answer": 5,
 }
 _TYPE_INT_TO_STR = {v: k for k, v in _TYPE_STR_TO_INT.items()}
 
@@ -266,7 +267,7 @@ def question_bank_stats(
         stmt = stmt.where(AiQuestion.course_id == course_id)
     questions = session.exec(stmt).all()
 
-    by_type = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0}
+    by_type = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0, "short_answer": 0}
     by_source = {"ai": 0, "manual": 0, "import": 0}
     by_difficulty = {"easy": 0, "medium": 0, "hard": 0}
 

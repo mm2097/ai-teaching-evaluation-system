@@ -180,7 +180,7 @@ function backToQuiz(): void {
             <span class="value" :class="{ wrong: !item.manualRequired }">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
           </div>
           <div v-if="!item.manualRequired" class="eq-correct-answer">
-            <span class="label">正确答案：</span>
+            <span class="label">{{ item.question.type === 'short_answer' ? '参考答案' : '正确答案' }}：</span>
             <span class="value correct">{{ Array.isArray(item.question.answer) ? item.question.answer.join('、') : item.question.answer }}</span>
           </div>
           <!-- 简答题 AI 判分依据 -->

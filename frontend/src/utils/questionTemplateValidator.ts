@@ -32,6 +32,9 @@ const typeAlias: Record<string, ExerciseType> = {
   fill_blank: 'fill_blank',
   填空题: 'fill_blank',
   填空: 'fill_blank',
+  short_answer: 'short_answer',
+  简答题: 'short_answer',
+  简答: 'short_answer',
 }
 
 const difficultyAlias: Record<string, DifficultyLevel> = {
@@ -88,7 +91,7 @@ function parseRow(cells: string[], lineNum: number): { row?: ParsedQuestionRow; 
 
   const type = normalizeType(typeRaw)
   if (!type) {
-    errors.push({ row: lineNum, column: '题型', message: `第 ${lineNum} 行题型无效，支持：单选题/多选题/判断题/填空题` })
+    errors.push({ row: lineNum, column: '题型', message: `第 ${lineNum} 行题型无效，支持：单选题/多选题/判断题/填空题/简答题` })
     return { errors }
   }
   if (!stem) {
@@ -132,6 +135,10 @@ function parseRow(cells: string[], lineNum: number): { row?: ParsedQuestionRow; 
       errors.push({ row: lineNum, column: '参考答案', message: `第 ${lineNum} 行填空题参考答案不能为空` })
     }
     answerList = answer.split(/[、|]/).map((s) => s.trim()).filter(Boolean)
+  } else if (type === 'short_answer') {
+    if (!answer) {
+      errors.push({ row: lineNum, column: '参考答案', message: `第 ${lineNum} 行简答题参考答案不能为空` })
+    }
   }
 
   if (errors.length) return { errors }

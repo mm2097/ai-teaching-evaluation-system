@@ -41,6 +41,7 @@ class ScoreRecord(SQLModel, table=True):
     score: float
     is_pass: int = Field(default=1)  # 0=不及格, 1=及格
     remark: Optional[str] = Field(default=None, max_length=255)
+    source_data: Optional[str] = Field(default=None)  # 原始上传行数据 JSON
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)

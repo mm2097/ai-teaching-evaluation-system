@@ -138,6 +138,14 @@ export interface TeachingDataRecord {
   attendance?: string
   homework?: string
   dataType: 'score' | 'attendance' | 'assignment'
+  /** 成绩数据的批次名称（如"期中考试""期末考试"），考勤数据的状态文本 */
+  batchName?: string
+  /** 知识点/备注信息 */
+  remark?: string
+  /** 考核批次 ID */
+  batchId?: number
+  /** 原始上传行数据 JSON（含完整表头-值对） */
+  sourceData?: string
   importLogId?: number
   sourceFileName?: string
 }

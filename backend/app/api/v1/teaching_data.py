@@ -130,6 +130,7 @@ def query_teaching_data(
                 "score": s.score,
                 "isPass": s.is_pass,
                 "remark": s.remark,
+                "sourceData": s.source_data,
             })
 
     # ── 考勤数据 ──
@@ -157,6 +158,7 @@ def query_teaching_data(
                 "status": STATUS_MAP.get(a.status, "未知"),
                 "statusCode": a.status,
                 "remark": a.remark,
+                "sourceData": a.source_data,
             })
 
     # 分页
@@ -427,7 +429,10 @@ def upload_teaching_data(
         # （学情画像、知识点掌握度、学习质量评价、学情预警）
         analysis_refresh: dict = {}
         if result.success_count > 0:
-            analysis_refresh = refresh_course_analysis(session, course_id)
+            try:
+                analysis_refresh = refresh_course_analysis(session, course_id)
+            except Exception as e:
+                analysis_refresh = {"error": str(e)}
 
     finally:
         # 清理临时文件

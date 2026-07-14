@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Delete, Document } from '@element-plus/icons-vue'
+import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
@@ -84,12 +84,53 @@ const query = ref({
 const selectedStudentId = ref<string | number | undefined>()
 
 const tableData = ref<TeachingDataRecord[]>([])
+
+/** 是否属于各题扣分子行（如"期中考试-第1大题"），这类行只在详情弹窗中展示 */
+function isQuestionDetailRow(row: TeachingDataRecord): boolean {
+  return row.dataType === 'score' && /-第\d+\s*大题/.test(row.batchName || '')
+}
+
+/** 主表格展示的数据：隐藏各题扣分子行和重复考勤行，只保留汇总行 */
+const displayData = computed(() => {
+  const seenAttendance = new Set<string>()
+  return tableData.value.filter((row) => {
+    // 隐藏各题扣分子行
+    if (isQuestionDetailRow(row)) return false
+    // 考勤：按 sourceData 去重（同一上传行只显示一条）
+    if (row.dataType === 'attendance' && row.sourceData) {
+      if (seenAttendance.has(row.sourceData)) return false
+      seenAttendance.add(row.sourceData)
+    }
+    return true
+  })
+})
+
+/** 从考勤行的 sourceData 中解析到课率（0-1 的小数） */
+function getAttendanceRate(row: TeachingDataRecord): number {
+  if (!row.sourceData) return 0
+  try {
+    const obj = JSON.parse(row.sourceData) as Record<string, unknown>
+    const raw = obj['到课率']
+    if (raw === null || raw === undefined || raw === '') return 0
+    const num = Number(raw)
+    // 如果是 >1 的百分比值（如 93.75），转为小数
+    return num > 1 ? num / 100 : num
+  } catch {
+    return 0
+  }
+}
+
+/** 格式化到课率为百分比显示 */
+function formatRate(rate: number): string {
+  return `${(rate * 100).toFixed(1)}%`
+}
+
 const currentPage = ref(1)
 const pageSize = ref(10)
 
 const studentPickerOptions = computed<LinkedStudentOption[]>(() => {
   const map = new Map<string, LinkedStudentOption>()
-  for (const item of tableData.value) {
+  for (const item of displayData.value) {
     if (deptId.value && item.deptId !== deptId.value) continue
     if (majorId.value && item.majorId !== majorId.value) continue
     if (classId.value && item.classId !== classId.value) continue
@@ -105,7 +146,7 @@ const studentPickerOptions = computed<LinkedStudentOption[]>(() => {
 })
 
 const filteredData = computed(() => {
-  return tableData.value.filter((item) => {
+  return displayData.value.filter((item) => {
     if (selectedStudentId.value && item.studentId !== selectedStudentId.value) return false
     if (query.value.courseName) {
       const courseKw = query.value.courseName.toLowerCase()
@@ -131,7 +172,7 @@ const pagedData = computed(() => {
 })
 
 const sourceFileOptions = computed(() => {
-  const files = [...new Set(tableData.value.map((d) => d.sourceFileName).filter(Boolean))]
+  const files = [...new Set(displayData.value.map((d) => d.sourceFileName).filter(Boolean))]
   return files as string[]
 })
 
@@ -190,6 +231,43 @@ async function handleBatchDelete(): Promise<void> {
   const ids = selectedRows.value.map((r) => r.id)
   tableData.value = tableData.value.filter((item) => !ids.includes(item.id))
   ElMessage.success('批量删除成功')
+}
+
+// --------------------------------------------------------------------------
+// 详情弹窗
+// --------------------------------------------------------------------------
+const detailVisible = ref(false)
+const detailTitle = ref('')
+/** 解析后的原始上传行数据 [{ key, value }] */
+const detailFields = ref<{ key: string; value: string }[]>([])
+
+function handleDetail(row: TeachingDataRecord): void {
+  detailTitle.value = `${row.studentName}（${row.studentId}）- ${row.batchName || row.courseName || ''}`
+  detailFields.value = []
+  if (row.sourceData) {
+    try {
+      const obj = JSON.parse(row.sourceData) as Record<string, unknown>
+      detailFields.value = Object.entries(obj).map(([key, val]) => ({
+        key,
+        value: val === null || val === undefined ? '' : String(val),
+      }))
+    } catch {
+      detailFields.value = []
+    }
+  }
+  // 如果无 sourceData，回退显示当前行的基本字段
+  if (detailFields.value.length === 0) {
+    detailFields.value = [
+      { key: '学号', value: row.studentId },
+      { key: '姓名', value: row.studentName },
+      { key: '课程', value: row.courseName || String(row.courseId) },
+      { key: '数据类型', value: row.dataType === 'score' ? '成绩' : '考勤' },
+      { key: '分数', value: row.score !== undefined ? String(row.score) : '-' },
+      { key: '考勤', value: row.attendance || '-' },
+      { key: '备注', value: row.remark || '-' },
+    ]
+  }
+  detailVisible.value = true
 }
 
 function handleExport(): void {
@@ -272,9 +350,12 @@ function filterByCurrentFile(): void {
             {{ row.sourceFileName || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="dataType" label="类型" width="80" align="center">
+        <el-table-column prop="dataType" label="类型" width="110" align="center">
           <template #default="{ row }">
-            <el-tag size="small">{{ dataTypeLabels[row.dataType] }}</el-tag>
+            <el-tag v-if="row.dataType === 'score'" size="small" type="success">
+              {{ row.batchName || '成绩' }}
+            </el-tag>
+            <el-tag v-else size="small">{{ dataTypeLabels[row.dataType] }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="studentId" label="学号" width="130" />
@@ -285,19 +366,22 @@ function filterByCurrentFile(): void {
         <el-table-column prop="score" label="分数" width="80" align="center">
           <template #default="{ row }">{{ row.score ?? '-' }}</template>
         </el-table-column>
-        <el-table-column prop="attendance" label="考勤" width="80" align="center">
+        <el-table-column label="到课率" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.attendance" :type="row.attendance === '正常' ? 'success' : row.attendance === '缺勤' ? 'danger' : 'warning'" size="small">
-              {{ row.attendance }}
-            </el-tag>
+            <template v-if="row.dataType === 'attendance' && row.sourceData">
+              <span :style="{ color: getAttendanceRate(row) >= 0.9 ? '#67c23a' : getAttendanceRate(row) >= 0.7 ? '#e6a23c' : '#f56c6c' }">
+                {{ formatRate(getAttendanceRate(row)) }}
+              </span>
+            </template>
             <span v-else>-</span>
           </template>
         </el-table-column>
         <el-table-column prop="homework" label="作业" width="90" align="center">
           <template #default="{ row }">{{ row.homework || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="140" align="center" fixed="right">
+        <el-table-column label="操作" width="180" align="center" fixed="right">
           <template #default="{ row }">
+            <el-button type="success" link size="small" :icon="View" @click="handleDetail(row)">详情</el-button>
             <el-button type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
           </template>
@@ -340,6 +424,24 @@ function filterByCurrentFile(): void {
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 详情弹窗：显示原始上传行数据（表头-值对照） -->
+    <el-dialog v-model="detailVisible" :title="detailTitle" width="650px" destroy-on-close>
+      <template v-if="detailFields.length === 0">
+        <el-empty description="暂无原始行数据" />
+      </template>
+      <el-table v-else :data="detailFields" border size="small" max-height="500">
+        <el-table-column prop="key" label="字段" width="200" />
+        <el-table-column prop="value" label="值">
+          <template #default="{ row: r }">
+            <span :style="{ color: r.value === '' ? '#c0c4cc' : '' }">{{ r.value || '（空）' }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="detailVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>

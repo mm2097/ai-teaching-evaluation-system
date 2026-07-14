@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import os
 import re
 from collections.abc import Callable
@@ -69,23 +70,17 @@ TEMPLATE_EXAM_DEDUCTION = TemplateDef(
     numeric_fields=["第1大题", "第2大题", "第3大题", "第4大题", "第5大题", "总成绩"],
 )
 
-# 模板2：成绩汇总（兼容简化版无课程名称/期末成绩/总评成绩的情况）
-TEMPLATE_SCORE_SUMMARY = TemplateDef(
-    template_id="score_summary",
-    name="成绩汇总",
-    match_headers=["学号", "期中成绩", "平时成绩1", "平时成绩2"],
+# 模板2：单项成绩
+TEMPLATE_SIMPLE_SCORE = TemplateDef(
+    template_id="simple_score",
+    name="单项成绩",
+    match_headers=["学号", "成绩名称", "成绩"],
     all_headers=[
         "编号", "课程号", "课程名称", "学期", "学号", "姓名",
-        "期中成绩", "课堂平时成绩", "作业成绩", "平时成绩1",
-        "实验成绩", "小班讨论成绩", "课程设计", "平时成绩2",
-        "期末成绩", "总评成绩",
+        "成绩名称", "成绩",
     ],
     required_fields=["学号", "姓名"],
-    numeric_fields=[
-        "期中成绩", "课堂平时成绩", "作业成绩",
-        "实验成绩", "小班讨论成绩", "课程设计",
-        "期末成绩", "总评成绩",
-    ],
+    numeric_fields=["成绩"],
 )
 
 # 模板3：成绩考勤情况
@@ -102,21 +97,10 @@ TEMPLATE_ATTENDANCE = TemplateDef(
     numeric_fields=[],
 )
 
-# 模板4：简化成绩（仅含期中成绩等单列成绩）
-TEMPLATE_SIMPLE_SCORE = TemplateDef(
-    template_id="simple_score",
-    name="简化成绩",
-    match_headers=["学号", "期中成绩"],
-    all_headers=["编号", "学号", "姓名", "期中成绩"],
-    required_fields=["学号", "姓名"],
-    numeric_fields=["期中成绩"],
-)
-
 ALL_TEMPLATES: list[TemplateDef] = [
     TEMPLATE_EXAM_DEDUCTION,
-    TEMPLATE_SCORE_SUMMARY,
-    TEMPLATE_ATTENDANCE,
     TEMPLATE_SIMPLE_SCORE,
+    TEMPLATE_ATTENDANCE,
 ]
 
 
@@ -181,6 +165,46 @@ def _safe_str(value: Any) -> str | None:
     if _is_formula(value):
         return None
     return str(value).strip()
+
+
+def _upsert_score(
+    session: Session,
+    course_id: int,
+    student_id: int,
+    batch_id: int,
+    score: float,
+    create_by: int,
+    remark: str = "",
+    source_data: str | None = None,
+) -> None:
+    """创建或更新成绩记录（按 student_id + batch_id 去重）。"""
+    from sqlmodel import select
+    existing = session.exec(
+        select(ScoreRecord).where(
+            ScoreRecord.student_id == student_id,
+            ScoreRecord.batch_id == batch_id,
+        )
+    ).first()
+    if existing:
+        existing.score = score
+        existing.is_pass = 1 if score >= 60 else 0
+        existing.remark = remark
+        if source_data is not None:
+            existing.source_data = source_data
+        existing.update_time = datetime.now()
+        session.add(existing)
+    else:
+        session.add(ScoreRecord(
+            course_id=course_id,
+            student_id=student_id,
+            batch_id=batch_id,
+            score=score,
+            is_pass=1 if score >= 60 else 0,
+            remark=remark,
+            source_data=source_data,
+            create_by=create_by,
+        ))
+    session.commit()
 
 
 def _normalize_headers(headers: list[str | None]) -> list[str]:
@@ -459,7 +483,12 @@ def _import_exam_deduction(
     create_by: int,
     tmpl: TemplateDef,
 ) -> ImportResult:
-    """导入模板1数据：课程测试各题扣分情况。"""
+    """导入模板1数据：课程测试各题扣分情况。
+
+    每位学生创建多条 ScoreRecord：
+      - 1 条总成绩（batch_name = 测试名称，如"期中考试"）
+      - 5 条各题扣分（batch_name = 第X大题，remark = 知识点）
+    """
     result = ImportResult(detected_template=tmpl.name)
 
     for sheet_name, rows in sheet_data.items():
@@ -468,7 +497,6 @@ def _import_exam_deduction(
         for row_data in rows:
             excel_row = row_data.get("_excel_row", 0)
 
-            # 校验
             errors = validate_row(row_data, tmpl, sheet_name, excel_row)
             if errors:
                 result.errors.extend(errors)
@@ -488,138 +516,47 @@ def _import_exam_deduction(
             _ensure_course_student(session, course_id, student.student_id)
 
             exam_name = str(row_data.get("测试名称") or "考试").strip()
-            batch = _get_or_create_exam_batch(
-                session, course_id, exam_name,
-                batch_type=3,  # 期中/考试
-                batch_weight=None,
-                create_by=create_by,
-            )
 
-            # 总成绩：安全转浮点
+            # ── 原始行数据（去除内部字段） ──
+            source = {k: v for k, v in row_data.items()
+                      if not k.startswith("_")}
+            source_json = json.dumps(source, ensure_ascii=False, default=str)
+
+            # ── 先导入总成绩 ──
             total_score = _safe_float(row_data.get("总成绩"))
-            if total_score is None:
-                total_score = 0.0
-
-            # 检查是否已有成绩记录（去重）
-            from sqlmodel import select
-            existing = session.exec(
-                select(ScoreRecord).where(
-                    ScoreRecord.student_id == student.student_id,
-                    ScoreRecord.batch_id == batch.batch_id,
+            if total_score is not None:
+                total_batch = _get_or_create_exam_batch(
+                    session, course_id, exam_name,
+                    batch_type=3, batch_weight=None, create_by=create_by,
                 )
-            ).first()
-            if existing:
-                existing.score = float(total_score)
-                existing.update_time = datetime.now()
-                session.add(existing)
-            else:
-                session.add(ScoreRecord(
-                    course_id=course_id,
-                    student_id=student.student_id,
-                    batch_id=batch.batch_id,
-                    score=float(total_score),
-                    is_pass=1 if total_score >= 60 else 0,
-                    create_by=create_by,
-                ))
-            session.commit()
-            result.success_count += 1
+                _upsert_score(session, course_id, student.student_id,
+                              total_batch.batch_id, float(total_score), create_by,
+                              source_data=source_json)
+                result.success_count += 1
 
-    return result
+            # ── 逐题导入扣分详情 ──
+            for qn in range(1, 6):
+                col_deduction = f"第{qn}大题"
+                col_knowledge = f"第 {qn} 大题扣分的主要知识点"
 
+                deduction = _safe_float(row_data.get(col_deduction))
+                knowledge = str(row_data.get(col_knowledge, "")).strip() if row_data.get(col_knowledge) else ""
 
-def _import_score_summary(
-    session: Session,
-    sheet_data: dict[str, list[dict[str, Any]]],
-    course_id: int,
-    create_by: int,
-    tmpl: TemplateDef,
-) -> ImportResult:
-    """导入模板2数据：成绩汇总。
+                # 跳过无扣分的题目
+                if deduction is None or deduction == 0.0:
+                    continue
 
-    将各项成绩分别存入对应名称的 ExamBatch + ScoreRecord。
-    """
-    # 成绩列 → 批次名称/类型的映射
-    SCORE_FIELD_MAP: dict[str, tuple[str, int, float | None]] = {
-        "期中成绩":   ("期中考试", 3, 25),
-        "期末成绩":   ("期末考试", 4, 50),
-        "课堂平时成绩": ("课堂平时成绩", 1, None),
-        "作业成绩":   ("作业成绩", 1, None),
-        "实验成绩":   ("实验成绩", 2, None),
-        "小班讨论成绩": ("小班讨论成绩", 1, None),
-        "课程设计":   ("课程设计", 2, None),
-    }
-
-    result = ImportResult(detected_template=tmpl.name)
-
-    for sheet_name, rows in sheet_data.items():
-        result.sheets_processed.append(sheet_name)
-
-        # 先为所有成绩类型创建 ExamBatch
-        batches: dict[str, ExamBatch] = {}
-        for field, (batch_name, batch_type, batch_weight) in SCORE_FIELD_MAP.items():
-            batches[field] = _get_or_create_exam_batch(
-                session, course_id, batch_name, batch_type, batch_weight, create_by,
-            )
-
-        for row_data in rows:
-            excel_row = row_data.get("_excel_row", 0)
-
-            # 跳过完全空行
-            if not any(
-                v is not None and str(v).strip() != ""
-                for k, v in row_data.items()
-                if k in SCORE_FIELD_MAP
-            ):
-                continue
-
-            errors = validate_row(row_data, tmpl, sheet_name, excel_row)
-            if errors:
-                result.errors.extend(errors)
-                result.error_count += len(errors)
-                continue
-
-            student_no = str(row_data.get("学号", "")).strip()
-            student = _get_student_by_no(session, student_no)
-            if not student:
-                result.errors.append(ImportError(
-                    sheet=sheet_name, row=excel_row, field="学号",
-                    message=f"学号「{student_no}」在系统中不存在",
-                ))
-                result.error_count += 1
-                continue
-
-            _ensure_course_student(session, course_id, student.student_id)
-
-            # 逐项成绩导入
-            for field, batch in batches.items():
-                score_val = _safe_float(row_data.get(field))
-                if score_val is None:
-                    continue  # 该项无成绩，跳过
-
-                from sqlmodel import select
-                existing = session.exec(
-                    select(ScoreRecord).where(
-                        ScoreRecord.student_id == student.student_id,
-                        ScoreRecord.batch_id == batch.batch_id,
-                    )
-                ).first()
-                if existing:
-                    existing.score = float(score_val)
-                    existing.is_pass = 1 if score_val >= 60 else 0
-                    existing.update_time = datetime.now()
-                    session.add(existing)
-                else:
-                    session.add(ScoreRecord(
-                        course_id=course_id,
-                        student_id=student.student_id,
-                        batch_id=batch.batch_id,
-                        score=float(score_val),
-                        is_pass=1 if score_val >= 60 else 0,
-                        create_by=create_by,
-                    ))
-                session.commit()
-
-            result.success_count += 1
+                q_batch_name = f"{exam_name}-第{qn}大题"
+                q_batch = _get_or_create_exam_batch(
+                    session, course_id, q_batch_name,
+                    batch_type=1, batch_weight=None, create_by=create_by,
+                )
+                _upsert_score(
+                    session, course_id, student.student_id,
+                    q_batch.batch_id, float(deduction), create_by,
+                    remark=knowledge,
+                )
+                result.success_count += 1
 
     return result
 
@@ -675,6 +612,10 @@ def _import_attendance(
 
             _ensure_course_student(session, course_id, student.student_id)
 
+            # 原始行数据
+            source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            source_json = json.dumps(source, ensure_ascii=False, default=str)
+
             row_imported = 0
             for i in range(1, 33):
                 col_name = f"考勤{i}"
@@ -702,6 +643,7 @@ def _import_attendance(
 
                 if existing:
                     existing.status = status
+                    existing.source_data = source_json
                     existing.update_time = datetime.now()
                     session.add(existing)
                 else:
@@ -710,13 +652,14 @@ def _import_attendance(
                         student_id=student.student_id,
                         attendance_date=base_date,
                         status=status,
+                        source_data=source_json,
                         create_by=create_by,
                     ))
-                session.commit()
                 row_imported += 1
 
-            # 即使单条都没导入成功，也计一行
+            # 每个学生行的所有考勤槽位批量提交一次
             if row_imported > 0:
+                session.commit()
                 result.success_count += row_imported
 
     return result
@@ -733,16 +676,12 @@ def _import_simple_score(
     create_by: int,
     tmpl: TemplateDef,
 ) -> ImportResult:
-    """导入简化成绩：仅期中成绩列。
+    """导入单项成绩。
 
-    格式：编号, 学号, 姓名, 期中成绩
+    格式：编号, 课程号, 课程名称, 学期, 学号, 姓名, 成绩名称, 成绩
+    按成绩名称分组创建考试批次，导入对应成绩。
     """
     result = ImportResult(detected_template=tmpl.name)
-
-    batch = _get_or_create_exam_batch(
-        session, course_id, "期中考试",
-        batch_type=3, batch_weight=25, create_by=create_by,
-    )
 
     for sheet_name, rows in sheet_data.items():
         result.sheets_processed.append(sheet_name)
@@ -768,37 +707,30 @@ def _import_simple_score(
 
             _ensure_course_student(session, course_id, student.student_id)
 
-            score_val = _safe_float(row_data.get("期中成绩"))
+            score_name = str(row_data.get("成绩名称", "")).strip()
+            score_val = _safe_float(row_data.get("成绩"))
             if score_val is None:
                 result.errors.append(ImportError(
-                    sheet=sheet_name, row=excel_row, field="期中成绩",
-                    message="期中成绩为空或格式错误",
+                    sheet=sheet_name, row=excel_row, field="成绩",
+                    message="成绩为空或格式错误",
                 ))
                 result.error_count += 1
                 continue
 
-            from sqlmodel import select
-            existing = session.exec(
-                select(ScoreRecord).where(
-                    ScoreRecord.student_id == student.student_id,
-                    ScoreRecord.batch_id == batch.batch_id,
-                )
-            ).first()
-            if existing:
-                existing.score = float(score_val)
-                existing.is_pass = 1 if score_val >= 60 else 0
-                existing.update_time = datetime.now()
-                session.add(existing)
-            else:
-                session.add(ScoreRecord(
-                    course_id=course_id,
-                    student_id=student.student_id,
-                    batch_id=batch.batch_id,
-                    score=float(score_val),
-                    is_pass=1 if score_val >= 60 else 0,
-                    create_by=create_by,
-                ))
-            session.commit()
+            # 原始行数据
+            source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            source_json = json.dumps(source, ensure_ascii=False, default=str)
+
+            # 按成绩名称创建或获取考试批次
+            batch = _get_or_create_exam_batch(
+                session, course_id, score_name,
+                batch_type=3, batch_weight=25, create_by=create_by,
+            )
+            _upsert_score(
+                session, course_id, student.student_id,
+                batch.batch_id, float(score_val), create_by,
+                source_data=source_json,
+            )
             result.success_count += 1
 
     return result
@@ -806,7 +738,6 @@ def _import_simple_score(
 
 IMPORT_HANDLERS: dict[str, Callable] = {
     TEMPLATE_EXAM_DEDUCTION.template_id: _import_exam_deduction,
-    TEMPLATE_SCORE_SUMMARY.template_id: _import_score_summary,
     TEMPLATE_ATTENDANCE.template_id: _import_attendance,
     TEMPLATE_SIMPLE_SCORE.template_id: _import_simple_score,
 }
@@ -952,23 +883,19 @@ TEMPLATE_META: list[dict[str, Any]] = [
         "instruction": "填写说明：①总成绩为实际得分（满分100）；②第1~5大题为扣分值（非得分）；③知识点填写该题扣分对应的知识领域名称。",
     },
     {
-        "template_id": TEMPLATE_SCORE_SUMMARY.template_id,
-        "name": "成绩汇总",
+        "template_id": TEMPLATE_SIMPLE_SCORE.template_id,
+        "name": "单项成绩",
         "dataType": "成绩",
-        "description": "导入课程各类成绩汇总，包含期中、期末、平时、实验、课程设计等多维度成绩。",
+        "description": "导入课程单项成绩，每行一条成绩记录，按成绩名称区分不同考试/考查项目。",
         "headers": [
             "编号", "课程号", "课程名称", "学期", "学号", "姓名",
-            "期中成绩", "课堂平时成绩", "作业成绩", "平时成绩1",
-            "实验成绩", "小班讨论成绩", "课程设计", "平时成绩2",
-            "期末成绩", "总评成绩",
+            "成绩名称", "成绩",
         ],
         "example": [
             1, "CS101", "计算机网络", "2025-2026-1", "2024001001", "赵伟",
-            85, 90, 88, 88,
-            92, 85, 90, 89,
-            95, 91,
+            "期中考试", 85,
         ],
-        "instruction": "填写说明：①平时成绩1和平时成绩2为系统自动计算项（课堂平时+作业的平均，实验+讨论+课程设计的平均），可留空由Excel公式计算；②总评成绩=25%×平时1+25%×平时2+50%×期末；③所有成绩为百分制。",
+        "instruction": "填写说明：①成绩名称填入考试/考查项目名（如期中考试、期末考试、作业等），同一课程同名学生可有多条记录；②成绩为百分制 0-100 的数字。",
     },
     {
         "template_id": TEMPLATE_ATTENDANCE.template_id,

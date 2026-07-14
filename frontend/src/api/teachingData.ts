@@ -81,6 +81,9 @@ interface TeachingDataApiRow {
   score?: number
   status?: string
   batchName?: string
+  batchId?: number
+  remark?: string
+  sourceData?: string
   attendanceDate?: string | null
 }
 
@@ -99,6 +102,10 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     dataType: row.dataType,
     score: row.dataType === 'score' ? row.score : undefined,
     attendance: row.dataType === 'attendance' ? row.status : undefined,
+    batchName: row.batchName,
+    remark: row.remark,
+    batchId: row.batchId,
+    sourceData: row.sourceData,
   }
 }
 

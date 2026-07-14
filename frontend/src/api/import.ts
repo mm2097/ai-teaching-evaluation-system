@@ -39,6 +39,7 @@ export async function executeImport(
   const res = await request.post('/v1/teaching-data/upload', formData, {
     params: { course_id: courseId },
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,  // 大文件多 sheet 上传需要较长时间
   })
 
   return res.data as ImportResult

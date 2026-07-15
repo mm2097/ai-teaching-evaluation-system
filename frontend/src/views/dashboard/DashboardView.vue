@@ -99,8 +99,8 @@ const statCards = computed(() => {
   const className = classOptions.value.find((c) => c.value === applied.value.classId)?.label || '—'
   return [
     { title: '班级学生数', value: classStudentCount.value, icon: 'User', color: '#2563eb', trend: 0 },
-    { title: '当前课程', value: courseName, icon: 'Notebook', color: '#6366f1' },
-    { title: '当前班级', value: className, icon: 'School', color: '#7c3aed' },
+    { title: '当前课程', value: courseName, icon: 'Notebook', color: '#6366f1', variant: 'text' as const },
+    { title: '当前班级', value: className, icon: 'School', color: '#7c3aed', variant: 'text' as const },
     { title: '课程及格率', value: +(dashboardStats.value.passRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'CircleCheck', color: '#10b981', trend: 3.2 },
     { title: '优秀率', value: +(dashboardStats.value.excellentRate * (0.95 + f * 0.05)).toFixed(1), unit: '%', icon: 'Star', color: '#f59e0b', trend: 1.8 },
     { title: '平均出勤率', value: +(dashboardStats.value.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
@@ -313,7 +313,8 @@ watch(showDashboard, async (show) => {
             clearable
             :loading="optionsLoading"
             :disabled="filters.courseId == null"
-            style="width: 220px"
+            style="width: 250px"
+            popper-class="dashboard-class-popper"
           >
             <el-option v-for="c in classOptions" :key="c.value" :label="c.label" :value="c.value" />
           </el-select>
@@ -438,6 +439,11 @@ watch(showDashboard, async (show) => {
     }
   }
 
+  // 看板统计卡片网格：加宽以容纳文本型卡片
+  .stat-grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+
   .welcome-panel {
     background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 50%, #f0fdf4 100%);
     border-radius: 16px;
@@ -533,5 +539,14 @@ watch(showDashboard, async (show) => {
   .clickable {
     cursor: pointer;
   }
+}
+</style>
+
+<style lang="scss">
+/* 综合看板班级下拉选项不换行 */
+.dashboard-class-popper .el-select-dropdown__item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

@@ -156,7 +156,7 @@ export function useDashboardFilter() {
       courseId: resolvedCourseId,
     })
     classOptions.value = list.map((c) => ({
-      label: `${c.className}（${c.majorName} · ${c.grade}级）`,
+      label: `${c.className}（${c.majorName} ${c.grade}级）`,
       value: c.id,
     }))
     if (clearClass) {

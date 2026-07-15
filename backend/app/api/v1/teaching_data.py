@@ -7,6 +7,7 @@
 """
 
 import io as _io
+import json
 import os
 import tempfile
 import uuid
@@ -14,7 +15,8 @@ from datetime import datetime
 from urllib.parse import quote
 
 import openpyxl
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from typing import Any
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from sqlmodel import Session, select
 from sqlalchemy import or_
@@ -181,6 +183,126 @@ def query_teaching_data(
 # ============================================================================
 
 
+# NOTE: /{record_id}/row 必须放在 /{record_type}/{record_id} 之前，
+# 否则旧路由会错误匹配 "112/row" → record_type=112, record_id="row"
+@router.put("/teaching-data/{record_id}/row", tags=["教学数据"])
+def update_row_data(
+    record_id: int,
+    payload: Any = Body(...),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """更新一条教学数据的完整行信息（含所有字段和子记录）。
+
+    传入完整的 source_data JSON 对象，后端自动：
+      - 更新主记录的 score / status 和 source_data
+      - 对于考试扣分类型，删除旧的各题子记录，按新数据重建
+    """
+    src = payload.get("source_data") if isinstance(payload, dict) else None
+
+    record = session.get(ScoreRecord, record_id)
+    if record is None:
+        record = session.get(AttendanceRecord, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+
+    if isinstance(record, ScoreRecord):
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+
+        if src is not None:
+            # 更新主记录分数
+            total = src.get("总成绩")
+            if total is not None:
+                try:
+                    record.score = float(total)
+                    record.is_pass = 1 if record.score >= 60 else 0
+                except (ValueError, TypeError):
+                    pass
+            # 更新 source_data
+            record.source_data = json.dumps(src, ensure_ascii=False)
+            record.update_time = datetime.now()
+            session.add(record)
+
+            # 对于考试扣分类型：删除旧子记录，按新数据重建各题扣分
+            batch = session.get(ExamBatch, record.batch_id)
+            if batch and "大题" not in (batch.batch_name or ""):
+                _rebuild_question_sub_records(session, record, src)
+
+            session.commit()
+
+        return {"recordId": record_id, "recordType": "score", "updated": True}
+
+    elif isinstance(record, AttendanceRecord):
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+
+        if src is not None:
+            record.source_data = json.dumps(src, ensure_ascii=False)
+            record.update_time = datetime.now()
+            session.add(record)
+            session.commit()
+
+        return {"recordId": record_id, "recordType": "attendance", "updated": True}
+
+    raise HTTPException(status_code=400, detail="记录类型不支持")
+
+
+def _rebuild_question_sub_records(
+    session: Session,
+    main_record: ScoreRecord,
+    src: dict,
+) -> None:
+    """根据完整行数据重建考试扣分各题子记录。"""
+    from app.models.exam import ScoreRecord as SR, ExamBatch as EB
+
+    exam_name = str(src.get("测试名称") or "考试").strip()
+    student_id = main_record.student_id
+    course_id = main_record.course_id
+    create_by = main_record.create_by
+
+    for qn in range(1, 6):
+        q_batch_name = f"{exam_name}-第{qn}大题"
+        # 查找已有子批次
+        existing_batch = session.exec(
+            select(EB).where(EB.course_id == course_id, EB.batch_name == q_batch_name)
+        ).first()
+
+        deduction_raw = src.get(f"第{qn}大题")
+        deduction = None
+        if deduction_raw is not None and str(deduction_raw).strip() != "":
+            try:
+                deduction = float(deduction_raw)
+            except (ValueError, TypeError):
+                deduction = None
+
+        # 删除旧子记录
+        if existing_batch:
+            old_records = session.exec(
+                select(SR).where(
+                    SR.student_id == student_id,
+                    SR.batch_id == existing_batch.batch_id,
+                )
+            ).all()
+            for old in old_records:
+                session.delete(old)
+
+        # 如果有扣分数据，创建新子记录
+        if deduction is not None and deduction != 0.0 and existing_batch:
+            knowledge = str(src.get(f"第 {qn} 大题扣分的主要知识点", "")).strip()
+            session.add(SR(
+                course_id=course_id,
+                student_id=student_id,
+                batch_id=existing_batch.batch_id,
+                score=float(deduction),
+                is_pass=1,
+                remark=knowledge,
+                source_data=main_record.source_data,
+                create_by=create_by,
+            ))
+    session.commit()
+
+
 @router.put("/teaching-data/{record_type}/{record_id}", tags=["教学数据"])
 def edit_teaching_data(
     record_type: str,
@@ -246,11 +368,6 @@ def edit_teaching_data(
 
     else:
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, attendance")
-
-
-# ============================================================================
-# 导出接口（3.2.7 节：Data.Query.Export）
-# ============================================================================
 
 
 @router.get("/teaching-data/export", tags=["教学数据"])

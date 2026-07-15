@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -45,9 +45,6 @@ async function loadTeachingData(): Promise<void> {
       courseName,
     )
     tableData.value = list
-    if (tableData.value.length) {
-      editForm.value = { ...tableData.value[0]! }
-    }
   } catch {
     tableData.value = []
   } finally {
@@ -125,6 +122,13 @@ function formatRate(rate: number): string {
   return `${(rate * 100).toFixed(1)}%`
 }
 
+/** 编辑弹窗中不可修改的字段（标识信息） */
+const READONLY_FIELDS = new Set(['编号', '课程号', '课程名称', '学期', '测试名称', '学号', '姓名'])
+
+function isReadonlyField(key: string): boolean {
+  return READONLY_FIELDS.has(key)
+}
+
 const currentPage = ref(1)
 const pageSize = ref(10)
 
@@ -199,21 +203,61 @@ watch([deptId, majorId, classId], () => {
 })
 
 const editVisible = ref(false)
-const editForm = ref<TeachingDataRecord>({} as TeachingDataRecord)
+const editRecordId = ref(0)
+const editTitle = ref('')
+/** 可编辑的字段列表 [{ key, value }] */
+const editFields = ref<{ key: string; value: string }[]>([])
 const selectedRows = ref<TeachingDataRecord[]>([])
 
 function handleEdit(row: TeachingDataRecord): void {
-  editForm.value = { ...row }
+  editRecordId.value = row.id
+  editTitle.value = `${row.studentName}（${row.studentId}）- ${row.batchName || row.courseName || ''}`
+
+  if (row.sourceData) {
+    try {
+      const obj = JSON.parse(row.sourceData) as Record<string, unknown>
+      editFields.value = Object.entries(obj).map(([key, val]) => ({
+        key,
+        value: val === null || val === undefined ? '' : String(val),
+      }))
+    } catch {
+      editFields.value = []
+    }
+  }
+  if (editFields.value.length === 0) {
+    editFields.value = [
+      { key: '学号', value: row.studentId },
+      { key: '姓名', value: row.studentName },
+      { key: '分数', value: row.score !== undefined ? String(row.score) : '' },
+    ]
+  }
   editVisible.value = true
 }
 
-function saveEdit(): void {
-  const idx = tableData.value.findIndex((item) => item.id === editForm.value.id)
-  if (idx !== -1) {
-    tableData.value[idx] = { ...editForm.value }
+async function saveEdit(): Promise<void> {
+  const srcData: Record<string, unknown> = {}
+  for (const f of editFields.value) {
+    srcData[f.key] = f.value
   }
-  editVisible.value = false
-  ElMessage.success('数据修改成功')
+
+  console.log('[saveEdit] recordId:', editRecordId.value)
+  console.log('[saveEdit] sourceData:', JSON.stringify(srcData))
+
+  try {
+    await updateRowData(editRecordId.value, srcData)
+    await loadTeachingData()
+    editVisible.value = false
+    ElMessage.success('数据修改成功')
+  } catch (err: unknown) {
+    const axiosErr = err as { response?: { data?: { detail?: unknown } } }
+    const detail = axiosErr?.response?.data?.detail
+    console.error('[saveEdit] response.data:', axiosErr?.response?.data)
+    console.error('[saveEdit] error:', err)
+    const msg = Array.isArray(detail)
+      ? detail.map((d: { msg: string }) => d.msg).join('; ')
+      : typeof detail === 'string' ? detail : (err as Error)?.message || '请稍后重试'
+    ElMessage.error(`修改失败：${msg}`)
+  }
 }
 
 async function handleDelete(row: TeachingDataRecord): Promise<void> {
@@ -400,25 +444,23 @@ function filterByCurrentFile(): void {
       </div>
     </div>
 
-    <el-dialog v-model="editVisible" title="编辑数据" width="500px" destroy-on-close>
-      <el-form :model="editForm" label-width="80px">
-        <el-form-item label="学号"><el-input v-model="editForm.studentId" /></el-form-item>
-        <el-form-item label="姓名"><el-input v-model="editForm.studentName" /></el-form-item>
-        <el-form-item v-if="editForm.dataType === 'score'" label="分数">
-          <el-input-number v-model="editForm.score" :min="0" :max="100" />
-        </el-form-item>
-        <el-form-item v-if="editForm.dataType === 'attendance'" label="考勤">
-          <el-select v-model="editForm.attendance" style="width: 100%">
-            <el-option label="正常" value="正常" />
-            <el-option label="迟到" value="迟到" />
-            <el-option label="缺勤" value="缺勤" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="editForm.dataType === 'assignment'" label="作业">
-          <el-select v-model="editForm.homework" style="width: 100%">
-            <el-option label="已提交" value="已提交" />
-            <el-option label="未提交" value="未提交" />
-          </el-select>
+    <!-- 编辑弹窗：全字段可编辑 -->
+    <el-dialog v-model="editVisible" :title="editTitle" width="650px" destroy-on-close>
+      <template v-if="editFields.length === 0">
+        <el-empty description="无可编辑字段" />
+      </template>
+      <el-form v-else label-width="180px" style="max-height: 500px; overflow-y: auto">
+        <el-form-item
+          v-for="(field, idx) in editFields"
+          :key="idx"
+          :label="field.key"
+        >
+          <el-input
+            v-model="field.value"
+            :placeholder="field.key"
+            :disabled="isReadonlyField(field.key)"
+            clearable
+          />
         </el-form-item>
       </el-form>
       <template #footer>

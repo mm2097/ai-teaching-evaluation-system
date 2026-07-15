@@ -130,3 +130,11 @@ export async function fetchTeachingData(
     total: payload.total ?? rows.length,
   }
 }
+
+/** 更新一条记录的完整行数据（含各题子记录等） */
+export async function updateRowData(
+  recordId: number,
+  sourceData: Record<string, unknown>,
+): Promise<void> {
+  await request.put(`/v1/teaching-data/${recordId}/row`, { source_data: sourceData })
+}

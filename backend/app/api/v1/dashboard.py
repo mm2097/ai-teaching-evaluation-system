@@ -7,6 +7,7 @@ from app.core.operation_log import get_current_user
 from app.models import (
     Student, Course, Teacher, ScoreRecord, AttendanceRecord,
     StudyWarning, CourseStudent, ExamBatch, SysUser, SysRole,
+    IndividualScore, CourseTestDetail, AttendanceSheet,
 )
 
 router = APIRouter()
@@ -78,25 +79,64 @@ def get_stats(
 
     teacher_count = len(session.exec(select(Teacher)).all())
 
-    # 成绩统计
+    # 成绩统计（合并新旧表）
+    all_scores: list[float] = []
+    # 旧表
     score_q = select(ScoreRecord)
     if course_id:
         score_q = score_q.where(ScoreRecord.course_id == course_id)
-    scores = session.exec(score_q).all()
-    total = len(scores) or 1
-    pass_count = sum(1 for s in scores if s.is_pass == 1)
-    excellent = sum(1 for s in scores if s.score >= 90)
+    for s in session.exec(score_q).all():
+        all_scores.append(s.score)
+    # IndividualScore
+    if course_id:
+        batch_ids = session.exec(
+            select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        ).all()
+        is_q = select(IndividualScore).where(IndividualScore.exam_batch_id.in_(batch_ids)) if batch_ids else select(IndividualScore).where(IndividualScore.exam_batch_id == -1)  # type: ignore[arg-type]
+    else:
+        is_q = select(IndividualScore)
+    for s in session.exec(is_q).all():
+        all_scores.append(s.score)
+    # CourseTestDetail
+    if course_id:
+        batch_ids = session.exec(
+            select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        ).all()
+        ct_q = select(CourseTestDetail).where(CourseTestDetail.exam_batch_id.in_(batch_ids)) if batch_ids else select(CourseTestDetail).where(CourseTestDetail.exam_batch_id == -1)  # type: ignore[arg-type]
+    else:
+        ct_q = select(CourseTestDetail)
+    for s in session.exec(ct_q).all():
+        all_scores.append(s.total_score)
+
+    total = len(all_scores) or 1
+    pass_count = sum(1 for s in all_scores if s >= 60)
+    excellent = sum(1 for s in all_scores if s >= 90)
     pass_rate = round(pass_count / total * 100, 1)
     excellent_rate = round(excellent / total * 100, 1)
 
-    # 考勤率
+    # 考勤率（合并新旧表）
+    att_normal = 0
+    att_total = 0
+    # 旧表
     att_q = select(AttendanceRecord)
     if course_id:
         att_q = att_q.where(AttendanceRecord.course_id == course_id)
-    atts = session.exec(att_q).all()
-    att_total = len(atts) or 1
-    att_normal = sum(1 for a in atts if a.status == 0)
-    attendance_rate = round(att_normal / att_total * 100, 1)
+    atts = list(session.exec(att_q).all())
+    att_total += len(atts)
+    att_normal += sum(1 for a in atts if a.status == 0)
+    # AttendanceSheet
+    if course_id:
+        batch_ids = session.exec(
+            select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        ).all()
+        ash_q = select(AttendanceSheet).where(AttendanceSheet.exam_batch_id.in_(batch_ids)) if batch_ids else select(AttendanceSheet).where(AttendanceSheet.exam_batch_id == -1)  # type: ignore[arg-type]
+    else:
+        ash_q = select(AttendanceSheet)
+    for a in session.exec(ash_q).all():
+        if a.total_count and a.present_count:
+            att_total += a.total_count
+            att_normal += a.present_count
+    attendance_rate = round(att_normal / (att_total or 1) * 100, 1)
 
     # 预警数
     warn_q = select(StudyWarning)
@@ -148,7 +188,7 @@ def get_grade_trend(
     if course_id:
         stmt = stmt.where(ExamBatch.course_id == course_id)
     batches = session.exec(stmt).all()
-    batches.sort(key=lambda b: b.exam_time or b.create_time)
+    batches.sort(key=lambda b: b.create_time)
 
     months: list[str] = []
     avg_scores: list[int] = []
@@ -157,29 +197,63 @@ def get_grade_trend(
     min_scores: list[int] = []
 
     for batch in batches:
-        sq = select(ScoreRecord).where(ScoreRecord.batch_id == batch.batch_id)
+        # 合并新旧表成绩
+        sc: list[float] = []
 
-        # 个人维度：只查该学生的成绩
+        # 旧表 ScoreRecord
+        sq = select(ScoreRecord.score).where(ScoreRecord.batch_id == batch.batch_id)
         if student_id:
             sq = sq.where(ScoreRecord.student_id == student_id)
-            records = session.exec(sq).all()
-        elif class_id:
-            # 班级维度：先拿到班级学生，再过滤
+        sr_scores = session.exec(sq).all()
+        if class_id and not student_id:
             class_stu_ids = set(session.exec(
                 select(Student.student_id).where(Student.class_id == class_id)
             ).all())
-            all_records = session.exec(sq).all()
-            records = [r for r in all_records if r.student_id in class_stu_ids]
+            sr_scores = [s for s in sr_scores if s in class_stu_ids]  # This is wrong - need to query differently
+            # Re-query properly
+            all_sr = session.exec(
+                select(ScoreRecord).where(ScoreRecord.batch_id == batch.batch_id)
+            ).all()
+            sc.extend([r.score for r in all_sr if r.student_id in class_stu_ids])
         else:
-            records = session.exec(sq).all()
+            sc.extend(sr_scores)
 
-        if not records:
+        # IndividualScore
+        is_scores = session.exec(
+            select(IndividualScore).where(IndividualScore.exam_batch_id == batch.batch_id)
+        ).all()
+        if student_id:
+            sc.extend([s.score for s in is_scores if s.student_id == student_id])
+        elif class_id:
+            if 'class_stu_ids' not in dir():
+                class_stu_ids = set(session.exec(
+                    select(Student.student_id).where(Student.class_id == class_id)
+                ).all())
+            sc.extend([s.score for s in is_scores if s.student_id in class_stu_ids])
+        else:
+            sc.extend([s.score for s in is_scores])
+
+        # CourseTestDetail
+        ct_scores = session.exec(
+            select(CourseTestDetail).where(CourseTestDetail.exam_batch_id == batch.batch_id)
+        ).all()
+        if student_id:
+            sc.extend([s.total_score for s in ct_scores if s.student_id == student_id])
+        elif class_id:
+            if 'class_stu_ids' not in dir():
+                class_stu_ids = set(session.exec(
+                    select(Student.student_id).where(Student.class_id == class_id)
+                ).all())
+            sc.extend([s.total_score for s in ct_scores if s.student_id in class_stu_ids])
+        else:
+            sc.extend([s.total_score for s in ct_scores])
+
+        if not sc:
             continue
 
-        sc = [r.score for r in records]
         months.append(batch.batch_name)
         avg_scores.append(round(sum(sc) / len(sc)))
-        pass_rates.append(round(sum(1 for r in records if r.is_pass) / len(records) * 100))
+        pass_rates.append(round(sum(1 for s in sc if s >= 60) / len(sc) * 100))
         max_scores.append(int(max(sc)))
         min_scores.append(int(min(sc)))
 

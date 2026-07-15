@@ -1,15 +1,15 @@
 """文件导入服务：检测模板、校验数据、批量导入教学数据。
 
 支持的模板：
-  1. 课程测试各题扣分情况 → ExamBatch + ScoreRecord
-  2. 成绩汇总             → ExamBatch + ScoreRecord（按成绩类型拆分为多个批次）
-  3. 成绩考勤情况         → AttendanceRecord
+  1. 课程测试各题扣分情况 → ExamBatch + CourseTestDetail + 知识点自动创建
+  2. 单项成绩             → ExamBatch + IndividualScore
+  3. 成绩考勤情况         → ExamBatch + AttendanceSheet
 """
 
 from __future__ import annotations
 
 import csv
-import io
+import io as _io
 import json
 import os
 import re
@@ -19,14 +19,17 @@ from datetime import date, datetime
 from typing import Any
 
 import openpyxl
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.models import (
-    AttendanceRecord,
+    AttendanceSheet,
     Course,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
-    ScoreRecord,
+    IndividualScore,
+    KnowledgeModule,
+    KnowledgePoint,
     Student,
     SysUser,
 )
@@ -165,46 +168,6 @@ def _safe_str(value: Any) -> str | None:
     if _is_formula(value):
         return None
     return str(value).strip()
-
-
-def _upsert_score(
-    session: Session,
-    course_id: int,
-    student_id: int,
-    batch_id: int,
-    score: float,
-    create_by: int,
-    remark: str = "",
-    source_data: str | None = None,
-) -> None:
-    """创建或更新成绩记录（按 student_id + batch_id 去重）。"""
-    from sqlmodel import select
-    existing = session.exec(
-        select(ScoreRecord).where(
-            ScoreRecord.student_id == student_id,
-            ScoreRecord.batch_id == batch_id,
-        )
-    ).first()
-    if existing:
-        existing.score = score
-        existing.is_pass = 1 if score >= 60 else 0
-        existing.remark = remark
-        if source_data is not None:
-            existing.source_data = source_data
-        existing.update_time = datetime.now()
-        session.add(existing)
-    else:
-        session.add(ScoreRecord(
-            course_id=course_id,
-            student_id=student_id,
-            batch_id=batch_id,
-            score=score,
-            is_pass=1 if score >= 60 else 0,
-            remark=remark,
-            source_data=source_data,
-            create_by=create_by,
-        ))
-    session.commit()
 
 
 def _normalize_headers(headers: list[str | None]) -> list[str]:
@@ -373,7 +336,7 @@ def parse_txt(file_path: str) -> dict[str, list[dict[str, Any]]]:
         content = f.read()
 
     # 使用 csv 模块解析
-    reader = csv.reader(io.StringIO(content))
+    reader = csv.reader(_io.StringIO(content))
     rows = list(reader)
     if not rows:
         return result
@@ -411,7 +374,7 @@ def parse_txt(file_path: str) -> dict[str, list[dict[str, Any]]]:
 
 
 # ============================================================================
-# 数据导入
+# 数据导入辅助
 # ============================================================================
 
 def _get_or_create_exam_batch(
@@ -419,26 +382,31 @@ def _get_or_create_exam_batch(
     course_id: int,
     batch_name: str,
     batch_type: int,
-    batch_weight: float | None,
+    semester: str,
     create_by: int,
+    batch_weight: float | None = None,
 ) -> ExamBatch:
-    """获取或创建考核批次。"""
-    from sqlmodel import select
-
+    """获取或创建考核批次（按 course_id + batch_name + semester 去重）。"""
     stmt = select(ExamBatch).where(
         ExamBatch.course_id == course_id,
         ExamBatch.batch_name == batch_name,
+        ExamBatch.semester == semester,
     )
     batch = session.exec(stmt).first()
     if batch:
+        # 如果已有批次权重为空且有默认权重，补填权重
+        if batch.batch_weight is None and batch_weight is not None:
+            batch.batch_weight = batch_weight
+            session.add(batch)
+            session.commit()
         return batch
 
     batch = ExamBatch(
         course_id=course_id,
         batch_name=batch_name,
         batch_type=batch_type,
+        semester=semester,
         batch_weight=batch_weight,
-        exam_time=datetime.now(),
         full_score=100,
         create_by=create_by,
     )
@@ -450,8 +418,6 @@ def _get_or_create_exam_batch(
 
 def _get_student_by_no(session: Session, student_no: str) -> Student | None:
     """根据学号查找学生。"""
-    from sqlmodel import select
-
     return session.exec(
         select(Student).where(Student.student_no == str(student_no).strip())
     ).first()
@@ -459,8 +425,6 @@ def _get_student_by_no(session: Session, student_no: str) -> Student | None:
 
 def _ensure_course_student(session: Session, course_id: int, student_id: int) -> None:
     """确保学生在课程选修表中存在。"""
-    from sqlmodel import select
-
     exists = session.exec(
         select(CourseStudent).where(
             CourseStudent.course_id == course_id,
@@ -476,6 +440,138 @@ def _ensure_course_student(session: Session, course_id: int, student_id: int) ->
         session.commit()
 
 
+def _extract_semester(rows: list[dict[str, Any]]) -> str:
+    """从数据行中提取学期（取第一个非空值）。"""
+    for row in rows:
+        sem = row.get("学期")
+        if sem and str(sem).strip():
+            return str(sem).strip()
+    return ""
+
+
+def _map_batch_type_by_name(batch_name: str) -> int:
+    """根据成绩名称推断 batch_type。
+
+    映射规则：
+      期中 → 3, 期末 → 4, 实验 → 2, 作业/平时 → 1, 小班讨论 → 1, 默认 → 1
+    """
+    name = batch_name.strip()
+    if "期中" in name:
+        return 3
+    if "期末" in name:
+        return 4
+    if "实验" in name:
+        return 2
+    if "小班讨论" in name or "讨论" in name:
+        return 1
+    return 1  # 平时成绩
+
+
+def _get_default_batch_weight(batch_name: str, batch_type: int) -> float | None:
+    """根据批次名称/类型返回默认权重。
+
+    期中考试 → 35, 期末考试 → 50, 考勤 → 5, 小班讨论 → 10
+    其他类型返回 None，表示不参与加权计算。
+    """
+    name = batch_name.strip()
+    if batch_type == 5:
+        return 5.0       # 考勤
+    if "小班讨论" in name or "讨论" in name:
+        return 10.0
+    if "期末" in name:
+        return 50.0
+    if "期中" in name:
+        return 35.0
+    return None
+
+
+# ============================================================================
+# 知识点自动管理
+# ============================================================================
+
+def _ensure_knowledge_point(
+    session: Session,
+    course_id: int,
+    point_name: str,
+) -> KnowledgePoint:
+    """获取或创建知识点（按名称，课程范围内）。
+
+    若课程下无知识模块，自动创建"默认模块"。
+    知识点按名称查找，有则不变，无则新增。
+    """
+    # 1. 查找课程下所有模块
+    modules = session.exec(
+        select(KnowledgeModule).where(KnowledgeModule.course_id == course_id)
+    ).all()
+
+    if not modules:
+        # 自动创建默认模块
+        default_module = KnowledgeModule(
+            course_id=course_id,
+            module_name="默认模块",
+            description="自动创建的知识模块（导入数据时生成）",
+            sort_num=0,
+        )
+        session.add(default_module)
+        session.commit()
+        session.refresh(default_module)
+        modules = [default_module]
+
+    # 2. 获取所有模块 ID
+    module_ids = [m.module_id for m in modules]
+
+    # 3. 查找是否已存在同名知识点
+    existing = session.exec(
+        select(KnowledgePoint).where(
+            KnowledgePoint.module_id.in_(module_ids),  # type: ignore[arg-type]
+            KnowledgePoint.point_name == point_name,
+        )
+    ).first()
+
+    if existing:
+        return existing
+
+    # 4. 不存在则新增到第一个模块下
+    point = KnowledgePoint(
+        module_id=modules[0].module_id,
+        point_name=point_name,
+        description="",
+        sort_num=0,
+    )
+    session.add(point)
+    session.commit()
+    session.refresh(point)
+    return point
+
+
+def _collect_and_ensure_knowledge_points(
+    session: Session,
+    course_id: int,
+    rows: list[dict[str, Any]],
+) -> dict[str, KnowledgePoint]:
+    """从课程测试数据行中收集所有知识点名称并确保其存在。
+
+    返回 {知识点名称: KnowledgePoint} 映射。
+    """
+    knowledge_names: set[str] = set()
+    for row_data in rows:
+        for qn in range(1, 6):
+            col_name = f"第 {qn} 大题扣分的主要知识点"
+            kn_str = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
+            if kn_str:
+                knowledge_names.add(kn_str)
+
+    result: dict[str, KnowledgePoint] = {}
+    for name in knowledge_names:
+        result[name] = _ensure_knowledge_point(session, course_id, name)
+
+    return result
+
+
+# ============================================================================
+# 模板1：课程测试各题扣分情况
+# ============================================================================
+
 def _import_exam_deduction(
     session: Session,
     sheet_data: dict[str, list[dict[str, Any]]],
@@ -483,17 +579,28 @@ def _import_exam_deduction(
     create_by: int,
     tmpl: TemplateDef,
 ) -> ImportResult:
-    """导入模板1数据：课程测试各题扣分情况。
+    """导入模板1数据：课程测试各题扣分情况 → CourseTestDetail。
 
-    每位学生创建多条 ScoreRecord：
-      - 1 条总成绩（batch_name = 测试名称，如"期中考试"）
-      - 5 条各题扣分（batch_name = 第X大题，remark = 知识点）
+    每位学生每条测试创建一条 CourseTestDetail 记录，
+    包含 5 大题扣分 + 知识点 + 总成绩。
+    同时自动识别并创建知识点。
     """
     result = ImportResult(detected_template=tmpl.name)
 
+    # 收集所有行数据
+    all_rows: list[dict[str, Any]] = []
     for sheet_name, rows in sheet_data.items():
         result.sheets_processed.append(sheet_name)
+        all_rows.extend(rows)
 
+    # 提取学期
+    semester = _extract_semester(all_rows)
+
+    # 第一遍：预先收集并创建所有知识点
+    _collect_and_ensure_knowledge_points(session, course_id, all_rows)
+
+    # 第二遍：导入数据行
+    for sheet_name, rows in sheet_data.items():
         for row_data in rows:
             excel_row = row_data.get("_excel_row", 0)
 
@@ -516,157 +623,81 @@ def _import_exam_deduction(
             _ensure_course_student(session, course_id, student.student_id)
 
             exam_name = str(row_data.get("测试名称") or "考试").strip()
-
-            # ── 原始行数据（去除内部字段） ──
+            # 过滤内部字段和不需要的列
             source = {k: v for k, v in row_data.items()
-                      if not k.startswith("_")}
+                      if not k.startswith("_") and k != "所考查的知识点"}
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
-            # ── 先导入总成绩 ──
-            total_score = _safe_float(row_data.get("总成绩"))
-            if total_score is not None:
-                total_batch = _get_or_create_exam_batch(
-                    session, course_id, exam_name,
-                    batch_type=3, batch_weight=None, create_by=create_by,
-                )
-                _upsert_score(session, course_id, student.student_id,
-                              total_batch.batch_id, float(total_score), create_by,
-                              source_data=source_json)
-                result.success_count += 1
+            # 获取或创建考核批次
+            batch_type = _map_batch_type_by_name(exam_name)
+            default_weight = _get_default_batch_weight(exam_name, batch_type)
+            batch = _get_or_create_exam_batch(
+                session, course_id, exam_name,
+                batch_type=batch_type, semester=semester, create_by=create_by,
+                batch_weight=default_weight,
+            )
 
-            # ── 逐题导入扣分详情 ──
+            # 解析各题数据
+            q_scores: list[float | None] = []
+            q_knowledge: list[str | None] = []
             for qn in range(1, 6):
-                col_deduction = f"第{qn}大题"
+                col_score = f"第{qn}大题"
                 col_knowledge = f"第 {qn} 大题扣分的主要知识点"
+                q_scores.append(_safe_float(row_data.get(col_score)))
+                kn = str(row_data.get(col_knowledge, "")).strip() if row_data.get(col_knowledge) else ""
+                q_knowledge.append(kn if kn else None)
 
-                deduction = _safe_float(row_data.get(col_deduction))
-                knowledge = str(row_data.get(col_knowledge, "")).strip() if row_data.get(col_knowledge) else ""
+            total_score = _safe_float(row_data.get("总成绩")) or 0.0
 
-                # 跳过无扣分的题目
-                if deduction is None or deduction == 0.0:
-                    continue
-
-                q_batch_name = f"{exam_name}-第{qn}大题"
-                q_batch = _get_or_create_exam_batch(
-                    session, course_id, q_batch_name,
-                    batch_type=1, batch_weight=None, create_by=create_by,
+            # Upsert: 查找是否已有该学生同批次的记录
+            existing = session.exec(
+                select(CourseTestDetail).where(
+                    CourseTestDetail.student_id == student.student_id,
+                    CourseTestDetail.exam_batch_id == batch.batch_id,
                 )
-                _upsert_score(
-                    session, course_id, student.student_id,
-                    q_batch.batch_id, float(deduction), create_by,
-                    remark=knowledge,
-                )
-                result.success_count += 1
+            ).first()
 
-    return result
-
-
-def _import_attendance(
-    session: Session,
-    sheet_data: dict[str, list[dict[str, Any]]],
-    course_id: int,
-    create_by: int,
-    tmpl: TemplateDef,
-) -> ImportResult:
-    """导入模板3数据：成绩考勤情况。
-
-    每条考勤记录创建一条 AttendanceRecord。
-    考勤值映射：到→0(出勤), 缺→3(缺勤), 请假→4(请假), 迟到→1(迟到)
-    """
-    ATTENDANCE_MAP: dict[str, int] = {
-        "到": 0, "正常": 0, "出勤": 0,
-        "迟到": 1,
-        "早退": 2,
-        "缺": 3, "缺勤": 3, "旷课": 3,
-        "请假": 4, "病假": 4, "事假": 4,
-    }
-
-    result = ImportResult(detected_template=tmpl.name)
-
-    # 考勤日期基准 —— 取课程学期确定起始日期（简化处理：取当年9月或当前月）
-    # 实际使用中，考勤1~32 对应课程的第1~32次课
-    # 这里按序号存储，日期取当前导入日期
-    base_date = date.today()
-
-    for sheet_name, rows in sheet_data.items():
-        result.sheets_processed.append(sheet_name)
-
-        for row_data in rows:
-            excel_row = row_data.get("_excel_row", 0)
-
-            errors = validate_row(row_data, tmpl, sheet_name, excel_row)
-            if errors:
-                result.errors.extend(errors)
-                result.error_count += len(errors)
-                continue
-
-            student_no = str(row_data.get("学号", "")).strip()
-            student = _get_student_by_no(session, student_no)
-            if not student:
-                result.errors.append(ImportError(
-                    sheet=sheet_name, row=excel_row, field="学号",
-                    message=f"学号「{student_no}」在系统中不存在",
+            if existing:
+                existing.question1_score = q_scores[0]
+                existing.question2_score = q_scores[1]
+                existing.question3_score = q_scores[2]
+                existing.question4_score = q_scores[3]
+                existing.question5_score = q_scores[4]
+                existing.question1_knowledge = q_knowledge[0]
+                existing.question2_knowledge = q_knowledge[1]
+                existing.question3_knowledge = q_knowledge[2]
+                existing.question4_knowledge = q_knowledge[3]
+                existing.question5_knowledge = q_knowledge[4]
+                existing.total_score = float(total_score)
+                existing.source_data = source_json
+                existing.update_time = datetime.now()
+                session.add(existing)
+            else:
+                session.add(CourseTestDetail(
+                    student_id=student.student_id,
+                    exam_batch_id=batch.batch_id,
+                    question1_score=q_scores[0],
+                    question2_score=q_scores[1],
+                    question3_score=q_scores[2],
+                    question4_score=q_scores[3],
+                    question5_score=q_scores[4],
+                    question1_knowledge=q_knowledge[0],
+                    question2_knowledge=q_knowledge[1],
+                    question3_knowledge=q_knowledge[2],
+                    question4_knowledge=q_knowledge[3],
+                    question5_knowledge=q_knowledge[4],
+                    total_score=float(total_score),
+                    source_data=source_json,
+                    create_by=create_by,
                 ))
-                result.error_count += 1
-                continue
-
-            _ensure_course_student(session, course_id, student.student_id)
-
-            # 原始行数据
-            source = {k: v for k, v in row_data.items() if not k.startswith("_")}
-            source_json = json.dumps(source, ensure_ascii=False, default=str)
-
-            row_imported = 0
-            for i in range(1, 33):
-                col_name = f"考勤{i}"
-                att_val = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
-                if not att_val:
-                    continue
-
-                status = ATTENDANCE_MAP.get(att_val)
-                if status is None:
-                    result.errors.append(ImportError(
-                        sheet=sheet_name, row=excel_row, field=col_name,
-                        message=f"无法识别的考勤值「{att_val}」，支持：到/缺/请假/迟到",
-                    ))
-                    result.error_count += 1
-                    continue
-
-                from sqlmodel import select
-                existing = session.exec(
-                    select(AttendanceRecord).where(
-                        AttendanceRecord.course_id == course_id,
-                        AttendanceRecord.student_id == student.student_id,
-                        AttendanceRecord.attendance_date == base_date,
-                    )
-                ).first()
-
-                if existing:
-                    existing.status = status
-                    existing.source_data = source_json
-                    existing.update_time = datetime.now()
-                    session.add(existing)
-                else:
-                    session.add(AttendanceRecord(
-                        course_id=course_id,
-                        student_id=student.student_id,
-                        attendance_date=base_date,
-                        status=status,
-                        source_data=source_json,
-                        create_by=create_by,
-                    ))
-                row_imported += 1
-
-            # 每个学生行的所有考勤槽位批量提交一次
-            if row_imported > 0:
-                session.commit()
-                result.success_count += row_imported
+            session.commit()
+            result.success_count += 1
 
     return result
 
 
 # ============================================================================
-# 导入调度
+# 模板2：单项成绩
 # ============================================================================
 
 def _import_simple_score(
@@ -676,16 +707,22 @@ def _import_simple_score(
     create_by: int,
     tmpl: TemplateDef,
 ) -> ImportResult:
-    """导入单项成绩。
+    """导入单项成绩 → IndividualScore。
 
     格式：编号, 课程号, 课程名称, 学期, 学号, 姓名, 成绩名称, 成绩
-    按成绩名称分组创建考试批次，导入对应成绩。
+    按"成绩名称"分组创建考试批次，每位学生每条成绩名称一条记录。
     """
     result = ImportResult(detected_template=tmpl.name)
 
+    # 收集所有行
+    all_rows: list[dict[str, Any]] = []
     for sheet_name, rows in sheet_data.items():
         result.sheets_processed.append(sheet_name)
+        all_rows.extend(rows)
 
+    semester = _extract_semester(all_rows)
+
+    for sheet_name, rows in sheet_data.items():
         for row_data in rows:
             excel_row = row_data.get("_excel_row", 0)
 
@@ -717,24 +754,195 @@ def _import_simple_score(
                 result.error_count += 1
                 continue
 
-            # 原始行数据
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
-            # 按成绩名称创建或获取考试批次
+            # 获取或创建考试批次
+            batch_type = _map_batch_type_by_name(score_name)
+            default_weight = _get_default_batch_weight(score_name, batch_type)
             batch = _get_or_create_exam_batch(
                 session, course_id, score_name,
-                batch_type=3, batch_weight=25, create_by=create_by,
+                batch_type=batch_type, semester=semester, create_by=create_by,
+                batch_weight=default_weight,
             )
-            _upsert_score(
-                session, course_id, student.student_id,
-                batch.batch_id, float(score_val), create_by,
-                source_data=source_json,
-            )
+
+            # Upsert
+            existing = session.exec(
+                select(IndividualScore).where(
+                    IndividualScore.student_id == student.student_id,
+                    IndividualScore.exam_batch_id == batch.batch_id,
+                )
+            ).first()
+
+            if existing:
+                existing.score = float(score_val)
+                existing.source_data = source_json
+                existing.update_time = datetime.now()
+                session.add(existing)
+            else:
+                session.add(IndividualScore(
+                    student_id=student.student_id,
+                    exam_batch_id=batch.batch_id,
+                    score=float(score_val),
+                    source_data=source_json,
+                    create_by=create_by,
+                ))
+            session.commit()
             result.success_count += 1
 
     return result
 
+
+# ============================================================================
+# 模板3：成绩考勤情况
+# ============================================================================
+
+def _import_attendance(
+    session: Session,
+    sheet_data: dict[str, list[dict[str, Any]]],
+    course_id: int,
+    create_by: int,
+    tmpl: TemplateDef,
+) -> ImportResult:
+    """导入成绩考勤情况 → AttendanceSheet。
+
+    每位学生一行，包含 32 次考勤槽位 + 汇总统计。
+    """
+    result = ImportResult(detected_template=tmpl.name)
+
+    # 收集所有行
+    all_rows: list[dict[str, Any]] = []
+    for sheet_name, rows in sheet_data.items():
+        result.sheets_processed.append(sheet_name)
+        all_rows.extend(rows)
+
+    semester = _extract_semester(all_rows)
+
+    # 考勤批次名称
+    course = session.get(Course, course_id)
+    batch_name = f"考勤情况" if not course else f"{course.course_name}-考勤情况"
+
+    batch = _get_or_create_exam_batch(
+        session, course_id, batch_name,
+        batch_type=5, semester=semester, create_by=create_by,
+        batch_weight=5.0,  # 考勤默认权重
+    )
+
+    for sheet_name, rows in sheet_data.items():
+        for row_data in rows:
+            excel_row = row_data.get("_excel_row", 0)
+
+            errors = validate_row(row_data, tmpl, sheet_name, excel_row)
+            if errors:
+                result.errors.extend(errors)
+                result.error_count += len(errors)
+                continue
+
+            student_no = str(row_data.get("学号", "")).strip()
+            student = _get_student_by_no(session, student_no)
+            if not student:
+                result.errors.append(ImportError(
+                    sheet=sheet_name, row=excel_row, field="学号",
+                    message=f"学号「{student_no}」在系统中不存在",
+                ))
+                result.error_count += 1
+                continue
+
+            _ensure_course_student(session, course_id, student.student_id)
+
+            source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            source_json = json.dumps(source, ensure_ascii=False, default=str)
+
+            # 解析 32 次考勤
+            att_values: list[str | None] = []
+            for i in range(1, 33):
+                col_name = f"考勤{i}"
+                att_val = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
+                att_values.append(att_val if att_val else None)
+
+            # Upsert
+            existing = session.exec(
+                select(AttendanceSheet).where(
+                    AttendanceSheet.student_id == student.student_id,
+                    AttendanceSheet.exam_batch_id == batch.batch_id,
+                )
+            ).first()
+
+            if existing:
+                _update_attendance_sheet(existing, att_values, row_data, source_json)
+                session.add(existing)
+            else:
+                sheet = AttendanceSheet(
+                    student_id=student.student_id,
+                    exam_batch_id=batch.batch_id,
+                    source_data=source_json,
+                    create_by=create_by,
+                )
+                _update_attendance_sheet(sheet, att_values, row_data, source_json)
+                session.add(sheet)
+
+            session.commit()
+            result.success_count += 1
+
+    return result
+
+
+def _update_attendance_sheet(
+    sheet: AttendanceSheet,
+    att_values: list[str | None],
+    row_data: dict[str, Any],
+    source_json: str,
+) -> None:
+    """将解析的考勤值填充到 AttendanceSheet 对象。"""
+    # 32 次考勤
+    sheet.attendance_1 = att_values[0]
+    sheet.attendance_2 = att_values[1]
+    sheet.attendance_3 = att_values[2]
+    sheet.attendance_4 = att_values[3]
+    sheet.attendance_5 = att_values[4]
+    sheet.attendance_6 = att_values[5]
+    sheet.attendance_7 = att_values[6]
+    sheet.attendance_8 = att_values[7]
+    sheet.attendance_9 = att_values[8]
+    sheet.attendance_10 = att_values[9]
+    sheet.attendance_11 = att_values[10]
+    sheet.attendance_12 = att_values[11]
+    sheet.attendance_13 = att_values[12]
+    sheet.attendance_14 = att_values[13]
+    sheet.attendance_15 = att_values[14]
+    sheet.attendance_16 = att_values[15]
+    sheet.attendance_17 = att_values[16]
+    sheet.attendance_18 = att_values[17]
+    sheet.attendance_19 = att_values[18]
+    sheet.attendance_20 = att_values[19]
+    sheet.attendance_21 = att_values[20]
+    sheet.attendance_22 = att_values[21]
+    sheet.attendance_23 = att_values[22]
+    sheet.attendance_24 = att_values[23]
+    sheet.attendance_25 = att_values[24]
+    sheet.attendance_26 = att_values[25]
+    sheet.attendance_27 = att_values[26]
+    sheet.attendance_28 = att_values[27]
+    sheet.attendance_29 = att_values[28]
+    sheet.attendance_30 = att_values[29]
+    sheet.attendance_31 = att_values[30]
+    sheet.attendance_32 = att_values[31]
+
+    # 汇总列
+    sheet.total_count = _safe_int(row_data.get("考勤总数"))
+    sheet.present_count = _safe_int(row_data.get("到课数"))
+    sheet.leave_count = _safe_int(row_data.get("请假数"))
+    sheet.late_count = _safe_int(row_data.get("迟到数"))
+    sheet.early_leave_count = _safe_int(row_data.get("早退数"))
+    sheet.attendance_rate = _safe_float(row_data.get("到课率"))
+
+    sheet.source_data = source_json
+    sheet.update_time = datetime.now()
+
+
+# ============================================================================
+# 导入调度
+# ============================================================================
 
 IMPORT_HANDLERS: dict[str, Callable] = {
     TEMPLATE_EXAM_DEDUCTION.template_id: _import_exam_deduction,
@@ -803,7 +1011,7 @@ def import_file(
         result.errors.append(ImportError(
             sheet="", row=0, field=None,
             message=(
-                f"无法识别文件模板。支持的模板：课程测试各题扣分情况、成绩汇总、成绩考勤情况。"
+                f"无法识别文件模板。支持的模板：课程测试各题扣分情况、单项成绩、成绩考勤情况。"
                 f"各Sheet表头：{all_headers}"
             ),
         ))
@@ -855,7 +1063,6 @@ def import_file(
 # 模板下载：生成标准模板文件
 # ============================================================================
 
-import io as _io
 from openpyxl.styles import Font as _Font, Alignment as _Alignment, PatternFill as _PatternFill
 from openpyxl.utils import get_column_letter as _get_column_letter
 
@@ -924,7 +1131,6 @@ def generate_template_xlsx(template_id: str) -> bytes:
         raise ValueError(f"未知模板 ID: {template_id}")
 
     wb = openpyxl.Workbook()
-    # 使用通用 Sheet 名（避免硬编码班级名）
     ws = wb.active
     ws.title = "Sheet1"
 

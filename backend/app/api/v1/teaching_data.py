@@ -26,6 +26,7 @@ from app.core.operation_log import get_current_user
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole,
+    IndividualScore, AttendanceSheet, CourseTestDetail,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
 from app.services.analysis_refresh import refresh_course_analysis
@@ -104,14 +105,14 @@ def query_teaching_data(
 
     # ── 成绩数据 ──
     if data_type is None or data_type == "score":
+        # 旧表：ScoreRecord
         stmt = select(ScoreRecord).where(ScoreRecord.course_id == course_id)
         if student_ids:
-            # SQLite 不支持 .in_() 的巨量参数，48个学生没问题
             stmt = stmt.where(ScoreRecord.student_id.in_(student_ids))  # type: ignore[arg-type]
         if batch_id:
             stmt = stmt.where(ScoreRecord.batch_id == batch_id)
         if keyword and not student_ids:
-            stmt = stmt.where(ScoreRecord.student_id == -1)  # 无匹配学生时返回空
+            stmt = stmt.where(ScoreRecord.student_id == -1)
 
         for s in session.exec(stmt).all():
             student = session.get(Student, s.student_id)
@@ -125,8 +126,8 @@ def query_teaching_data(
                 "studentId": student.student_no,
                 "studentName": student.real_name,
                 "courseId": course_id,
-                "courseName": "",  # 由前端用 course_id 自行关联
-                "semester": "",
+                "courseName": "",
+                "semester": batch.semester if batch else "",
                 "batchId": s.batch_id,
                 "batchName": batch.batch_name if batch else "",
                 "score": s.score,
@@ -135,8 +136,82 @@ def query_teaching_data(
                 "sourceData": s.source_data,
             })
 
+        # 新表：IndividualScore
+        istmt = select(IndividualScore).join(
+            ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id
+        ).where(ExamBatch.course_id == course_id)
+        if student_ids:
+            istmt = istmt.where(IndividualScore.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if batch_id:
+            istmt = istmt.where(IndividualScore.exam_batch_id == batch_id)
+        if keyword and not student_ids:
+            istmt = istmt.where(IndividualScore.student_id == -1)
+
+        for s in session.exec(istmt).all():
+            student = session.get(Student, s.student_id)
+            batch = session.get(ExamBatch, s.exam_batch_id)
+            if not student:
+                continue
+            rows.append({
+                "id": f"individual_{s.score_id}",
+                "recordId": s.score_id,
+                "dataType": "score",
+                "subType": "individual_score",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",
+                "semester": batch.semester if batch else "",
+                "batchId": s.exam_batch_id,
+                "batchName": batch.batch_name if batch else "",
+                "score": s.score,
+                "sourceData": s.source_data,
+            })
+
+        # 新表：CourseTestDetail
+        ctstmt = select(CourseTestDetail).join(
+            ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id
+        ).where(ExamBatch.course_id == course_id)
+        if student_ids:
+            ctstmt = ctstmt.where(CourseTestDetail.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if batch_id:
+            ctstmt = ctstmt.where(CourseTestDetail.exam_batch_id == batch_id)
+        if keyword and not student_ids:
+            ctstmt = ctstmt.where(CourseTestDetail.student_id == -1)
+
+        for s in session.exec(ctstmt).all():
+            student = session.get(Student, s.student_id)
+            batch = session.get(ExamBatch, s.exam_batch_id)
+            if not student:
+                continue
+            rows.append({
+                "id": f"test_detail_{s.score_id}",
+                "recordId": s.score_id,
+                "dataType": "score",
+                "subType": "course_test_detail",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",
+                "semester": batch.semester if batch else "",
+                "batchId": s.exam_batch_id,
+                "batchName": batch.batch_name if batch else "",
+                "score": s.total_score,
+                "totalScore": s.total_score,
+                "questionScores": [
+                    s.question1_score, s.question2_score,
+                    s.question3_score, s.question4_score, s.question5_score,
+                ],
+                "knowledgePoints": [
+                    s.question1_knowledge, s.question2_knowledge,
+                    s.question3_knowledge, s.question4_knowledge, s.question5_knowledge,
+                ],
+                "sourceData": s.source_data,
+            })
+
     # ── 考勤数据 ──
     if data_type is None or data_type == "attendance":
+        # 旧表：AttendanceRecord
         stmt = select(AttendanceRecord).where(AttendanceRecord.course_id == course_id)
         if student_ids:
             stmt = stmt.where(AttendanceRecord.student_id.in_(student_ids))  # type: ignore[arg-type]
@@ -160,6 +235,52 @@ def query_teaching_data(
                 "status": STATUS_MAP.get(a.status, "未知"),
                 "statusCode": a.status,
                 "remark": a.remark,
+                "sourceData": a.source_data,
+            })
+
+        # 新表：AttendanceSheet
+        ash_stmt = select(AttendanceSheet).join(
+            ExamBatch, AttendanceSheet.exam_batch_id == ExamBatch.batch_id
+        ).where(ExamBatch.course_id == course_id)
+        if student_ids:
+            ash_stmt = ash_stmt.where(AttendanceSheet.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if keyword and not student_ids:
+            ash_stmt = ash_stmt.where(AttendanceSheet.student_id == -1)
+
+        for a in session.exec(ash_stmt).all():
+            student = session.get(Student, a.student_id)
+            batch = session.get(ExamBatch, a.exam_batch_id)
+            if not student:
+                continue
+            att_data = [
+                a.attendance_1, a.attendance_2, a.attendance_3, a.attendance_4,
+                a.attendance_5, a.attendance_6, a.attendance_7, a.attendance_8,
+                a.attendance_9, a.attendance_10, a.attendance_11, a.attendance_12,
+                a.attendance_13, a.attendance_14, a.attendance_15, a.attendance_16,
+                a.attendance_17, a.attendance_18, a.attendance_19, a.attendance_20,
+                a.attendance_21, a.attendance_22, a.attendance_23, a.attendance_24,
+                a.attendance_25, a.attendance_26, a.attendance_27, a.attendance_28,
+                a.attendance_29, a.attendance_30, a.attendance_31, a.attendance_32,
+            ]
+            rows.append({
+                "id": f"attendance_sheet_{a.score_id}",
+                "recordId": a.score_id,
+                "dataType": "attendance",
+                "subType": "attendance_sheet",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",
+                "semester": batch.semester if batch else "",
+                "batchId": a.exam_batch_id,
+                "batchName": batch.batch_name if batch else "",
+                "attendanceData": att_data,
+                "totalCount": a.total_count,
+                "presentCount": a.present_count,
+                "leaveCount": a.leave_count,
+                "lateCount": a.late_count,
+                "earlyLeaveCount": a.early_leave_count,
+                "attendanceRate": a.attendance_rate,
                 "sourceData": a.source_data,
             })
 
@@ -204,6 +325,12 @@ def update_row_data(
     if record is None:
         record = session.get(AttendanceRecord, record_id)
     if record is None:
+        record = session.get(IndividualScore, record_id)
+    if record is None:
+        record = session.get(CourseTestDetail, record_id)
+    if record is None:
+        record = session.get(AttendanceSheet, record_id)
+    if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
 
     if isinstance(record, ScoreRecord):
@@ -244,6 +371,60 @@ def update_row_data(
             session.commit()
 
         return {"recordId": record_id, "recordType": "attendance", "updated": True}
+
+    elif isinstance(record, IndividualScore):
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        if src is not None:
+            score_val = src.get("成绩")
+            if score_val is not None:
+                try:
+                    record.score = float(score_val)
+                except (ValueError, TypeError):
+                    pass
+            record.source_data = json.dumps(src, ensure_ascii=False)
+            record.update_time = datetime.now()
+            session.add(record)
+            session.commit()
+
+        return {"recordId": record_id, "recordType": "individual_score", "updated": True}
+
+    elif isinstance(record, CourseTestDetail):
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        if src is not None:
+            total = src.get("总成绩")
+            if total is not None:
+                try:
+                    record.total_score = float(total)
+                except (ValueError, TypeError):
+                    pass
+            record.source_data = json.dumps(src, ensure_ascii=False)
+            record.update_time = datetime.now()
+            session.add(record)
+            session.commit()
+
+        return {"recordId": record_id, "recordType": "course_test_detail", "updated": True}
+
+    elif isinstance(record, AttendanceSheet):
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        if src is not None:
+            record.source_data = json.dumps(src, ensure_ascii=False)
+            record.update_time = datetime.now()
+            session.add(record)
+            session.commit()
+
+        return {"recordId": record_id, "recordType": "attendance_sheet", "updated": True}
 
     raise HTTPException(status_code=400, detail="记录类型不支持")
 
@@ -307,7 +488,7 @@ def _rebuild_question_sub_records(
 def edit_teaching_data(
     record_type: str,
     record_id: int,
-    score: float | None = Query(default=None, description="成绩值（score 类型）"),
+    score: float | None = Query(default=None, description="成绩值（score/individual_score 类型）"),
     status_code: int | None = Query(default=None, description="考勤状态: 0=出勤 1=迟到 2=早退 3=缺勤 4=请假"),
     remark: str | None = Query(default=None, description="备注"),
     session: Session = Depends(get_session),
@@ -316,6 +497,7 @@ def edit_teaching_data(
     """编辑单条教学数据（Data.Query.Edit）。
 
     支持修改成绩值、考勤状态、备注。仅授课教师可修改自己课程的数据。
+    支持旧表（ScoreRecord/AttendanceRecord）和新表（IndividualScore/AttendanceSheet/CourseTestDetail）。
     """
     if record_type == "score":
         record = session.get(ScoreRecord, record_id)
@@ -339,6 +521,48 @@ def edit_teaching_data(
             "score": record.score,
             "isPass": record.is_pass,
             "remark": record.remark,
+        }
+
+    elif record_type == "individual_score":
+        record = session.get(IndividualScore, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="单项成绩记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        if score is not None:
+            record.score = score
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return {
+            "recordType": "individual_score",
+            "recordId": record.score_id,
+            "score": record.score,
+        }
+
+    elif record_type == "course_test_detail":
+        record = session.get(CourseTestDetail, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="课程测试记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        if score is not None:
+            record.total_score = score
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return {
+            "recordType": "course_test_detail",
+            "recordId": record.score_id,
+            "totalScore": record.total_score,
         }
 
     elif record_type == "attendance":
@@ -367,7 +591,7 @@ def edit_teaching_data(
         }
 
     else:
-        raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, attendance")
+        raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance")
 
 
 @router.get("/teaching-data/export", tags=["教学数据"])

@@ -37,21 +37,50 @@ from app.services.warning import evaluate_student, persist_warnings
 def _estimate_mastery_from_scores(
     session: Session, student_id: int, course_id: int
 ) -> float:
-    """基于该学生该课程所有 ScoreRecord 估算平均掌握度（0-100）。
+    """基于该学生该课程所有成绩记录估算平均掌握度（0-100）。
 
+    从 ScoreRecord / IndividualScore / CourseTestDetail 三张表汇总。
     无成绩数据时返回 0（后续以答题记录或其他来源补）。
     """
-    from app.models import ScoreRecord
+    from app.models import CourseTestDetail, IndividualScore, ScoreRecord
 
+    all_scores: list[float] = []
+
+    # ScoreRecord（旧表兼容）
     scores = session.exec(
         select(ScoreRecord.score).where(
             ScoreRecord.student_id == student_id,
             ScoreRecord.course_id == course_id,
         )
     ).all()
-    if not scores:
+    all_scores.extend(float(s) for s in scores)
+
+    # 新表需通过 ExamBatch 关联到课程
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+    if batch_ids:
+        # IndividualScore
+        ind_scores = session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.student_id == student_id,
+                IndividualScore.exam_batch_id.in_(batch_ids),
+            )
+        ).all()
+        all_scores.extend(float(s) for s in ind_scores)
+
+        # CourseTestDetail
+        dtl_scores = session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.student_id == student_id,
+                CourseTestDetail.exam_batch_id.in_(batch_ids),
+            )
+        ).all()
+        all_scores.extend(float(s) for s in dtl_scores)
+
+    if not all_scores:
         return 0.0
-    return round(sum(scores) / len(scores), 1)
+    return round(sum(all_scores) / len(all_scores), 1)
 
 
 def upsert_knowledge_mastery(

@@ -15,6 +15,7 @@ from app.models.knowledge import KnowledgeModule, KnowledgePoint
 from app.models.attendance import AttendanceRecord
 from app.models.interaction import InteractionRecord
 from app.models.exam import ExamBatch, ScoreRecord
+from app.models.score_tables import IndividualScore, AttendanceSheet, CourseTestDetail
 from app.models.question import (
     AiQuestion,
     AnswerTask,
@@ -33,6 +34,7 @@ __all__ = [
     "KnowledgeModule", "KnowledgePoint",
     "AttendanceRecord", "InteractionRecord",
     "ExamBatch", "ScoreRecord",
+    "IndividualScore", "AttendanceSheet", "CourseTestDetail",
     "AiQuestion", "AnswerTask", "AnswerTaskClass", "TaskQuestion", "StudentAnswerRecord",
     "EvalDimension", "EvalIndex", "StudentEvaluationResult", "EvalDimensionScore",
     "KnowledgeMastery", "StudyWarning", "StudentProfile",

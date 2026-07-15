@@ -18,6 +18,7 @@ from app.models import (
     KnowledgeModule, KnowledgePoint,
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
+    IndividualScore, AttendanceSheet, CourseTestDetail,
     AiQuestion, AnswerTask, TaskQuestion, StudentAnswerRecord,
     EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore,
     KnowledgeMastery, StudyWarning, StudentProfile,
@@ -392,27 +393,27 @@ def seed() -> None:
         batches = [
             # 计算机网络
             ExamBatch(course_id=1, batch_name="平时作业", batch_type=1, batch_weight=20,
-                      exam_time=datetime(2026, 3, 20, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="实验报告", batch_type=2, batch_weight=15,
-                      exam_time=datetime(2026, 4, 10, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="期中考试", batch_type=3, batch_weight=25,
-                      exam_time=datetime(2026, 4, 25, 14, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="期末考试", batch_type=4, batch_weight=40,
-                      exam_time=datetime(2026, 6, 28, 9, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             # 操作系统
             ExamBatch(course_id=2, batch_name="平时作业", batch_type=1, batch_weight=20,
-                      exam_time=datetime(2026, 3, 18, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=2, batch_name="期中考试", batch_type=3, batch_weight=30,
-                      exam_time=datetime(2026, 4, 22, 14, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=2, batch_name="期末考试", batch_type=4, batch_weight=50,
-                      exam_time=datetime(2026, 6, 30, 9, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             # 数据结构
             ExamBatch(course_id=3, batch_name="平时作业", batch_type=1, batch_weight=25,
-                      exam_time=datetime(2026, 3, 22, 10, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
             ExamBatch(course_id=3, batch_name="期中考试", batch_type=3, batch_weight=25,
-                      exam_time=datetime(2026, 4, 28, 14, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
             ExamBatch(course_id=3, batch_name="期末考试", batch_type=4, batch_weight=50,
-                      exam_time=datetime(2026, 6, 26, 9, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
         ]
         session.add_all(batches)
         session.commit()
@@ -537,36 +538,36 @@ def seed() -> None:
         session.commit()
         print(f"  考勤记录: {len(attendances)} 条")
 
-        # ========== 12. 课堂互动（差异化） ==========
-        interactions = [
-            # 赵伟：互动积极，成绩好
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
-                              type=1, score=9.0, remark="回答准确", create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
-                              type=2, score=8.5, remark="小组讨论出色", create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
-                              type=3, score=9.5, create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
-                              type=4, score=8.0, create_by=2),
-            # 钱丽华：中等
-            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
-                              type=1, score=7.0, create_by=2),
-            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
-                              type=3, score=7.5, create_by=2),
-            # 孙浩然：互动少
-            InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
-                              type=1, score=5.0, remark="回答不够完整", create_by=2),
-            # 冯文博（数据结构课）：进步明显
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
-                              type=1, score=4.0, remark="表现一般", create_by=3),
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
-                              type=2, score=7.5, remark="讨论中进步", create_by=3),
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
-                              type=4, score=9.0, remark="测验成绩好", create_by=3),
-        ]
-        session.add_all(interactions)
-        session.commit()
-        print(f"  课堂互动: {len(interactions)} 条")
+        # ========== 12. 课堂互动（已禁用 - 功能暂不展示） ==========
+        # interactions = [
+        #     # 赵伟：互动积极，成绩好
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=9.0, remark="回答准确", create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
+        #                       type=2, score=8.5, remark="小组讨论出色", create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
+        #                       type=3, score=9.5, create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
+        #                       type=4, score=8.0, create_by=2),
+        #     # 钱丽华：中等
+        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=7.0, create_by=2),
+        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
+        #                       type=3, score=7.5, create_by=2),
+        #     # 孙浩然：互动少
+        #     InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=5.0, remark="回答不够完整", create_by=2),
+        #     # 冯文博（数据结构课）：进步明显
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
+        #                       type=1, score=4.0, remark="表现一般", create_by=3),
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
+        #                       type=2, score=7.5, remark="讨论中进步", create_by=3),
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
+        #                       type=4, score=9.0, remark="测验成绩好", create_by=3),
+        # ]
+        # session.add_all(interactions)
+        # session.commit()
+        # print(f"  课堂互动: {len(interactions)} 条")
 
         # ========== 13. AI 题目（8道，覆盖题型） ==========
         questions = [

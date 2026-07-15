@@ -10,6 +10,7 @@ from app.models import (
     StudyWarning, StudentProfile,
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult,
     SysUser, Teacher, SysRole,
+    IndividualScore, CourseTestDetail, ExamBatch,
 )
 from app.services.predict import predict_student_scores
 from app.services.mastery import compute_assignment_accuracy_index
@@ -639,20 +640,49 @@ def get_grade_distribution(
     """
     _check_course_access(session, current_user, course_id)
 
+    scores: list[float] = []
+
+    # 旧表 ScoreRecord
     stmt = select(ScoreRecord).where(ScoreRecord.course_id == course_id)
     if batch_id:
         stmt = stmt.where(ScoreRecord.batch_id == batch_id)
-
     if class_id:
         class_student_ids = session.exec(
             select(Student.student_id).where(Student.class_id == class_id)
         ).all()
-        if not class_student_ids:
-            return {"distribution": [], "statistics": {}, "characteristic": "该班级无学生数据"}
-        stmt = stmt.where(ScoreRecord.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+        if class_student_ids:
+            stmt = stmt.where(ScoreRecord.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+    for r in session.exec(stmt).all():
+        scores.append(r.score)
 
-    records = session.exec(stmt).all()
-    scores = [r.score for r in records]
+    # 新表：获取 course 相关的 batch_ids
+    course_batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+
+    # IndividualScore
+    if course_batch_ids:
+        is_stmt = select(IndividualScore).where(IndividualScore.exam_batch_id.in_(course_batch_ids))  # type: ignore[arg-type]
+        if batch_id:
+            is_stmt = select(IndividualScore).where(IndividualScore.exam_batch_id == batch_id)
+        if class_id:
+            class_student_ids = session.exec(
+                select(Student.student_id).where(Student.class_id == class_id)
+            ).all()
+            if class_student_ids:
+                is_stmt = is_stmt.where(IndividualScore.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+        for r in session.exec(is_stmt).all():
+            scores.append(r.score)
+
+        # CourseTestDetail
+        ct_stmt = select(CourseTestDetail).where(CourseTestDetail.exam_batch_id.in_(course_batch_ids))  # type: ignore[arg-type]
+        if batch_id:
+            ct_stmt = select(CourseTestDetail).where(CourseTestDetail.exam_batch_id == batch_id)
+        if class_id:
+            if class_student_ids:
+                ct_stmt = ct_stmt.where(CourseTestDetail.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+        for r in session.exec(ct_stmt).all():
+            scores.append(r.total_score)
 
     if not scores:
         return {

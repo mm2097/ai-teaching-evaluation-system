@@ -67,7 +67,7 @@ export const SCORE_RULE_PRESETS = [
   { value: 'score_mid', label: '期中/测验成绩', rule: { type: 'direct', source: 'score_record', batch_type: 3 } },
   { value: 'score_final', label: '期末成绩', rule: { type: 'direct', source: 'score_record', batch_type: 4 } },
   { value: 'attendance', label: '出勤率', rule: { type: 'attendance', full_score: 100 } },
-  { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },
+  // { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },  // 互动功能暂不展示
 ] as const
 
 export type ScoreRulePresetValue = (typeof SCORE_RULE_PRESETS)[number]['value']
@@ -141,7 +141,7 @@ export function formatScoreRule(rule: Record<string, unknown> | null | undefined
     return BATCH_TYPE_LABELS[batch] || '教学成绩'
   }
   if (type === 'attendance') return '出勤率'
-  if (type === 'interaction') return '课堂参与度'
+  // if (type === 'interaction') return '课堂参与度'  // 互动功能暂不展示
 
   const preset = SCORE_RULE_PRESETS.find((p) => ruleEquals(p.rule, rule))
   return preset?.label || '—'

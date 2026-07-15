@@ -14,8 +14,11 @@ from sqlmodel import Session, func, select
 
 from app.models import (
     AttendanceRecord,
+    AttendanceSheet,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
+    IndividualScore,
     InteractionRecord,
     ScoreRecord,
     Student,
@@ -46,39 +49,86 @@ def compute_academic_score(
     """Z-score 标准化 + 近期加权映射到百分制。
 
     流程：
-    1. 取学生该课程所有 batch 的成绩
+    1. 取学生该课程所有 batch 的成绩（从 ScoreRecord / IndividualScore / CourseTestDetail）
     2. 每个 batch 内，按全班均值/标准差算 z
     3. 多 batch 加权汇总（近期权重高，默认 [0.1,0.2,0.3,0.4]）
     4. 映射回 0-100：score = clamp(75 + 10*z, 0, 100)
     """
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        .order_by(ExamBatch.create_time)
+    ).all()
+
+    if not batch_ids:
+        return 75.0  # 无数据基线
+
+    z_list: list[float] = []
+
+    def _append_z(student_score: float, class_scores: list[float]) -> None:
+        n = len(class_scores)
+        if n < 2:
+            z_list.append(0.0)
+            return
+        mean = sum(class_scores) / n
+        var = sum((s - mean) ** 2 for s in class_scores) / n
+        std = math.sqrt(var) or 1.0
+        z = (float(student_score) - mean) / std
+        z_list.append(z)
+
+    # 1. ScoreRecord（旧表兼容）
     rows = session.exec(
         select(ScoreRecord, ExamBatch)
         .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
         .where(
             ScoreRecord.student_id == student_id,
-            ScoreRecord.course_id == course_id,
+            ScoreRecord.batch_id.in_(batch_ids),
         )
-        .order_by(ExamBatch.exam_time)
+        .order_by(ExamBatch.create_time)
     ).all()
-
-    if not rows:
-        return 75.0  # 无数据基线
-
-    z_list: list[float] = []
     for sr, eb in rows:
-        # 同 batch 全班成绩
         class_scores = session.exec(
             select(ScoreRecord.score).where(ScoreRecord.batch_id == eb.batch_id)
         ).all()
-        n = len(class_scores)
-        if n < 2:
-            z_list.append(0.0)
-            continue
-        mean = sum(class_scores) / n
-        var = sum((s - mean) ** 2 for s in class_scores) / n
-        std = math.sqrt(var) or 1.0
-        z = (float(sr.score) - mean) / std
-        z_list.append(z)
+        _append_z(sr.score, class_scores)
+
+    # 2. IndividualScore
+    ind_rows = session.exec(
+        select(IndividualScore, ExamBatch)
+        .join(ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            IndividualScore.student_id == student_id,
+            IndividualScore.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for isc, eb in ind_rows:
+        class_scores = session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.exam_batch_id == eb.batch_id
+            )
+        ).all()
+        _append_z(isc.score, class_scores)
+
+    # 3. CourseTestDetail
+    dtl_rows = session.exec(
+        select(CourseTestDetail, ExamBatch)
+        .join(ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            CourseTestDetail.student_id == student_id,
+            CourseTestDetail.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for ctd, eb in dtl_rows:
+        class_scores = session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.exam_batch_id == eb.batch_id
+            )
+        ).all()
+        _append_z(ctd.total_score, class_scores)
+
+    if not z_list:
+        return 75.0
 
     # 加权（近期权重高）
     n = len(z_list)
@@ -115,68 +165,13 @@ def _attendance_rate(session: Session, student_id: int, course_id: int) -> float
 def _interaction_score(
     session: Session, student_id: int, course_id: int
 ) -> tuple[float, int]:
-    """互动得分：按班级 max 归一化（互动+讨论+测验，type=1/2/4）。返回 (0-100, count)。"""
-    own = session.exec(
-        select(InteractionRecord).where(
-            InteractionRecord.student_id == student_id,
-            InteractionRecord.course_id == course_id,
-            InteractionRecord.type.in_([1, 2, 4]),  # type: ignore
-        )
-    ).all()
-    own_count = len(own)
-
-    # 班级 max：同课程所有学生互动次数
-    course_students = session.exec(
-        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    ).all()
-    counts = []
-    for sid in course_students:
-        c = session.exec(
-            select(func.count(InteractionRecord.interaction_id)).where(
-                InteractionRecord.student_id == sid,
-                InteractionRecord.course_id == course_id,
-                InteractionRecord.type.in_([1, 2, 4]),  # type: ignore
-            )
-        ).one()
-        counts.append(c)
-
-    max_count = max(counts) if counts else 0
-    if max_count == 0:
-        return (60.0 if own_count == 0 else 80.0), own_count
-    score = min(100.0, (own_count / max_count) * 100.0)
-    return score, own_count
+    """互动得分：已禁用（InteractionRecord 废弃）。"""
+    return 50.0, 0  # disabled
 
 
 def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
-    """作业提交率：type=3 的互动记录占总作业比例。
-
-    简化：以同课程班级已发布作业数为分母（用 AnswerTask 数代替）。
-    """
-    submitted = session.exec(
-        select(func.count(InteractionRecord.interaction_id)).where(
-            InteractionRecord.student_id == student_id,
-            InteractionRecord.course_id == course_id,
-            InteractionRecord.type == 3,
-        )
-    ).one()
-    # 班级总作业数（取同课程最大提交次数作为分母代理）
-    course_students = session.exec(
-        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    ).all()
-    all_subs = []
-    for sid in course_students:
-        c = session.exec(
-            select(func.count(InteractionRecord.interaction_id)).where(
-                InteractionRecord.student_id == sid,
-                InteractionRecord.course_id == course_id,
-                InteractionRecord.type == 3,
-            )
-        ).one()
-        all_subs.append(c)
-    total = max(all_subs) if all_subs else 0
-    if total == 0:
-        return 0.9
-    return min(1.0, submitted / total)
+    """作业提交率：已禁用（InteractionRecord 废弃）。"""
+    return 0.9  # disabled
 
 
 def compute_attitude_score(

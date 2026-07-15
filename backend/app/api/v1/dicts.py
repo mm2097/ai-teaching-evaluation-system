@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.models import ClassInfo, Teacher, Course, Student
+from app.models import ClassInfo, Teacher, Course, Student, ExamBatch
 
 router = APIRouter()
 
@@ -63,6 +63,7 @@ def list_departments(session: Session = Depends(get_session)) -> list[str]:
 
 @router.get("/dictionaries/semesters", tags=["字典"])
 def list_semesters(session: Session = Depends(get_session)) -> list[str]:
-    """列出所有学期（从课程表中提取去重值）。"""
-    results = session.exec(select(Course.semester).distinct()).all()
-    return sorted(set(r for r in results if r))
+    """列出所有学期（从课程表和考试批次表中提取去重值）。"""
+    course_sems = session.exec(select(Course.semester).distinct()).all()
+    exam_sems = session.exec(select(ExamBatch.semester).distinct()).all()
+    return sorted(set(r for r in list(course_sems) + list(exam_sems) if r))

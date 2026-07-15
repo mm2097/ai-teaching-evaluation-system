@@ -1,10 +1,11 @@
 """课程管理 API。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
+from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
-from app.models import Course, SysUser, Teacher
+from app.models import Course, SysUser, Teacher, ExamBatch
 
 router = APIRouter()
 
@@ -57,7 +58,16 @@ def list_courses(
     if college:
         stmt = stmt.where(Course.college == college)
     if semester:
-        stmt = stmt.where(Course.semester == semester)
+        # 学期筛选：课程自身学期匹配，或该课程在目标学期有考试批次数据
+        exam_course_ids = session.exec(
+            select(ExamBatch.course_id).where(ExamBatch.semester == semester).distinct()
+        ).all()
+        stmt = stmt.where(
+            or_(
+                Course.semester == semester,
+                Course.course_id.in_(exam_course_ids),
+            )
+        )
     courses = session.exec(stmt).all()
     return [
         {

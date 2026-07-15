@@ -56,7 +56,8 @@ function mapClass(c: MockClass) {
     class_id: c.class_id,
     class_name: c.class_name,
     college: c.college,
-    enroll_year: c.enroll_year,
+    major: c.major,
+    grade: c.grade,
   }
 }
 
@@ -198,6 +199,12 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
   if (method === 'GET' && url === '/v1/classes') {
     return ok(classes.map(mapClass))
+  }
+  if (method === 'GET' && url === '/v1/dictionaries/majors') {
+    return handleMajors(params)
+  }
+  if (method === 'GET' && url === '/v1/dictionaries/grades') {
+    return handleGrades(params)
   }
   if (method === 'GET' && url === '/v1/students') {
     return handleStudents(params)
@@ -471,6 +478,31 @@ function handleCourses(params: Record<string, unknown>) {
     result = result.filter((c) => c.semester === params.semester)
   }
   return ok(result.map(mapCourse))
+}
+
+function handleMajors(params: Record<string, unknown>) {
+  let result = classes
+  if (params.grade) {
+    result = result.filter((c) => c.grade === params.grade)
+  }
+  const seen = new Set<string>()
+  const majors: { id: number; majorName: string; college: string }[] = []
+  for (const c of result) {
+    if (c.major && !seen.has(c.major)) {
+      seen.add(c.major)
+      majors.push({ id: majors.length + 1, majorName: c.major, college: c.college })
+    }
+  }
+  return ok(majors)
+}
+
+function handleGrades(params: Record<string, unknown>) {
+  let result = classes
+  if (params.major) {
+    result = result.filter((c) => c.major === params.major)
+  }
+  const grades = [...new Set(result.map((c) => c.grade).filter(Boolean))]
+  return ok(grades.sort())
 }
 
 function handleQuestionBank(params: Record<string, unknown>) {

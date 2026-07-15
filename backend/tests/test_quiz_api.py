@@ -290,7 +290,8 @@ def test_student_cannot_see_or_submit_another_class_task(session):
             class_id=2,
             class_name="计科2402",
             college="计算机学院",
-            enroll_year=2024,
+            major="计算机科学与技术",
+            grade="2024级",
         )
     )
     session.commit()

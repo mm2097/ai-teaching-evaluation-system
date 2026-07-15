@@ -117,15 +117,17 @@ export function useDashboardFilter() {
       filters.value.grade = ''
       return
     }
+    const majorName = majorOptions.value.find((m) => m.value === filters.value.majorId)?.label
     const grades = await fetchDashboardGrades({
       deptId,
       semesterCode: filters.value.semester,
       majorId: filters.value.majorId,
+      majorName,
       teacherId: teacherId.value,
     })
     gradeOptions.value = [
       { label: '全部年级', value: '' },
-      ...grades.map((g) => ({ label: `${g}级`, value: g })),
+      ...grades.map((g) => ({ label: g, value: g })),
     ]
     filters.value.grade = keepValidGrade(gradeOptions.value, filters.value.grade)
   }
@@ -156,7 +158,7 @@ export function useDashboardFilter() {
       courseId: resolvedCourseId,
     })
     classOptions.value = list.map((c) => ({
-      label: `${c.className}（${c.majorName} ${c.grade}级）`,
+      label: `${c.className}（${c.majorName} ${c.grade}）`,
       value: c.id,
     }))
     if (clearClass) {

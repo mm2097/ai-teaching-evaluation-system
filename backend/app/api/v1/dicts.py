@@ -19,7 +19,7 @@ def list_classes(
         stmt = stmt.where(ClassInfo.college == college)
     classes = session.exec(stmt).all()
     return [
-        {"class_id": c.class_id, "class_name": c.class_name, "college": c.college, "enroll_year": c.enroll_year}
+        {"class_id": c.class_id, "class_name": c.class_name, "college": c.college, "major": c.major, "grade": c.grade}
         for c in classes
     ]
 
@@ -67,3 +67,37 @@ def list_semesters(session: Session = Depends(get_session)) -> list[str]:
     course_sems = session.exec(select(Course.semester).distinct()).all()
     exam_sems = session.exec(select(ExamBatch.semester).distinct()).all()
     return sorted(set(r for r in list(course_sems) + list(exam_sems) if r))
+
+
+@router.get("/dictionaries/majors", tags=["字典"])
+def list_majors(
+    semester: str | None = Query(default=None),
+    grade: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """列出所有专业（从班级表中提取去重值，可按学期/年级筛选）。"""
+    stmt = select(ClassInfo.major, ClassInfo.college).distinct()
+    if grade:
+        stmt = stmt.where(ClassInfo.grade == grade)
+    rows = session.exec(stmt).all()
+    result = []
+    seen = set()
+    for major, college in rows:
+        if major and major not in seen:
+            seen.add(major)
+            result.append({"id": len(result) + 1, "majorName": major, "college": college or ""})
+    return result
+
+
+@router.get("/dictionaries/grades", tags=["字典"])
+def list_grades(
+    semester: str | None = Query(default=None),
+    major: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> list[str]:
+    """列出所有年级（从班级表中提取去重值）。"""
+    stmt = select(ClassInfo.grade).distinct()
+    if major:
+        stmt = stmt.where(ClassInfo.major == major)
+    rows = session.exec(stmt).all()
+    return sorted([r for r in rows if r])

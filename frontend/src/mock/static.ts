@@ -22,16 +22,17 @@ export interface MockClass {
   class_id: number
   class_name: string
   college: string
-  enroll_year: number
+  major: string
+  grade: string
 }
 
 export const classes: MockClass[] = [
-  { class_id: 1, class_name: '计科2401', college: '信息科学与工程学院', enroll_year: 2024 },
-  { class_id: 2, class_name: '计科2402', college: '信息科学与工程学院', enroll_year: 2024 },
-  { class_id: 3, class_name: '软工2401', college: '软件学院', enroll_year: 2024 },
-  { class_id: 4, class_name: '软工2402', college: '软件学院', enroll_year: 2024 },
-  { class_id: 5, class_name: '信科2401', college: '信息科学实验班', enroll_year: 2024 },
-  { class_id: 6, class_name: '信科2402', college: '信息科学实验班', enroll_year: 2024 },
+  { class_id: 1, class_name: '计科2401', college: '信息科学与工程学院', major: '计算机科学与技术', grade: '2024级' },
+  { class_id: 2, class_name: '计科2402', college: '信息科学与工程学院', major: '计算机科学与技术', grade: '2024级' },
+  { class_id: 3, class_name: '软工2401', college: '软件学院', major: '软件工程', grade: '2024级' },
+  { class_id: 4, class_name: '软工2402', college: '软件学院', major: '软件工程', grade: '2024级' },
+  { class_id: 5, class_name: '信科2401', college: '信息科学实验班', major: '信息科学', grade: '2024级' },
+  { class_id: 6, class_name: '信科2402', college: '信息科学实验班', major: '信息科学', grade: '2024级' },
 ]
 
 /** 学生列表（后端格式） */

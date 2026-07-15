@@ -168,11 +168,11 @@ def seed() -> None:
 
         # ========== 4. 班级（5个） ==========
         classes = [
-            ClassInfo(class_name="计科2401班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="计科2402班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="软工2401班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="计科2301班", college="计算机学院", enroll_year=2023),
-            ClassInfo(class_name="数统2401班", college="数学与统计学院", enroll_year=2024),
+            ClassInfo(class_name="计科2401班", college="计算机学院", major="计算机科学与技术", grade="2024级"),
+            ClassInfo(class_name="计科2402班", college="计算机学院", major="计算机科学与技术", grade="2024级"),
+            ClassInfo(class_name="软工2401班", college="计算机学院", major="软件工程", grade="2024级"),
+            ClassInfo(class_name="计科2301班", college="计算机学院", major="计算机科学与技术", grade="2023级"),
+            ClassInfo(class_name="数统2401班", college="数学与统计学院", major="数学与应用数学", grade="2024级"),
         ]
         session.add_all(classes)
         session.commit()
@@ -180,9 +180,9 @@ def seed() -> None:
 
         # 测试数据班级（对应模板中 软件1801/1802/1803 三个 Sheet）
         test_classes = [
-            ClassInfo(class_name="软件1801班", college="计算机学院", enroll_year=2018),
-            ClassInfo(class_name="软件1802班", college="计算机学院", enroll_year=2018),
-            ClassInfo(class_name="软件1803班", college="计算机学院", enroll_year=2018),
+            ClassInfo(class_name="软件1801班", college="计算机学院", major="软件工程", grade="2018级"),
+            ClassInfo(class_name="软件1802班", college="计算机学院", major="软件工程", grade="2018级"),
+            ClassInfo(class_name="软件1803班", college="计算机学院", major="软件工程", grade="2018级"),
         ]
         session.add_all(test_classes)
         session.commit()

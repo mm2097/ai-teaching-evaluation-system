@@ -22,7 +22,6 @@ import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type {
   DifficultyLevel,
   ExerciseSource,
-  ExerciseStatus,
   ExerciseType,
   QuestionBankStats,
   QuizQuestion,
@@ -42,7 +41,6 @@ const filters = ref({
   type: '' as ExerciseType | '',
   difficulty: '' as DifficultyLevel | '',
   source: '' as ExerciseSource | '',
-  status: 'published' as ExerciseStatus | '',
   keyword: '',
 })
 
@@ -61,12 +59,17 @@ const sourceLabels: Record<ExerciseSource, string> = {
   import: '模板导入',
 }
 
-const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'warning' }> = {
-  published: { label: '已入库', type: 'success' },
-  closed: { label: '已归档', type: 'warning' },
-}
-
-const filteredQuestions = computed(() => questions.value)
+const filteredQuestions = computed(() => {
+  const kw = filters.value.keyword.trim().toLowerCase()
+  return questions.value.filter((q) => {
+    if (filters.value.knowledgePoint && q.knowledgePoint !== filters.value.knowledgePoint) return false
+    if (filters.value.type && q.type !== filters.value.type) return false
+    if (filters.value.difficulty && q.difficulty !== filters.value.difficulty) return false
+    if (filters.value.source && q.source !== filters.value.source) return false
+    if (kw && !q.stem.toLowerCase().includes(kw)) return false
+    return true
+  })
+})
 
 const pagedQuestions = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -77,12 +80,11 @@ async function loadData(): Promise<void> {
   loading.value = true
   try {
     const params = {
-      courseId: filters.value.courseId,
+      course_id: filters.value.courseId,
       knowledgePoint: filters.value.knowledgePoint || undefined,
       type: filters.value.type || undefined,
       difficulty: filters.value.difficulty || undefined,
       source: filters.value.source || undefined,
-      status: filters.value.status || undefined,
       keyword: filters.value.keyword || undefined,
     }
     const [list, stat] = await Promise.all([
@@ -123,7 +125,7 @@ watch(() => filters.value.courseId, async () => {
 })
 
 watch(
-  () => [filters.value.knowledgePoint, filters.value.type, filters.value.difficulty, filters.value.source, filters.value.status],
+  () => [filters.value.knowledgePoint, filters.value.type, filters.value.difficulty, filters.value.source],
   () => {
     currentPage.value = 1
     loadData()
@@ -275,12 +277,6 @@ function sourceLabel(source?: ExerciseSource): string {
             <el-option v-for="(label, key) in sourceLabels" :key="key" :label="label" :value="key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" clearable placeholder="全部" style="width: 110px">
-            <el-option label="已入库" value="published" />
-            <el-option label="已归档" value="closed" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="关键词">
           <el-input v-model="filters.keyword" placeholder="搜索题干" clearable style="width: 160px" @keyup.enter="handleSearch" />
         </el-form-item>
@@ -310,6 +306,7 @@ function sourceLabel(source?: ExerciseSource): string {
           <template #default="{ row }">{{ typeLabel(row.type) }}</template>
         </el-table-column>
         <el-table-column prop="knowledgePoint" label="知识点" width="120" />
+        <el-table-column prop="courseName" label="课程" width="140" show-overflow-tooltip />
         <el-table-column label="难度" width="80" align="center">
           <template #default="{ row }">{{ difficultyLabels[row.difficulty] }}</template>
         </el-table-column>
@@ -317,13 +314,6 @@ function sourceLabel(source?: ExerciseSource): string {
         <el-table-column label="来源" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ sourceLabel(row.source) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag :type="statusMap[row.status || 'published']?.type" size="small">
-              {{ statusMap[row.status || 'published']?.label }}
-            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right" align="center">

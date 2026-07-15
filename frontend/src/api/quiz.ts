@@ -134,30 +134,56 @@ export interface SaveQuizAssignmentParams {
   questions: QuizQuestion[]
 }
 
-/** AI 生成练习题（经后端代理调用算法服务 8001） */
-export async function generateQuizQuestions(params: GenerateQuizParams): Promise<GenerateQuizResult> {
-  const res = await request.post('/v1/exercises/generate', {
+function buildGeneratePayload(params: GenerateQuizParams) {
+  return {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
     questionTypes: params.questionTypes,
     questionCount: params.questionCount,
     difficulty: params.difficulty,
     extraRequirements: params.extraRequirements || '',
-  }, { timeout: 70000 })
-  return res.data
+  }
+}
+
+/** LLM 偶发返回非 JSON 时自动重试（与教师端共用同一算法服务） */
+async function postWithGenerateRetry<T>(url: string, params: GenerateQuizParams): Promise<T> {
+  const payload = buildGeneratePayload(params)
+  const maxAttempts = 3
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await request.post(url, payload, {
+        timeout: 70000,
+        silentError: attempt < maxAttempts,
+      } as Parameters<typeof request.post>[2])
+      return res.data as T
+    } catch (error) {
+      lastError = error
+      const detail = (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      const retriable = typeof detail === 'string' && (
+        detail.includes('JSON 解析失败')
+        || detail.includes('AI 服务暂不可用')
+        || detail.includes('AI 服务错误')
+      )
+      if (!retriable || attempt === maxAttempts) {
+        throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 800 * attempt))
+    }
+  }
+
+  throw lastError
+}
+
+/** AI 生成练习题（经后端代理调用算法服务 8001） */
+export async function generateQuizQuestions(params: GenerateQuizParams): Promise<GenerateQuizResult> {
+  return postWithGenerateRetry<GenerateQuizResult>('/v1/exercises/generate', params)
 }
 
 /** 创建学生私人练习，标准答案保留在后端，返回的试卷不含答案与解析 */
 export async function startSelfPractice(params: GenerateQuizParams): Promise<StartSelfPracticeResult> {
-  const res = await request.post('/v1/self-practice/start', {
-    courseId: params.courseId,
-    knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
-    questionTypes: params.questionTypes,
-    questionCount: params.questionCount,
-    difficulty: params.difficulty,
-    extraRequirements: params.extraRequirements || '',
-  }, { timeout: 70000 })
-  return res.data
+  return postWithGenerateRetry<StartSelfPracticeResult>('/v1/self-practice/start', params)
 }
 
 /** 保存练习任务（草稿或已发布） */

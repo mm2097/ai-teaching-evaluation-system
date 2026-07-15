@@ -475,8 +475,8 @@ function handleCourses(params: Record<string, unknown>) {
 
 function handleQuestionBank(params: Record<string, unknown>) {
   let result = questionBank
-  if (params.courseId) {
-    result = result.filter((q) => q.courseId === Number(params.courseId))
+  if (params.course_id) {
+    result = result.filter((q) => q.courseId === Number(params.course_id))
   }
   if (params.status) {
     // 按状态过滤（暂不过滤，返回全部）

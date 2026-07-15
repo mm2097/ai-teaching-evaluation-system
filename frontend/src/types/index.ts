@@ -324,6 +324,7 @@ export interface ExerciseOption {
 export interface QuizQuestion {
   id: number
   courseId?: number
+  courseName?: string
   type: ExerciseType
   stem: string
   options?: ExerciseOption[]

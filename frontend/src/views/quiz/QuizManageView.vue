@@ -74,7 +74,7 @@ async function loadBankQuestions(): Promise<void> {
   bankLoading.value = true
   try {
     bankQuestions.value = await fetchQuestionBank({
-      courseId: form.value.courseId,
+      course_id: form.value.courseId,
       status: 'published',
     })
   } finally {

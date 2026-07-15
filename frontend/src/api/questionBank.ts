@@ -56,6 +56,7 @@ function mapRecordToQuizQuestion(q: QuestionRecord): QuizQuestion {
   return {
     id: q.id,
     courseId: q.courseId,
+    courseName: q.courseName,
     type,
     stem: q.content,
     options: parseQuestionOptions(q.options),
@@ -81,7 +82,7 @@ export interface AddQuestionParams {
 }
 
 export interface FetchQuestionBankParams {
-  courseId?: number
+  course_id?: number
   status?: string
 }
 
@@ -227,7 +228,7 @@ export async function fetchCourseKnowledgePoints(courseId?: number): Promise<str
 
   try {
     const bankRes = await request.get<QuestionRecord[]>('/v1/question-bank', {
-      params: { courseId },
+      params: { course_id: courseId },
     })
     for (const q of bankRes.data ?? []) {
       if (q.knowledgePoint?.trim()) names.add(q.knowledgePoint.trim())
@@ -241,7 +242,7 @@ export async function fetchCourseKnowledgePoints(courseId?: number): Promise<str
 
 /** 题库统计（按课程维度） */
 export async function fetchQuestionBankStats(courseId?: number): Promise<QuestionBankStats> {
-  const params: FetchQuestionBankParams = courseId ? { courseId } : {}
+  const params: FetchQuestionBankParams = courseId ? { course_id: courseId } : {}
   const res = await request.get<QuestionRecord[]>('/v1/question-bank', { params })
   const items = res.data
   const stats: QuestionBankStats = {

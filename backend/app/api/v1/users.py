@@ -10,6 +10,15 @@ from app.models import SysUser, SysRole, UserCreate, UserRead, UserUpdate
 router = APIRouter()
 
 
+def _check_admin_protection(session: Session, target_user: SysUser, current_user: SysUser) -> None:
+    """管理员保护：禁止管理员禁用/降级另一个管理员。"""
+    target_role = session.get(SysRole, target_user.role_id)
+    if target_role and target_role.role_code == "admin":
+        current_role = session.get(SysRole, current_user.role_id)
+        if current_role and current_role.role_code == "admin":
+            raise HTTPException(status_code=403, detail="管理员不能操作其他管理员账号")
+
+
 @router.get("/users", response_model=list[UserRead], tags=["用户管理"])
 def list_users(session: Session = Depends(get_session)) -> list[SysUser]:
     """列出所有用户。"""
@@ -69,6 +78,9 @@ def update_user(
     user = session.get(SysUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 管理员保护：禁止禁用/降级其他管理员
+    if "status" in payload.model_dump(exclude_unset=True) or "role_id" in payload.model_dump(exclude_unset=True):
+        _check_admin_protection(session, user, current_user)
     updates = payload.model_dump(exclude_unset=True)
     # 系统管理员的启用/禁用状态不允许任何人员修改（包括自己），防止死锁
     if "status" in updates:
@@ -104,6 +116,8 @@ def delete_user(
     user = session.get(SysUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
+    # 管理员保护：禁止删除其他管理员
+    _check_admin_protection(session, user, current_user)
     session.delete(user)
     session.commit()
     save_operation_log(

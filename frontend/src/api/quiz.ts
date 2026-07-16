@@ -132,6 +132,7 @@ export interface SaveQuizAssignmentParams {
   knowledgePoints: string[]
   status: 'draft' | 'published'
   questions: QuizQuestion[]
+  deadline?: string  // 截止时间，如 "2026-07-20 23:59"
 }
 
 function buildGeneratePayload(params: GenerateQuizParams) {
@@ -202,11 +203,22 @@ export async function closeQuizAssignment(id: number): Promise<void> {
   await request.post(`/v1/answer-tasks/${id}/close`)
 }
 
+/** 重新开启/延长期限 */
+export async function reopenQuizAssignment(
+  id: number,
+  deadline?: string,
+): Promise<{ id: number; status: string; deadline: string; message: string }> {
+  const { data } = await request.post(`/v1/answer-tasks/${id}/reopen`, {
+    deadline: deadline || '',
+  })
+  return data
+}
+
 /** 获取学生的答题任务列表（前端过滤：仅已发布、非自主练习） */
 export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssignment[]> {
   const tasks = await fetchQuizAssignments()
   return tasks.filter(
-    (t) => t.status === 'published' && !isSelfPracticeTask(t.title),
+    (t) => (t.status === 'published' || t.status === 'closed') && !isSelfPracticeTask(t.title),
   ) as QuizAssignment[]
 }
 

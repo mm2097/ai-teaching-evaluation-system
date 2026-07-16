@@ -192,6 +192,27 @@ def list_answer_tasks(
 
     tasks = session.exec(stmt).all()
     current_student = _student_for_user(current_user, session) if role_code == "student" else None
+
+    # 学生视角：批量查询已提交状态
+    student_submissions: dict[int, dict] = {}
+    if role_code == "student" and current_student:
+        task_ids = [t.task_id for t in tasks]
+        if task_ids:
+            submission_rows = session.exec(
+                select(StudentAnswerRecord).where(
+                    StudentAnswerRecord.task_id.in_(task_ids),
+                    StudentAnswerRecord.student_id == current_student.student_id,
+                )
+            ).all()
+            for row in submission_rows:
+                if row.task_id not in student_submissions:
+                    student_submissions[row.task_id] = {
+                        "submitted": True,
+                        "myScore": 0.0,
+                        "mySubmissionId": row.answer_id,
+                    }
+                student_submissions[row.task_id]["myScore"] += float(row.score)
+
     result = []
     for t in tasks:
         if not _can_access_course(current_user, t.course_id, session):
@@ -199,8 +220,14 @@ def list_answer_tasks(
         if role_code != "student" and _is_self_practice(t):
             continue
         if role_code == "student":
-            if t.status != 1:
-                continue
+            if t.status == 0:
+                continue  # 草稿不可见
+            if t.status == 2:
+                # 已关闭的任务仅当学生已提交且教师允许查看详情时可见
+                sub = student_submissions.get(t.task_id)
+                if not sub or not t.allow_review:
+                    continue
+            # status=1: 正常显示（含已截止）
             if _is_self_practice(t) and t.create_by != current_user.user_id:
                 continue
             target_class_id = _task_class_id(t.task_id, session)
@@ -236,7 +263,9 @@ def list_answer_tasks(
         cls = session.get(ClassInfo, class_id) if class_id else None
         class_name = cls.class_name if cls else ""
 
-        result.append({
+        # 学生视角标注答题状态
+        submission_info = student_submissions.get(t.task_id) if role_code == "student" else None
+        task_dict = {
             "id": t.task_id,
             "title": t.task_name,
             "courseId": t.course_id,
@@ -250,8 +279,17 @@ def list_answer_tasks(
             "status": _STATUS_MAP.get(t.status, "draft"),
             "publishTime": t.publish_time.strftime("%Y-%m-%d %H:%M") if t.publish_time else "",
             "deadline": t.deadline.strftime("%Y-%m-%d %H:%M") if t.deadline else "",
+            "maxAttempts": t.max_attempts,
+            "allowReview": bool(t.allow_review),
             "questions": questions,
-        })
+        }
+        if submission_info:
+            task_dict["submitted"] = True
+            task_dict["myScore"] = round(submission_info["myScore"], 1)
+            task_dict["mySubmissionId"] = submission_info["mySubmissionId"]
+        else:
+            task_dict["submitted"] = False
+        result.append(task_dict)
 
     return result
 
@@ -341,6 +379,9 @@ def get_answer_record_detail(
         current_student = _student_for_user(current_user, session)
         if not current_student or first_record.student_id != current_student.student_id:
             raise HTTPException(status_code=403, detail="无权查看该答题记录")
+        # 尊重教师设置的"是否允许交卷后查看详情"
+        if not task.allow_review:
+            raise HTTPException(status_code=403, detail="教师已关闭本题答题详情查看权限")
 
     records = session.exec(
         select(StudentAnswerRecord).where(
@@ -449,16 +490,23 @@ def _grade_task_answers(
     if not tq_rows:
         raise HTTPException(status_code=404, detail="任务不存在或无题目")
 
-    # A resubmission replaces the previous attempt instead of inflating aggregate scores.
+    # 检查是否已提交过（当前为单次答题模式，后续扩展多次答题时需改造此处逻辑）
     previous_records = session.exec(
         select(StudentAnswerRecord).where(
             StudentAnswerRecord.task_id == task.task_id,
             StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
+    if previous_records and task.max_attempts <= 1:
+        raise HTTPException(
+            status_code=409,
+            detail="你已完成该答题任务，不可重复作答",
+        )
+    # 多次答题模式下删除旧记录后允许重新提交
     for record in previous_records:
         session.delete(record)
-    session.flush()
+    if previous_records:
+        session.flush()
 
     total_score = 0.0
     correct_count = 0
@@ -658,6 +706,7 @@ class SaveAnswerTaskRequest(BaseModel):
     knowledgePoints: list[str] = Field(default_factory=list)
     status: str = "draft"
     questions: list[QuestionItem] = Field(default_factory=list)
+    deadline: str = ""  # 截止时间字符串，如 "2026-07-20 23:59"，为空则默认7天后
 
 
 def _ensure_question_in_bank(
@@ -800,7 +849,17 @@ def create_answer_task(
         raise HTTPException(status_code=404, detail="班级不存在")
 
     status_int = 1 if req.status == "published" else 0
-    deadline = datetime.now() + timedelta(days=7)
+    # 解析截止时间，为空则默认7天后
+    if req.deadline:
+        try:
+            deadline = datetime.strptime(req.deadline, "%Y-%m-%d %H:%M")
+        except ValueError:
+            try:
+                deadline = datetime.strptime(req.deadline, "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                deadline = datetime.now() + timedelta(days=7)
+    else:
+        deadline = datetime.now() + timedelta(days=7)
 
     task = AnswerTask(
         course_id=req.courseId,
@@ -887,6 +946,53 @@ def close_answer_task(
     session.add(task)
     session.commit()
     return {"id": task.task_id, "status": "closed", "message": "已关闭"}
+
+
+class ReopenAnswerTaskRequest(BaseModel):
+    """重新开启/延长期限请求。"""
+    deadline: str = ""  # 新的截止时间，为空则默认延后7天
+
+
+@router.post("/answer-tasks/{task_id}/reopen", tags=["答题管理"])
+def reopen_answer_task(
+    task_id: int,
+    req: ReopenAnswerTaskRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """重新开启已关闭/已截止的答题任务，可设置新的截止时间。"""
+    task = session.get(AnswerTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if _role_code(current_user, session) not in {"admin", "teacher"}:
+        raise HTTPException(status_code=403, detail="无权操作答题任务")
+    _require_course_access(current_user, task.course_id, session)
+    if task.status not in (1, 2):
+        raise HTTPException(status_code=409, detail="仅已发布或已关闭的任务可重新开启")
+
+    # 解析新的截止时间
+    if req.deadline:
+        try:
+            new_deadline = datetime.strptime(req.deadline, "%Y-%m-%d %H:%M")
+        except ValueError:
+            try:
+                new_deadline = datetime.strptime(req.deadline, "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                raise HTTPException(status_code=422, detail="截止时间格式不正确，请使用 YYYY-MM-DD HH:MM")
+    else:
+        new_deadline = datetime.now() + timedelta(days=7)
+
+    task.status = 1
+    task.publish_time = datetime.now()
+    task.deadline = new_deadline
+    session.add(task)
+    session.commit()
+    return {
+        "id": task.task_id,
+        "status": "published",
+        "deadline": new_deadline.strftime("%Y-%m-%d %H:%M"),
+        "message": "已重新开启",
+    }
 
 
 # ===== AI 生成题目（代理算法服务 8001）=====

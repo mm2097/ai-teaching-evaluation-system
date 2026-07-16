@@ -4,8 +4,9 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Edit, Check, MagicStick } from '@element-plus/icons-vue'
+import { Edit, Check, MagicStick, View } from '@element-plus/icons-vue'
 import {
   fetchStudentQuizzes,
   submitQuizAnswers,
@@ -19,6 +20,8 @@ import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/util
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
+const route = useRoute()
+const router = useRouter()
 
 /** 列表 Tab：教师布置 / 自主练习 */
 const listTab = ref<'assigned' | 'self'>('assigned')
@@ -80,6 +83,23 @@ onMounted(async () => {
     selfForm.value.courseId = courseOptions.value[0]!.value
   }
   await syncSelfKnowledgePoints()
+
+  // 支持通过 URL 参数 ?start=taskId 直接打开答题
+  const startId = Number(route.query.start)
+  if (startId) {
+    const quiz = quizList.value.find((q) => q.id === startId)
+    if (quiz) {
+      if (quiz.submitted) {
+        ElMessage.warning('你已完成该答题任务，不可重复作答')
+        router.replace('/quiz/answer')
+      } else if (isExpired(quiz)) {
+        ElMessage.warning('该答题任务已截止，无法作答')
+        router.replace('/quiz/answer')
+      } else {
+        startQuiz(quiz)
+      }
+    }
+  }
 })
 
 async function syncSelfKnowledgePoints(): Promise<void> {
@@ -107,11 +127,31 @@ function initAnswers(questions: QuizQuestion[]): void {
   })
 }
 
+/** 判断任务是否已过截止时间 */
+function isExpired(quiz: QuizAssignment): boolean {
+  if (!quiz.deadline) return false
+  return new Date(quiz.deadline.replace(' ', 'T')) < new Date()
+}
+
 function startQuiz(quiz: QuizAssignment): void {
+  if (isExpired(quiz)) {
+    ElMessage.warning('该答题任务已截止，无法作答')
+    return
+  }
+  if (quiz.submitted) {
+    ElMessage.warning('你已完成该答题任务，不可重复作答')
+    return
+  }
   activeQuiz.value = quiz
   quizMode.value = 'assigned'
   initAnswers(quiz.questions)
   result.value = null
+}
+
+function viewQuizResult(quiz: QuizAssignment): void {
+  if (quiz.mySubmissionId) {
+    router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
+  }
 }
 
 async function handleGenerateSelfQuiz(): Promise<void> {
@@ -191,6 +231,7 @@ function applySubmissionResult(submission: {
   score: number
   totalScore: number
   correctCount?: number
+  submissionId?: number
   details?: {
     question: QuizQuestion
     correct: boolean
@@ -204,6 +245,18 @@ function applySubmissionResult(submission: {
     score: submission.score,
     totalScore: submission.totalScore,
     details: submission.details || [],
+  }
+  // 更新本地 quizList 中的答题状态，避免列表页仍显示为"未答题"
+  if (activeQuiz.value) {
+    const idx = quizList.value.findIndex((q) => q.id === activeQuiz.value!.id)
+    if (idx !== -1) {
+      quizList.value[idx] = {
+        ...quizList.value[idx],
+        submitted: true,
+        myScore: submission.score,
+        mySubmissionId: submission.submissionId ?? quizList.value[idx].mySubmissionId,
+      }
+    }
   }
   ElMessage.success('提交成功')
   if (submission.correctCount !== undefined) {
@@ -268,11 +321,21 @@ const wrongCount = computed(
 const manualCount = computed(
   () => result.value?.details.filter((d) => d.manualRequired).length ?? 0,
 )
+const partialCount = computed(
+  () => result.value?.details.filter((d) =>
+    d.correct && !d.manualRequired && d.aiScore !== null && d.aiScore !== undefined && d.aiScore < 10,
+  ).length ?? 0,
+)
+
+function isDetailPartial(d: { correct: boolean; manualRequired?: boolean; aiScore?: number | null }): boolean {
+  return d.correct && !d.manualRequired && d.aiScore !== null && d.aiScore !== undefined && d.aiScore < 10
+}
 
 const resultSubtitle = computed(() => {
   const correct = (result.value?.details.length ?? 0) - wrongCount.value - manualCount.value
   const pending = manualCount.value ? `，待人工批改 ${manualCount.value} 题` : ''
-  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题${pending}`
+  const partial = partialCount.value ? `，部分得分 ${partialCount.value} 题` : ''
+  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题${partial}${pending}`
   if (quizMode.value === 'self' && wrongCount.value > 0) {
     return `${base} · 错题已加入错题本`
   }
@@ -294,16 +357,61 @@ const resultSubtitle = computed(() => {
         <!-- 教师布置 -->
         <div v-if="listTab === 'assigned'">
           <el-empty v-if="!quizList.length" description="暂无已发布的练习" />
-          <div v-for="quiz in quizList" :key="quiz.id" class="quiz-card">
+          <div
+            v-for="quiz in quizList"
+            :key="quiz.id"
+            class="quiz-card"
+            :class="{
+              completed: quiz.submitted,
+              expired: !quiz.submitted && isExpired(quiz),
+              closed: quiz.status === 'closed',
+            }"
+          >
             <div class="quiz-info">
-              <h3>{{ quiz.title }}</h3>
+              <h3>
+                {{ quiz.title }}
+                <el-tag v-if="quiz.status === 'closed'" type="info" size="small" effect="plain">已关闭</el-tag>
+                <el-tag v-else-if="quiz.submitted" type="success" size="small" effect="plain">已答题</el-tag>
+                <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
+              </h3>
               <p>{{ quiz.courseName }} · {{ quiz.className }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
+              <p v-if="quiz.submitted" class="quiz-score">
+                得分：<span class="completed-score">{{ quiz.myScore ?? 0 }} / {{ quiz.totalScore }}</span>
+              </p>
               <div class="quiz-tags">
                 <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">{{ kp }}</el-tag>
               </div>
-              <p v-if="quiz.deadline" class="deadline">截止时间：{{ quiz.deadline }}</p>
+              <p v-if="quiz.deadline" class="deadline" :class="{ 'deadline--expired': !quiz.submitted && isExpired(quiz) }">
+                截止时间：{{ quiz.deadline }}
+              </p>
             </div>
-            <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
+            <!-- 已提交：查看结果 -->
+            <template v-if="quiz.submitted">
+              <el-button
+                v-if="quiz.allowReview !== false"
+                type="primary"
+                :icon="View"
+                plain
+                @click="viewQuizResult(quiz)"
+              >
+                查看结果
+              </el-button>
+              <el-tooltip
+                v-else
+                content="教师已关闭本题详情查看权限"
+                placement="top"
+              >
+                <el-button type="info" :icon="View" plain disabled>不可查看</el-button>
+              </el-tooltip>
+            </template>
+            <!-- 已截止未提交：不可答题 -->
+            <template v-else-if="isExpired(quiz)">
+              <el-button type="info" :icon="Edit" disabled>已截止</el-button>
+            </template>
+            <!-- 正常答题 -->
+            <template v-else>
+              <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
+            </template>
           </div>
         </div>
 
@@ -407,13 +515,16 @@ const resultSubtitle = computed(() => {
             v-for="(item, idx) in result.details"
             :key="item.question.id"
             class="review-card"
-            :class="{ wrong: !item.correct && !item.manualRequired }"
+            :class="{ wrong: !item.correct && !item.manualRequired, partial: isDetailPartial(item) }"
           >
             <div class="review-header">
               <span class="q-num">{{ idx + 1 }}.</span>
               <el-tag size="small">{{ exerciseTypeLabels[item.question.type] }}</el-tag>
-              <el-tag :type="item.manualRequired ? 'warning' : item.correct ? 'success' : 'danger'" size="small">
-                {{ item.manualRequired ? '待批改' : item.correct ? '正确' : '错误' }}
+              <el-tag
+                :type="item.manualRequired ? 'warning' : isDetailPartial(item) ? 'warning' : item.correct ? 'success' : 'danger'"
+                size="small"
+              >
+                {{ item.manualRequired ? '待批改' : isDetailPartial(item) ? '部分得分' : item.correct ? '正确' : '错误' }}
               </el-tag>
               <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
             </div>
@@ -518,10 +629,31 @@ const resultSubtitle = computed(() => {
   border-radius: 10px;
   margin-bottom: 12px;
 
-  h3 { font-size: 16px; margin-bottom: 6px; }
+  &.completed {
+    background: #f8fafc;
+  }
+
+  &.expired {
+    background: #fef2f2;
+  }
+
+  &.closed {
+    background: #f1f5f9;
+  }
+
+  h3 {
+    font-size: 16px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   p { font-size: 13px; color: #64748b; margin-bottom: 8px; }
+  .quiz-score { font-size: 14px; }
+  .completed-score { font-weight: 700; color: #2563eb; }
   .quiz-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
   .deadline { font-size: 12px; color: #ef4444; }
+  .deadline--expired { font-weight: 700; }
 }
 
 .self-quiz-form {
@@ -581,6 +713,11 @@ const resultSubtitle = computed(() => {
   &.wrong {
     border-color: #fecaca;
     background: #fef2f2;
+  }
+
+  &.partial {
+    border-color: #fde68a;
+    background: #fffbeb;
   }
 
   .review-header {

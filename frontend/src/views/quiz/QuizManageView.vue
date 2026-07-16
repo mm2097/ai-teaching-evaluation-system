@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, Edit, Promotion, Collection, View, CircleClose, FolderAdd } from '@element-plus/icons-vue'
+import { MagicStick, Edit, Promotion, Collection, View, CircleClose, FolderAdd, RefreshRight } from '@element-plus/icons-vue'
 import QuestionFormDialog from '@/components/quiz/QuestionFormDialog.vue'
 import {
   fetchQuizAssignments,
@@ -13,6 +13,7 @@ import {
   saveQuizAssignment,
   publishQuizAssignment,
   closeQuizAssignment,
+  reopenQuizAssignment,
 } from '@/api/quiz'
 import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank, fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { fetchCourses, fetchClasses } from '@/api/dict'
@@ -37,6 +38,7 @@ const form = ref({
   questionCount: 5,
   difficulty: 'medium' as DifficultyLevel,
   extraRequirements: '',
+  deadline: '' as string,  // 截止时间，为空默认7天
 })
 
 const knowledgePointOptions = ref<string[]>([])
@@ -122,6 +124,10 @@ const editVisible = ref(false)
 const editingQuestion = ref<QuizQuestion | null>(null)
 const detailVisible = ref(false)
 const detailAssignment = ref<QuizAssignment | null>(null)
+const reopenVisible = ref(false)
+const reopenTarget = ref<QuizAssignment | null>(null)
+const reopenDeadline = ref('')
+const reopening = ref(false)
 
 async function handleGenerate(): Promise<void> {
   if (!form.value.courseId || !form.value.classId) {
@@ -270,6 +276,7 @@ async function handleSaveDraft(): Promise<void> {
     knowledgePoints: form.value.knowledgePoints,
     status: 'draft',
     questions: previewQuestions.value,
+    deadline: form.value.deadline || undefined,
   })
   assignmentList.value = await fetchQuizAssignments()
   ElMessage.success(`练习「${saved.title}」已保存为草稿`)
@@ -292,12 +299,14 @@ async function handlePublish(): Promise<void> {
     knowledgePoints: form.value.knowledgePoints,
     status: 'draft',
     questions: previewQuestions.value,
+    deadline: form.value.deadline || undefined,
   })
   await publishQuizAssignment(saved.id)
   assignmentList.value = await fetchQuizAssignments()
   previewQuestions.value = []
   generateMeta.value = null
   bankSelectedIds.value = []
+  form.value.deadline = ''
   ElMessage.success('练习已发布，学生可在「在线答题」中作答')
 }
 
@@ -313,6 +322,36 @@ async function handleCloseAssignment(row: QuizAssignment): Promise<void> {
 function viewAssignment(row: QuizAssignment): void {
   detailAssignment.value = row
   detailVisible.value = true
+}
+
+/** 判断任务是否已过截止时间 */
+function isAssignmentExpired(row: QuizAssignment): boolean {
+  if (!row.deadline) return false
+  return new Date(row.deadline.replace(' ', 'T')) < new Date()
+}
+
+function openReopenDialog(row: QuizAssignment): void {
+  reopenTarget.value = row
+  // 默认新截止时间为7天后
+  const d = new Date()
+  d.setDate(d.getDate() + 7)
+  reopenDeadline.value = d.toISOString().replace('T', ' ').substring(0, 16)
+  reopenVisible.value = true
+}
+
+async function handleReopen(): Promise<void> {
+  if (!reopenTarget.value) return
+  reopening.value = true
+  try {
+    const result = await reopenQuizAssignment(reopenTarget.value.id, reopenDeadline.value || undefined)
+    ElMessage.success(result.message || '已重新开启')
+    reopenVisible.value = false
+    assignmentList.value = await fetchQuizAssignments()
+  } catch {
+    ElMessage.error('操作失败')
+  } finally {
+    reopening.value = false
+  }
 }
 
 function typeLabel(type: ExerciseType): string {
@@ -337,6 +376,16 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
               <el-form label-width="90px">
                 <el-form-item label="练习标题">
                   <el-input v-model="form.title" placeholder="如：数据结构专项练习" />
+                </el-form-item>
+                <el-form-item label="截止时间">
+                  <el-date-picker
+                    v-model="form.deadline"
+                    type="datetime"
+                    placeholder="选择截止时间（默认7天后）"
+                    format="YYYY-MM-DD HH:mm"
+                    value-format="YYYY-MM-DD HH:mm"
+                    style="width: 100%"
+                  />
                 </el-form-item>
                 <el-form-item label="课程">
                   <el-select v-model="form.courseId" style="width: 100%">
@@ -400,6 +449,16 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
                 </el-form-item>
                 <el-form-item label="练习标题">
                   <el-input v-model="form.title" placeholder="如：计算机网络期中复习" />
+                </el-form-item>
+                <el-form-item label="截止时间">
+                  <el-date-picker
+                    v-model="form.deadline"
+                    type="datetime"
+                    placeholder="选择截止时间（默认7天后）"
+                    format="YYYY-MM-DD HH:mm"
+                    value-format="YYYY-MM-DD HH:mm"
+                    style="width: 100%"
+                  />
                 </el-form-item>
               </el-form>
               <p class="bank-tip">从题库勾选题目后点击「添加到预览区」，可在右侧编辑后发布。</p>
@@ -506,11 +565,41 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
         <el-table-column prop="publishTime" label="发布时间" width="170">
           <template #default="{ row }">{{ row.publishTime || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="center">
+        <el-table-column prop="deadline" label="截止时间" width="170">
+          <template #default="{ row }">
+            <span :class="{ 'deadline--expired': row.status === 'published' && isAssignmentExpired(row) }">
+              {{ row.deadline || '-' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="220" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="viewAssignment(row)">详情</el-button>
+            <!-- 已关闭：可重新开启 -->
             <el-button
-              v-if="row.status === 'published'"
+              v-if="row.status === 'closed'"
+              type="success"
+              link
+              size="small"
+              :icon="RefreshRight"
+              @click="openReopenDialog(row)"
+            >
+              重新开启
+            </el-button>
+            <!-- 已发布但已截止：可延长期限 -->
+            <el-button
+              v-else-if="row.status === 'published' && isAssignmentExpired(row)"
+              type="warning"
+              link
+              size="small"
+              :icon="RefreshRight"
+              @click="openReopenDialog(row)"
+            >
+              延期
+            </el-button>
+            <!-- 已发布未截止：可关闭 -->
+            <el-button
+              v-else-if="row.status === 'published'"
               type="warning"
               link
               size="small"
@@ -538,9 +627,43 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
           {{ detailAssignment.courseName }} · {{ detailAssignment.className }} ·
           {{ detailAssignment.questionCount }} 题 · 满分 {{ detailAssignment.totalScore }} 分
         </p>
+        <p v-if="detailAssignment.deadline" class="detail-meta">
+          截止时间：{{ detailAssignment.deadline }}
+        </p>
         <div v-for="(q, idx) in detailAssignment.questions" :key="q.id" class="question-card compact">
           <p><strong>{{ idx + 1 }}.</strong> {{ q.stem }}（{{ q.score }}分）</p>
         </div>
+      </template>
+    </el-dialog>
+
+    <!-- 重新开启 / 延长期限对话框 -->
+    <el-dialog v-model="reopenVisible" :title="reopenTarget?.status === 'closed' ? '重新开启答题' : '延长期限'" width="480px">
+      <el-form v-if="reopenTarget" label-width="100px">
+        <el-form-item label="练习标题">
+          <span>{{ reopenTarget.title }}</span>
+        </el-form-item>
+        <el-form-item label="课程班级">
+          <span>{{ reopenTarget.courseName }} · {{ reopenTarget.className }}</span>
+        </el-form-item>
+        <el-form-item label="原截止时间">
+          <span>{{ reopenTarget.deadline || '—' }}</span>
+        </el-form-item>
+        <el-form-item label="新截止时间" required>
+          <el-date-picker
+            v-model="reopenDeadline"
+            type="datetime"
+            placeholder="选择新的截止时间"
+            format="YYYY-MM-DD HH:mm"
+            value-format="YYYY-MM-DD HH:mm"
+            style="width: 100%"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reopenVisible = false">取消</el-button>
+        <el-button type="primary" :loading="reopening" @click="handleReopen">
+          确认{{ reopenTarget?.status === 'closed' ? '重新开启' : '延期' }}
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -603,5 +726,10 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
   font-size: 13px;
   color: #64748b;
   margin-bottom: 16px;
+}
+
+.deadline--expired {
+  color: #ef4444;
+  font-weight: 600;
 }
 </style>

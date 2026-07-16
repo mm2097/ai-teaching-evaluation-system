@@ -31,17 +31,21 @@ const questionResults = ref<QuestionResult[]>([])
 const correctCount = ref(0)
 const wrongCount = ref(0)
 const pendingCount = ref(0)
+const partialCount = ref(0)
 
 const accuracy = computed(() =>
   totalScore.value > 0 ? Math.round((score.value / totalScore.value) * 100) : 0,
 )
 
-const wrongQuestions = computed(() =>
-  questionResults.value.filter((q) => !q.isCorrect && !q.manualRequired),
+/** 需要复习的题目：答错 + 部分得分 + 待批改 */
+const reviewQuestions = computed(() =>
+  questionResults.value.filter((q) =>
+    !q.isCorrect || q.manualRequired || (q.aiScore !== null && q.aiScore !== undefined && q.aiScore < 10),
+  ),
 )
 
-const reviewQuestions = computed(() =>
-  questionResults.value.filter((q) => !q.isCorrect),
+const wrongQuestions = computed(() =>
+  questionResults.value.filter((q) => !q.isCorrect && !q.manualRequired),
 )
 
 /** 错误知识点统计 */
@@ -72,6 +76,19 @@ function getOptionLetter(idx: number): string {
   return String.fromCharCode(65 + idx)
 }
 
+/** 判断是否为部分得分（简答题 AI 判分未满） */
+function isPartialScore(item: QuestionResult): boolean {
+  return item.isCorrect && !item.manualRequired
+    && item.aiScore !== null && item.aiScore !== undefined
+    && item.aiScore < 10
+}
+
+function reviewLabel(item: QuestionResult, idx: number): string {
+  if (item.manualRequired) return '待批改'
+  if (isPartialScore(item)) return '部分得分'
+  return `错题 ${idx + 1}`
+}
+
 onMounted(async () => {
   loading.value = true
   try {
@@ -84,6 +101,9 @@ onMounted(async () => {
     questionResults.value = result.questionResults
     correctCount.value = questionResults.value.filter((q) => q.isCorrect).length
     pendingCount.value = questionResults.value.filter((q) => q.manualRequired).length
+    partialCount.value = questionResults.value.filter(
+      (q) => q.isCorrect && !q.manualRequired && q.aiScore !== null && q.aiScore !== undefined && q.aiScore < 10,
+    ).length
     wrongCount.value = questionResults.value.filter(
       (q) => !q.isCorrect && !q.manualRequired,
     ).length
@@ -115,6 +135,9 @@ function backToQuiz(): void {
           <el-icon :size="20" color="#ef4444"><Close /></el-icon>
           <span>错误 {{ wrongCount }} 题</span>
         </div>
+        <div v-if="partialCount" class="stat-item">
+          <span>部分得分 {{ partialCount }} 题</span>
+        </div>
         <div v-if="pendingCount" class="stat-item">
           <span>待人工批改 {{ pendingCount }} 题</span>
         </div>
@@ -141,16 +164,18 @@ function backToQuiz(): void {
       </div>
     </div>
 
-    <!-- 错题详情 -->
+    <!-- 错题与未得满分详情 -->
     <div v-if="reviewQuestions.length" class="content-card">
       <div class="content-card__title">
-        {{ pendingCount ? '错题与待批改题目' : '错题回顾' }}
+        {{ pendingCount ? '错题、部分得分与待批改题目' : (partialCount ? '错题与部分得分回顾' : '错题回顾') }}
         <span class="wrong-count">共 {{ reviewQuestions.length }} 题</span>
       </div>
-      <div v-for="(item, idx) in reviewQuestions" :key="item.question.id" class="error-question">
+      <div v-for="(item, idx) in reviewQuestions" :key="item.question.id" class="error-question" :class="{ partial: isPartialScore(item) }">
         <div class="eq-header">
-          <span class="eq-num">{{ item.manualRequired ? '待批改' : `错题 ${idx + 1}` }}</span>
+          <span class="eq-num">{{ reviewLabel(item, idx + 1) }}</span>
           <el-tag size="small">{{ typeLabel[item.question.type] }}</el-tag>
+          <el-tag v-if="isPartialScore(item)" size="small" type="warning">未得满分</el-tag>
+          <el-tag v-else-if="!item.manualRequired" size="small" type="danger">错误</el-tag>
           <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
         </div>
         <p class="eq-content">{{ item.question.stem }}</p>
@@ -258,6 +283,13 @@ function backToQuiz(): void {
   border-radius: 10px;
   margin-bottom: 16px;
   background: #fef2f2;
+
+  &.partial {
+    border-color: #fde68a;
+    background: #fffbeb;
+
+    .eq-num { color: #d97706; }
+  }
 
   .eq-header {
     display: flex;

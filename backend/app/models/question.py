@@ -39,6 +39,8 @@ class AnswerTask(SQLModel, table=True):
     publish_time: datetime = Field(default_factory=datetime.now)
     deadline: datetime
     status: int = Field(default=0)  # 0=未开始, 1=进行中, 2=已结束
+    max_attempts: int = Field(default=1)  # 最大答题次数，默认1次
+    allow_review: int = Field(default=0)  # 0=交卷后不允许查看题目详情, 1=允许查看
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)
 

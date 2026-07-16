@@ -424,6 +424,16 @@ export interface QuizAssignment {
   publishTime?: string
   deadline?: string
   questions: QuizQuestion[]
+  /** 当前学生是否已提交 */
+  submitted?: boolean
+  /** 当前学生得分（已提交时） */
+  myScore?: number
+  /** 当前学生提交记录 ID（用于查看结果） */
+  mySubmissionId?: number
+  /** 最大答题次数 */
+  maxAttempts?: number
+  /** 是否允许交卷后查看题目详情 */
+  allowReview?: boolean
 }
 
 /** 学生答题记录 */

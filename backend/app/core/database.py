@@ -19,11 +19,12 @@ def init_db() -> None:
     """建表。新增 Model 后,在 app/models/__init__.py 里 import 即可被自动建表。"""
     from app import models  # noqa: F401  触发模型注册
     SQLModel.metadata.create_all(engine)
-    _migrate_answer_task_type()
+    _migrate_answer_task()
 
 
-def _migrate_answer_task_type() -> None:
-    """为 create_all 无法升级的旧 answer_task 表补齐任务类型字段。"""
+
+def _migrate_answer_task() -> None:
+    """为 create_all 无法升级的旧 answer_task 表补齐新增字段。"""
     with engine.begin() as connection:
         inspector = inspect(connection)
         if "answer_task" not in inspector.get_table_names():
@@ -33,6 +34,16 @@ def _migrate_answer_task_type() -> None:
             connection.execute(text(
                 "ALTER TABLE answer_task ADD COLUMN task_type "
                 "VARCHAR(20) NOT NULL DEFAULT 'assignment'"
+            ))
+        if "max_attempts" not in columns:
+            connection.execute(text(
+                "ALTER TABLE answer_task ADD COLUMN max_attempts "
+                "INTEGER NOT NULL DEFAULT 1"
+            ))
+        if "allow_review" not in columns:
+            connection.execute(text(
+                "ALTER TABLE answer_task ADD COLUMN allow_review "
+                "INTEGER NOT NULL DEFAULT 0"
             ))
         connection.execute(
             text(

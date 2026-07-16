@@ -14,6 +14,7 @@ import {
   publishQuizAssignment,
   closeQuizAssignment,
   reopenQuizAssignment,
+  updateReviewPolicy,
 } from '@/api/quiz'
 import { fetchQuestionBank, addQuestionsToBank, checkQuestionsInBank, fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { fetchCourses, fetchClasses } from '@/api/dict'
@@ -39,6 +40,7 @@ const form = ref({
   difficulty: 'medium' as DifficultyLevel,
   extraRequirements: '',
   deadline: '' as string,  // 截止时间，为空默认7天
+  allowReview: false,  // 是否允许学生交卷后查看题目详情
 })
 
 const knowledgePointOptions = ref<string[]>([])
@@ -277,6 +279,7 @@ async function handleSaveDraft(): Promise<void> {
     status: 'draft',
     questions: previewQuestions.value,
     deadline: form.value.deadline || undefined,
+    allowReview: form.value.allowReview,
   })
   assignmentList.value = await fetchQuizAssignments()
   ElMessage.success(`练习「${saved.title}」已保存为草稿`)
@@ -300,6 +303,7 @@ async function handlePublish(): Promise<void> {
     status: 'draft',
     questions: previewQuestions.value,
     deadline: form.value.deadline || undefined,
+    allowReview: form.value.allowReview,
   })
   await publishQuizAssignment(saved.id)
   assignmentList.value = await fetchQuizAssignments()
@@ -354,6 +358,17 @@ async function handleReopen(): Promise<void> {
   }
 }
 
+async function handleToggleReview(row: QuizAssignment): Promise<void> {
+  const newVal = !row.allowReview
+  try {
+    await updateReviewPolicy(row.id, newVal)
+    row.allowReview = newVal
+    ElMessage.success(newVal ? '已允许学生查看详情' : '已禁止学生查看详情')
+  } catch {
+    ElMessage.error('操作失败')
+  }
+}
+
 function typeLabel(type: ExerciseType): string {
   return exerciseTypeLabels[type]
 }
@@ -386,6 +401,12 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
                     value-format="YYYY-MM-DD HH:mm"
                     style="width: 100%"
                   />
+                </el-form-item>
+                <el-form-item label="查看权限">
+                  <el-switch v-model="form.allowReview" active-text="允许查看详情" inactive-text="禁止查看详情" />
+                  <el-text type="info" size="small" style="margin-left: 8px">
+                    学生交卷后能否查看题目及答案解析
+                  </el-text>
                 </el-form-item>
                 <el-form-item label="课程">
                   <el-select v-model="form.courseId" style="width: 100%">
@@ -459,6 +480,12 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
                     value-format="YYYY-MM-DD HH:mm"
                     style="width: 100%"
                   />
+                </el-form-item>
+                <el-form-item label="查看权限">
+                  <el-switch v-model="form.allowReview" active-text="允许查看详情" inactive-text="禁止查看详情" />
+                  <el-text type="info" size="small" style="margin-left: 8px">
+                    学生交卷后能否查看题目及答案解析
+                  </el-text>
                 </el-form-item>
               </el-form>
               <p class="bank-tip">从题库勾选题目后点击「添加到预览区」，可在右侧编辑后发布。</p>
@@ -572,9 +599,21 @@ const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'war
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right" align="center">
+        <el-table-column label="操作" width="300" fixed="right" align="center">
           <template #default="{ row }">
             <el-button type="primary" link size="small" :icon="View" @click="viewAssignment(row)">详情</el-button>
+            <!-- 查看权限开关（所有非草稿状态均可修改） -->
+            <el-popconfirm
+              v-if="row.status !== 'draft'"
+              :title="row.allowReview ? '确定禁止学生查看答题详情？' : '确定允许学生查看答题详情？'"
+              @confirm="handleToggleReview(row)"
+            >
+              <template #reference>
+                <el-button link size="small" :type="row.allowReview ? 'success' : 'info'">
+                  {{ row.allowReview ? '可查看' : '禁查看' }}
+                </el-button>
+              </template>
+            </el-popconfirm>
             <!-- 已关闭：可重新开启 -->
             <el-button
               v-if="row.status === 'closed'"

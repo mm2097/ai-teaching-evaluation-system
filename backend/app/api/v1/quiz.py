@@ -572,11 +572,12 @@ def _grade_task_answers(
     refresh_student_mastery(session, student.student_id, task.course_id)
     records_by_question = {record.question_id: record for record in records}
     question_results = []
+    include_solution = bool(task.allow_review)
     for _, question in tq_rows:
         record = records_by_question.get(question.question_id)
         manual_required = bool(question.type == 5 and record and record.ai_score is None)
         question_results.append({
-            "question": _serialize_question(question, session, per_score),
+            "question": _serialize_question(question, session, per_score, include_solution=include_solution),
             "userAnswer": record.user_answer if record else "",
             "isCorrect": bool(record.is_correct) if record else False,
             "manualRequired": manual_required,
@@ -591,7 +592,8 @@ def _grade_task_answers(
         "correctCount": correct_count,
         "manualRequiredCount": len(manual_question_ids),
         "manualQuestionIds": manual_question_ids,
-        "questionResults": question_results,
+        "allowReview": bool(task.allow_review),
+        "questionResults": question_results if task.allow_review else [],
     }
 
 
@@ -707,6 +709,7 @@ class SaveAnswerTaskRequest(BaseModel):
     status: str = "draft"
     questions: list[QuestionItem] = Field(default_factory=list)
     deadline: str = ""  # 截止时间字符串，如 "2026-07-20 23:59"，为空则默认7天后
+    allowReview: bool = False  # 是否允许学生交卷后查看题目详情
 
 
 def _ensure_question_in_bank(
@@ -867,6 +870,7 @@ def create_answer_task(
         task_type=TASK_TYPE_ASSIGNMENT,
         deadline=deadline,
         status=status_int,
+        allow_review=1 if req.allowReview else 0,
         create_by=current_user.user_id,
     )
     if status_int == 1:
@@ -906,6 +910,7 @@ def create_answer_task(
         "status": req.status,
         "publishTime": task.publish_time.strftime("%Y-%m-%d %H:%M") if task.publish_time else "",
         "deadline": deadline.strftime("%Y-%m-%d %H:%M"),
+        "allowReview": bool(task.allow_review),
     }
 
 
@@ -946,6 +951,35 @@ def close_answer_task(
     session.add(task)
     session.commit()
     return {"id": task.task_id, "status": "closed", "message": "已关闭"}
+
+
+class UpdateReviewPolicyRequest(BaseModel):
+    """修改查看权限请求。"""
+    allowReview: bool
+
+
+@router.put("/answer-tasks/{task_id}/review-policy", tags=["答题管理"])
+def update_review_policy(
+    task_id: int,
+    req: UpdateReviewPolicyRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """修改学生交卷后查看题目详情的权限（发布前后均可修改）。"""
+    task = session.get(AnswerTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if _role_code(current_user, session) not in {"admin", "teacher"}:
+        raise HTTPException(status_code=403, detail="无权操作答题任务")
+    _require_course_access(current_user, task.course_id, session)
+    task.allow_review = 1 if req.allowReview else 0
+    session.add(task)
+    session.commit()
+    return {
+        "id": task.task_id,
+        "allowReview": bool(task.allow_review),
+        "message": "已更新查看权限",
+    }
 
 
 class ReopenAnswerTaskRequest(BaseModel):

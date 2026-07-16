@@ -52,6 +52,9 @@ const submitting = ref(false)
 const result = ref<{
   score: number
   totalScore: number
+  correctCount: number
+  totalCount: number
+  manualRequiredCount: number
   details: {
     question: QuizQuestion
     correct: boolean
@@ -241,10 +244,15 @@ function applySubmissionResult(submission: {
     aiReason?: string
   }[]
 }): void {
+  const details = submission.details || []
+  const totalCount = activeQuiz.value?.questions.length ?? details.length
   result.value = {
     score: submission.score,
     totalScore: submission.totalScore,
-    details: submission.details || [],
+    correctCount: submission.correctCount ?? details.filter((d) => d.correct).length,
+    totalCount,
+    manualRequiredCount: (submission as any).manualRequiredCount ?? details.filter((d) => d.manualRequired).length,
+    details,
   }
   // 更新本地 quizList 中的答题状态，避免列表页仍显示为"未答题"
   if (activeQuiz.value) {
@@ -260,10 +268,8 @@ function applySubmissionResult(submission: {
   }
   ElMessage.success('提交成功')
   if (submission.correctCount !== undefined) {
-    const manual = submission.details?.filter((detail) => detail.manualRequired).length || 0
-    const wrong = submission.details?.filter(
-      (detail) => !detail.correct && !detail.manualRequired,
-    ).length || 0
+    const manual = details.filter((detail) => detail.manualRequired).length || 0
+    const wrong = totalCount - (submission.correctCount ?? 0) - manual
     if (manual > 0) {
       ElMessage.info(`答对 ${submission.correctCount} 题，答错 ${wrong} 题，${manual} 题待人工批改`)
     } else if (wrong > 0) {
@@ -318,9 +324,13 @@ async function handleSubmit(): Promise<void> {
 const wrongCount = computed(
   () => result.value?.details.filter((d) => !d.correct && !d.manualRequired).length ?? 0,
 )
-const manualCount = computed(
-  () => result.value?.details.filter((d) => d.manualRequired).length ?? 0,
-)
+const manualCount = computed(() => {
+  if (!result.value) return 0
+  // 有逐题详情时从详情计算，否则用后端返回值
+  return result.value.details.length > 0
+    ? result.value.details.filter((d) => d.manualRequired).length
+    : result.value.manualRequiredCount
+})
 const partialCount = computed(
   () => result.value?.details.filter((d) =>
     d.correct && !d.manualRequired && d.aiScore !== null && d.aiScore !== undefined && d.aiScore < 10,
@@ -332,11 +342,13 @@ function isDetailPartial(d: { correct: boolean; manualRequired?: boolean; aiScor
 }
 
 const resultSubtitle = computed(() => {
-  const correct = (result.value?.details.length ?? 0) - wrongCount.value - manualCount.value
+  if (!result.value) return ''
+  const { correctCount, totalCount } = result.value
+  const wrong = totalCount - correctCount - manualCount.value
   const pending = manualCount.value ? `，待人工批改 ${manualCount.value} 题` : ''
   const partial = partialCount.value ? `，部分得分 ${partialCount.value} 题` : ''
-  const base = `答对 ${correct} 题，答错 ${wrongCount.value} 题${partial}${pending}`
-  if (quizMode.value === 'self' && wrongCount.value > 0) {
+  const base = `答对 ${correctCount} 题，答错 ${Math.max(0, wrong)} 题${partial}${pending}`
+  if (quizMode.value === 'self' && wrong > 0) {
     return `${base} · 错题已加入错题本`
   }
   return base
@@ -509,7 +521,7 @@ const resultSubtitle = computed(() => {
           :sub-title="resultSubtitle"
         />
 
-        <div class="content-card">
+        <div v-if="result.details.length" class="content-card">
           <div class="content-card__title">答题解析</div>
           <div
             v-for="(item, idx) in result.details"

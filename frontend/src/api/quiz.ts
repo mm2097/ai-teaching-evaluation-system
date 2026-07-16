@@ -133,6 +133,7 @@ export interface SaveQuizAssignmentParams {
   status: 'draft' | 'published'
   questions: QuizQuestion[]
   deadline?: string  // 截止时间，如 "2026-07-20 23:59"
+  allowReview?: boolean  // 是否允许学生交卷后查看题目详情
 }
 
 function buildGeneratePayload(params: GenerateQuizParams) {
@@ -203,6 +204,17 @@ export async function closeQuizAssignment(id: number): Promise<void> {
   await request.post(`/v1/answer-tasks/${id}/close`)
 }
 
+/** 修改查看权限（发布前后均可） */
+export async function updateReviewPolicy(
+  id: number,
+  allowReview: boolean,
+): Promise<{ id: number; allowReview: boolean; message: string }> {
+  const { data } = await request.put(`/v1/answer-tasks/${id}/review-policy`, {
+    allowReview,
+  })
+  return data
+}
+
 /** 重新开启/延长期限 */
 export async function reopenQuizAssignment(
   id: number,
@@ -237,6 +249,7 @@ export interface QuizSubmitResult {
   correctCount: number
   taskId?: number
   taskTitle?: string
+  allowReview?: boolean
   details: {
     question: QuizQuestion
     correct: boolean
@@ -320,15 +333,20 @@ export async function submitQuizAnswers(
     student_id: studentId,
     answers: normalizeAnswers(answers),
   })
-  const details = buildSubmitDetails(
-    questions,
-    answers as Record<number, string | boolean>,
-    data.correctCount,
-    data.manualQuestionIds,
-    data.questionResults,
-  )
-  syncWrongAnswersToErrorBook(studentId, details)
-  return { ...data, details }
+  // 教师禁止查看详情时，不构建逐题详情
+  const details = data.allowReview
+    ? buildSubmitDetails(
+        questions,
+        answers as Record<number, string | boolean>,
+        data.correctCount,
+        data.manualQuestionIds,
+        data.questionResults,
+      )
+    : []
+  if (data.allowReview !== false) {
+    syncWrongAnswersToErrorBook(studentId, details)
+  }
+  return { ...data, details, allowReview: data.allowReview }
 }
 
 /** 学生自主练习：由后端原子化保存任务、映射临时题号并完成判分 */
@@ -338,17 +356,22 @@ export async function submitSelfQuiz(params: SubmitSelfQuizParams): Promise<Quiz
     answers: normalizeAnswers(params.answers),
   }, { timeout: 120000 })
 
-  const details = buildSubmitDetails(
-    [],
-    params.answers,
-    data.correctCount,
-    data.manualQuestionIds,
-    data.questionResults,
-  )
-  syncWrongAnswersToErrorBook(params.studentId, details)
+  const details = data.allowReview
+    ? buildSubmitDetails(
+        [],
+        params.answers,
+        data.correctCount,
+        data.manualQuestionIds,
+        data.questionResults,
+      )
+    : []
+  if (data.allowReview !== false) {
+    syncWrongAnswersToErrorBook(params.studentId, details)
+  }
   return {
     ...data,
     details,
+    allowReview: data.allowReview,
   }
 }
 

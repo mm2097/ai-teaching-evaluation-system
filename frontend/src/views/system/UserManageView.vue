@@ -150,7 +150,7 @@ onMounted(loadUsers)
         stripe
         border
       >
-        <el-table-column prop="username" label="账号" width="120" />
+        <el-table-column prop="username" label="账号" width="150" show-overflow-tooltip />
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column prop="role" label="角色" width="130">
           <template #default="{ row }">

@@ -7,7 +7,7 @@ from app.core.operation_log import get_current_user
 from app.models import (
     Student, Course, Teacher, ScoreRecord, AttendanceRecord,
     StudyWarning, CourseStudent, ExamBatch, SysUser, SysRole,
-    IndividualScore, CourseTestDetail, AttendanceSheet,
+    IndividualScore, CourseTestDetail, AttendanceSheet, ClassInfo,
 )
 
 router = APIRouter()
@@ -57,21 +57,36 @@ def _check_dashboard_access(
 @router.get("/dashboard/stats", tags=["看板"])
 def get_stats(
     course_id: int | None = Query(default=None),
+    class_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
     """首页统计数据。
 
-    权限（Analysis.ScoreTrend.UserValid）：仅管理员和任课教师可查看。
+    权限：仅管理员和任课教师可查看。支持按班级筛选。
     """
     _check_dashboard_access(session, current_user, course_id)
-    # 学生数：有选课关系的去重学生
+
+    # 获取班级内学生 ID 集合
+    def _class_stu_ids() -> set[int]:
+        if not class_id:
+            return set()
+        return set(session.exec(
+            select(Student.student_id).where(Student.class_id == class_id)
+        ).all())
+
+    cls_ids = _class_stu_ids()
+
+    # 学生数
     stu_q = select(CourseStudent.student_id).distinct()
     if course_id:
         stu_q = stu_q.where(CourseStudent.course_id == course_id)
-    student_count = len(session.exec(stu_q).all())
+    all_stu = list(session.exec(stu_q).all())
+    if cls_ids:
+        all_stu = [s for s in all_stu if s in cls_ids]
+    student_count = len(all_stu)
 
-    # 课程数
+    # 课程数（班级不改变课程维度）
     crs_q = select(Course)
     if course_id:
         crs_q = crs_q.where(Course.course_id == course_id)
@@ -79,34 +94,33 @@ def get_stats(
 
     teacher_count = len(session.exec(select(Teacher)).all())
 
-    # 成绩统计（合并新旧表）
+    # 成绩统计
     all_scores: list[float] = []
-    # 旧表
     score_q = select(ScoreRecord)
     if course_id:
         score_q = score_q.where(ScoreRecord.course_id == course_id)
     for s in session.exec(score_q).all():
-        all_scores.append(s.score)
-    # IndividualScore
+        if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
+            all_scores.append(s.score)
+
     if course_id:
         batch_ids = session.exec(
             select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
         ).all()
-        is_q = select(IndividualScore).where(IndividualScore.exam_batch_id.in_(batch_ids)) if batch_ids else select(IndividualScore).where(IndividualScore.exam_batch_id == -1)  # type: ignore[arg-type]
+        if batch_ids:
+            for s in session.exec(select(IndividualScore).where(IndividualScore.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
+                if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
+                    all_scores.append(s.score)
+            for s in session.exec(select(CourseTestDetail).where(CourseTestDetail.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
+                if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
+                    all_scores.append(s.total_score)
     else:
-        is_q = select(IndividualScore)
-    for s in session.exec(is_q).all():
-        all_scores.append(s.score)
-    # CourseTestDetail
-    if course_id:
-        batch_ids = session.exec(
-            select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-        ).all()
-        ct_q = select(CourseTestDetail).where(CourseTestDetail.exam_batch_id.in_(batch_ids)) if batch_ids else select(CourseTestDetail).where(CourseTestDetail.exam_batch_id == -1)  # type: ignore[arg-type]
-    else:
-        ct_q = select(CourseTestDetail)
-    for s in session.exec(ct_q).all():
-        all_scores.append(s.total_score)
+        for s in session.exec(select(IndividualScore)).all():
+            if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
+                all_scores.append(s.score)
+        for s in session.exec(select(CourseTestDetail)).all():
+            if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
+                all_scores.append(s.total_score)
 
     total = len(all_scores) or 1
     pass_count = sum(1 for s in all_scores if s >= 60)
@@ -114,35 +128,43 @@ def get_stats(
     pass_rate = round(pass_count / total * 100, 1)
     excellent_rate = round(excellent / total * 100, 1)
 
-    # 考勤率（合并新旧表）
+    # 考勤率
     att_normal = 0
     att_total = 0
-    # 旧表
     att_q = select(AttendanceRecord)
     if course_id:
         att_q = att_q.where(AttendanceRecord.course_id == course_id)
-    atts = list(session.exec(att_q).all())
-    att_total += len(atts)
-    att_normal += sum(1 for a in atts if a.status == 0)
-    # AttendanceSheet
+    for a in session.exec(att_q).all():
+        if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
+            att_total += 1
+            if a.status == 0:
+                att_normal += 1
     if course_id:
         batch_ids = session.exec(
             select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
         ).all()
-        ash_q = select(AttendanceSheet).where(AttendanceSheet.exam_batch_id.in_(batch_ids)) if batch_ids else select(AttendanceSheet).where(AttendanceSheet.exam_batch_id == -1)  # type: ignore[arg-type]
+        if batch_ids:
+            for a in session.exec(select(AttendanceSheet).where(AttendanceSheet.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
+                if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
+                    if a.total_count and a.present_count:
+                        att_total += a.total_count
+                        att_normal += a.present_count
     else:
-        ash_q = select(AttendanceSheet)
-    for a in session.exec(ash_q).all():
-        if a.total_count and a.present_count:
-            att_total += a.total_count
-            att_normal += a.present_count
+        for a in session.exec(select(AttendanceSheet)).all():
+            if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
+                if a.total_count and a.present_count:
+                    att_total += a.total_count
+                    att_normal += a.present_count
     attendance_rate = round(att_normal / (att_total or 1) * 100, 1)
 
     # 预警数
     warn_q = select(StudyWarning)
     if course_id:
         warn_q = warn_q.where(StudyWarning.course_id == course_id)
-    warning_count = len(session.exec(warn_q).all())
+    all_warns = list(session.exec(warn_q).all())
+    if cls_ids:
+        all_warns = [w for w in all_warns if getattr(w, 'student_id', None) in cls_ids]
+    warning_count = len(all_warns)
 
     return {
         "studentCount": student_count,

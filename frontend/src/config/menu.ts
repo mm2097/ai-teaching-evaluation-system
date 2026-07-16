@@ -23,7 +23,7 @@ export const menuList: MenuItem[] = [
     path: '/data',
     title: '数据采集',
     icon: 'Upload',
-    roles: ['admin', 'teacher'],
+    roles: ['teacher'],
     children: [
       { path: '/data/import', title: '数据上传', icon: 'Upload' },
       { path: '/data/manage', title: '数据管理', icon: 'Document' },
@@ -58,9 +58,9 @@ export const menuList: MenuItem[] = [
     title: 'AI 智能辅助教学',
     icon: 'EditPen',
     children: [
-      { path: '/quiz/bank', title: '题库管理', icon: 'Collection', roles: ['admin', 'teacher'] },
-      { path: '/quiz/manage', title: 'AI 出题', icon: 'MagicStick', roles: ['admin', 'teacher'] },
-      { path: '/quiz/records', title: '答题记录', icon: 'List', roles: ['admin', 'teacher'] },
+      { path: '/quiz/bank', title: '题库管理', icon: 'Collection', roles: ['teacher'] },
+      { path: '/quiz/manage', title: 'AI 出题', icon: 'MagicStick', roles: ['teacher'] },
+      { path: '/quiz/records', title: '答题记录', icon: 'List', roles: ['teacher'] },
       { path: '/quiz/answer', title: '在线答题', icon: 'Edit', roles: ['student'] },
       { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound' },
       { path: '/student/quiz-list', title: '答题任务', icon: 'List', roles: ['student'] },
@@ -80,9 +80,9 @@ export const menuList: MenuItem[] = [
     path: '/evaluation',
     title: '学习质量评价',
     icon: 'Medal',
-    roles: ['admin', 'teacher'],
+    roles: ['teacher'],
     children: [
-      { path: '/evaluation/config', title: '评价体系配置', icon: 'Setting', roles: ['admin'] },
+      { path: '/evaluation/config', title: '评价体系配置', icon: 'Setting', roles: ['teacher'] },
       { path: '/evaluation/student', title: '学生学习质量', icon: 'Reading' },
     ],
   },

@@ -32,13 +32,13 @@ const router = createRouter({
           path: 'data/import',
           name: 'DataImport',
           component: () => import('@/views/data/DataImportView.vue'),
-          meta: { title: '数据上传', roles: ['admin', 'teacher'] },
+          meta: { title: '数据上传', roles: ['teacher'] },
         },
         {
           path: 'data/manage',
           name: 'DataManage',
           component: () => import('@/views/data/DataManageView.vue'),
-          meta: { title: '数据管理', roles: ['admin', 'teacher'] },
+          meta: { title: '数据管理', roles: ['teacher'] },
         },
         // ---- AI 分析 ----
         {
@@ -76,19 +76,19 @@ const router = createRouter({
           path: 'quiz/bank',
           name: 'QuestionBank',
           component: () => import('@/views/quiz/QuestionBankView.vue'),
-          meta: { title: '题库管理', roles: ['admin', 'teacher'] },
+          meta: { title: '题库管理', roles: ['teacher'] },
         },
         {
           path: 'quiz/manage',
           name: 'QuizManage',
           component: () => import('@/views/quiz/QuizManageView.vue'),
-          meta: { title: 'AI 出题', roles: ['admin', 'teacher'] },
+          meta: { title: 'AI 出题', roles: ['teacher'] },
         },
         {
           path: 'quiz/records',
           name: 'QuizRecords',
           component: () => import('@/views/quiz/QuizRecordsView.vue'),
-          meta: { title: '答题记录', roles: ['admin', 'teacher'] },
+          meta: { title: '答题记录', roles: ['teacher'] },
         },
         {
           path: 'quiz/answer',
@@ -101,13 +101,13 @@ const router = createRouter({
           path: 'evaluation/config',
           name: 'EvalConfig',
           component: () => import('@/views/evaluation/EvalConfigView.vue'),
-          meta: { title: '评价体系配置', roles: ['admin'] },
+          meta: { title: '评价体系配置', roles: ['teacher'] },
         },
         {
           path: 'evaluation/student',
           name: 'StudentEval',
           component: () => import('@/views/evaluation/StudentEvalView.vue'),
-          meta: { title: '学生学习质量', roles: ['admin', 'teacher'] },
+          meta: { title: '学生学习质量', roles: ['teacher'] },
         },
         // ---- 报告 ----
         {

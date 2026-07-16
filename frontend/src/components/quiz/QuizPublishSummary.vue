@@ -23,6 +23,10 @@ const emit = defineEmits<{
   addAllToBank: []
 }>()
 
+/** 发布参数：截止时间（留空默认7天）、是否允许学生交卷后查看详情 */
+const deadline = defineModel<string>('deadline', { default: '' })
+const allowReview = defineModel<boolean>('allowReview', { default: false })
+
 const acceptedQuestions = computed(() =>
   props.questions.filter((q) => q.status === 'accepted' || q.status === 'edited')
 )
@@ -140,6 +144,33 @@ const difficultyColor: Record<DifficultyLevel, string> = {
       <span class="total-score">{{ totalScore.toFixed(1) }} 分</span>
     </div>
 
+    <!-- 发布设置 -->
+    <div class="summary-section publish-options">
+      <div class="section-title">发布设置</div>
+      <div class="option-row">
+        <span class="option-label">截止时间</span>
+        <el-date-picker
+          v-model="deadline"
+          type="datetime"
+          placeholder="留空默认7天后"
+          format="YYYY-MM-DD HH:mm"
+          value-format="YYYY-MM-DD HH:mm"
+          size="small"
+          style="width: 100%"
+        />
+      </div>
+      <div class="option-row">
+        <span class="option-label">查看权限</span>
+        <el-switch
+          v-model="allowReview"
+          active-text="允许查看详情"
+          inactive-text="禁止查看详情"
+          inline-prompt
+        />
+      </div>
+      <el-text type="info" size="small">学生交卷后能否查看题目及答案解析</el-text>
+    </div>
+
     <!-- 操作按钮 -->
     <div class="summary-actions">
       <el-button
@@ -247,6 +278,26 @@ const difficultyColor: Record<DifficultyLevel, string> = {
       font-size: 18px;
       font-weight: 700;
       color: #2563eb;
+    }
+  }
+
+  .publish-options {
+    padding: 12px;
+    background: #f0f5ff;
+    border-radius: 6px;
+
+    .option-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+
+      .option-label {
+        font-size: 12px;
+        color: #475569;
+        flex-shrink: 0;
+        width: 60px;
+      }
     }
   }
 

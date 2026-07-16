@@ -26,6 +26,10 @@ const emit = defineEmits<{
   publish: [questions: QuizQuestion[]]
 }>()
 
+/** 发布参数：透传给 QuizPublishSummary，并由父组件（QuizManageView）读取 */
+const deadline = defineModel<string>('deadline', { default: '' })
+const allowReview = defineModel<boolean>('allowReview', { default: false })
+
 interface ReviewedItem {
   question: QuizQuestion
   status: ReviewStatus
@@ -55,7 +59,8 @@ watch(
       reviewedItems.value = newQs.map(buildReviewedItem)
     } else if (newQs.length > oldQs.length) {
       for (let i = oldQs.length; i < newQs.length; i++) {
-        reviewedItems.value.push(buildReviewedItem(newQs[i]))
+        const q = newQs[i]
+        if (q) reviewedItems.value.push(buildReviewedItem(q))
       }
     }
   },
@@ -190,6 +195,8 @@ async function handleAddAllToBank() {
         <div class="summary-sticky">
           <QuizPublishSummary
             :questions="reviewedItems"
+            v-model:deadline="deadline"
+            v-model:allow-review="allowReview"
             @save-draft="handleSaveDraft"
             @publish="handlePublish"
             @add-all-to-bank="handleAddAllToBank"

@@ -23,6 +23,7 @@ class LoginUser(SQLModel):
     role_code: str
     # 学生
     student_id: int | None = None
+    student_no: str | None = None
     class_id: int | None = None
     # 教师
     teacher_id: int | None = None
@@ -65,13 +66,15 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
     role = session.get(SysRole, user.role_id)
     role_code = role.role_code if role else ""
 
-    # 学生登录时附加 student_id / class_id
+    # 学生登录时附加 student_id / student_no / class_id
     student_id: int | None = None
+    student_no: str | None = None
     class_id: int | None = None
     if role_code == "student":
         student = session.exec(select(Student).where(Student.user_id == user.user_id)).first()
         if student:
             student_id = student.student_id
+            student_no = student.student_no
             class_id = student.class_id
 
     # 教师登录时附加 teacher_id / college / title
@@ -94,6 +97,7 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             real_name=user.real_name,
             role_code=role_code,
             student_id=student_id,
+            student_no=student_no,
             class_id=class_id,
             teacher_id=teacher_id,
             college=college,

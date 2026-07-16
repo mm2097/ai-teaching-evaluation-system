@@ -5,7 +5,7 @@ from sqlmodel import Session, select
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.core.security import hash_password
-from app.models import SysUser, UserCreate, UserRead, UserUpdate
+from app.models import SysUser, SysRole, UserCreate, UserRead, UserUpdate
 
 router = APIRouter()
 
@@ -26,6 +26,11 @@ def create_user(
     """创建用户。用户名重复返回 400。"""
     if session.exec(select(SysUser).where(SysUser.username == payload.username)).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
+    # 不允许创建已禁用的系统管理员账号，防止死锁
+    if payload.status == 0:
+        role = session.get(SysRole, payload.role_id)
+        if role and role.role_code == "admin":
+            raise HTTPException(status_code=403, detail="不允许创建已禁用的系统管理员账号")
     user_data = payload.model_dump()
     user_data["password"] = hash_password(user_data["password"])
     user = SysUser(**user_data)
@@ -65,6 +70,11 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     updates = payload.model_dump(exclude_unset=True)
+    # 系统管理员的启用/禁用状态不允许任何人员修改（包括自己），防止死锁
+    if "status" in updates:
+        role = session.get(SysRole, user.role_id)
+        if role and role.role_code == "admin":
+            raise HTTPException(status_code=403, detail="不允许启用/禁用系统管理员账号")
     if "password" in updates:
         updates["password"] = hash_password(updates["password"])
     for field, value in updates.items():

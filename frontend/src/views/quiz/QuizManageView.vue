@@ -1,28 +1,27 @@
 <!--
   AI 出题页面 - 两步向导式
-  Step1 需求配置 → Step2 逐题审核发布（SSE 流式逐题展示）
+  Step1 需求配置（AI 出题 + 从题库挑题弹窗）→ Step2 逐题审核发布（SSE 流式逐题展示）
 -->
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Collection, Back, Loading } from '@element-plus/icons-vue'
+import { Back, Loading, Collection, Plus } from '@element-plus/icons-vue'
 import QuizWizardStep1Config, { type DifficultyDistribution } from '@/components/quiz/QuizWizardStep1Config.vue'
 import QuizWizardStep3Review from '@/components/quiz/QuizWizardStep3Review.vue'
+import QuestionBankPickerDialog from '@/components/quiz/QuestionBankPickerDialog.vue'
 import AssignmentListPanel from '@/components/quiz/AssignmentListPanel.vue'
 import {
   generateQuizStream,
   saveQuizAssignment,
   publishQuizAssignment,
 } from '@/api/quiz'
-import { fetchQuestionBank } from '@/api/questionBank'
 import { useUserStore } from '@/stores/user'
-import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { difficultyLabels } from '@/utils/exerciseJudge'
 import type { QuizQuestion, RagReference, ExerciseType } from '@/types'
 
 const userStore = useUserStore()
 
 const currentStep = ref<1 | 2>(1)
-const createMode = ref<'ai' | 'bank'>('ai')
 const step1Ref = ref<InstanceType<typeof QuizWizardStep1Config> | null>(null)
 
 const generating = ref(false)
@@ -36,9 +35,10 @@ const ragReferences = ref<RagReference[]>([])
 const publishDeadline = ref('')
 const publishAllowReview = ref(false)
 
-const bankQuestions = ref<QuizQuestion[]>([])
-const bankSelectedIds = ref<number[]>([])
-const bankLoading = ref(false)
+// 题库挑题弹窗
+const bankPickerVisible = ref(false)
+const pickerCourseId = computed(() => step1Ref.value?.form?.courseId)
+const existingIds = computed(() => visibleQuestions.value.map((q) => q.id))
 
 const assignmentRefreshTrigger = ref(0)
 const savedConfig = ref<{
@@ -112,53 +112,46 @@ async function handleGenerate(config: {
   generating.value = false
 }
 
-// ===== 从题库选题 =====
-function loadBankQuestions() {
-  const courseId = step1Ref.value?.form?.courseId
-  if (!courseId) return
-  bankLoading.value = true
-  fetchQuestionBank({ course_id: courseId, status: 'published' })
-    .then((data) => { bankQuestions.value = data })
-    .finally(() => { bankLoading.value = false })
+// ===== 从题库挑题（弹窗式，追加到审核列表） =====
+/** 确保有 savedConfig（题库题优先时用当前表单信息构造） */
+function ensureSavedConfig(fallbackTitleSuffix: string) {
+  if (savedConfig.value) return
+  const form = step1Ref.value?.form
+  if (!form) return
+  const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === form.courseId)
+  const classOpt = step1Ref.value?.classOptions.find((c) => c.value === form.classId)
+  savedConfig.value = {
+    courseId: form.courseId!,
+    classId: form.classId!,
+    courseName: courseOpt?.label || '',
+    className: classOpt?.label || '',
+    title: form.title || `${courseOpt?.label || ''} - ${fallbackTitleSuffix}`,
+  }
 }
 
-function handleBankSelectionChange(rows: QuizQuestion[]) {
-  bankSelectedIds.value = rows.map((r) => r.id)
-}
-
-function addFromBankToReview() {
-  if (!bankSelectedIds.value.length) {
-    ElMessage.warning('请从题库勾选题目')
+function openBankPicker() {
+  if (!pickerCourseId.value) {
+    ElMessage.warning('请先选择课程')
     return
   }
-  const selected = bankQuestions.value.filter((q) => bankSelectedIds.value.includes(q.id))
-  visibleQuestions.value = selected.map((q) => ({ ...q }))
-  ragReferences.value = []
-  generating.value = false
-  genError.value = ''
-
-  const form = step1Ref.value?.form
-  if (form) {
-    const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === form.courseId)
-    const classOpt = step1Ref.value?.classOptions.find((c) => c.value === form.classId)
-    savedConfig.value = {
-      courseId: form.courseId!,
-      classId: form.classId!,
-      courseName: courseOpt?.label || '',
-      className: classOpt?.label || '',
-      title: form.title || `${courseOpt?.label || ''} - 题库组卷`,
-    }
-  }
-  currentStep.value = 2
-  ElMessage.success(`已选择 ${selected.length} 道题，进入审核`)
+  bankPickerVisible.value = true
 }
 
-watch(() => step1Ref.value?.form?.courseId, () => {
-  if (createMode.value === 'bank') loadBankQuestions()
-})
-watch(createMode, (mode) => {
-  if (mode === 'bank') loadBankQuestions()
-})
+function handleBankPicked(picked: QuizQuestion[]) {
+  // 按 id 去重后追加（不替换已有题目）
+  const existing = new Set(existingIds.value)
+  const fresh = picked.filter((q) => !existing.has(q.id))
+  if (!fresh.length) {
+    ElMessage.info('所选题目均已在组卷中')
+    return
+  }
+  ensureSavedConfig('题库组卷')
+  visibleQuestions.value = [...visibleQuestions.value, ...fresh]
+  genError.value = ''
+  generating.value = false
+  currentStep.value = 2
+  ElMessage.success(`已添加 ${fresh.length} 道题`)
+}
 
 // ===== 保存 / 发布 =====
 function buildSavePayload(questions: QuizQuestion[], status: 'draft') {
@@ -201,13 +194,8 @@ function resetWizard() {
   ragReferences.value = []
   genError.value = ''
   generating.value = false
-  bankSelectedIds.value = []
   publishDeadline.value = ''
   publishAllowReview.value = false
-}
-
-function typeLabel(type: ExerciseType): string {
-  return exerciseTypeLabels[type] || type
 }
 </script>
 
@@ -222,35 +210,12 @@ function typeLabel(type: ExerciseType): string {
 
     <!-- Step 1 -->
     <div v-if="currentStep === 1" class="wizard-content">
-      <el-radio-group v-model="createMode" class="mode-toggle">
-        <el-radio-button value="ai">AI 智能出题</el-radio-button>
-        <el-radio-button value="bank">从题库选题</el-radio-button>
-      </el-radio-group>
-
       <QuizWizardStep1Config ref="step1Ref" :loading="false" @generate="handleGenerate" />
 
-      <div v-if="createMode === 'bank'" class="bank-select-section">
-        <div class="bank-divider" />
-        <el-table
-          v-loading="bankLoading"
-          :data="bankQuestions"
-          max-height="360"
-          size="small"
-          @selection-change="handleBankSelectionChange"
-        >
-          <el-table-column type="selection" width="40" />
-          <el-table-column label="题干" prop="stem" show-overflow-tooltip />
-          <el-table-column label="题型" width="80">
-            <template #default="{ row }">{{ typeLabel(row.type) }}</template>
-          </el-table-column>
-          <el-table-column prop="knowledgePoint" label="知识点" width="120" />
-          <el-table-column prop="difficulty" label="难度" width="80">
-            <template #default="{ row }">{{ difficultyLabels[row.difficulty] || row.difficulty }}</template>
-          </el-table-column>
-        </el-table>
-        <el-button type="primary" :icon="Collection" style="margin-top: 12px" @click="addFromBankToReview">
-          进入审核（已选 {{ bankSelectedIds.length }}）
-        </el-button>
+      <!-- 题库挑题入口 -->
+      <div class="bank-entry">
+        <span class="bank-entry-hint">已有合适的题？</span>
+        <el-button :icon="Collection" plain @click="openBankPicker">从题库挑题加入</el-button>
       </div>
     </div>
 
@@ -258,6 +223,7 @@ function typeLabel(type: ExerciseType): string {
     <div v-else-if="currentStep === 2" class="wizard-content">
       <div class="step2-toolbar">
         <el-button :icon="Back" :disabled="generating" @click="currentStep = 1">返回配置</el-button>
+        <el-button :icon="Plus" :disabled="generating" @click="openBankPicker">从题库添加</el-button>
       </div>
 
       <!-- 错误 -->
@@ -287,6 +253,13 @@ function typeLabel(type: ExerciseType): string {
       <el-empty v-else description="未生成有效题目，请返回重试" />
     </div>
 
+    <QuestionBankPickerDialog
+      v-model="bankPickerVisible"
+      :course-id="pickerCourseId"
+      :exclude-ids="existingIds"
+      @confirm="handleBankPicked"
+    />
+
     <AssignmentListPanel :refresh-trigger="assignmentRefreshTrigger" />
   </div>
 </template>
@@ -310,18 +283,24 @@ function typeLabel(type: ExerciseType): string {
     min-height: 400px;
   }
 
-  .mode-toggle {
+  .bank-entry {
     display: flex;
+    align-items: center;
     justify-content: center;
-    margin-bottom: 8px;
-  }
+    gap: 12px;
+    margin-top: 8px;
+    padding-top: 20px;
+    border-top: 1px dashed #e2e8f0;
 
-  .bank-select-section {
-    margin-top: 24px;
-    .bank-divider { border-top: 1px dashed #e2e8f0; margin-bottom: 16px; }
+    .bank-entry-hint {
+      font-size: 13px;
+      color: #94a3b8;
+    }
   }
 
   .step2-toolbar {
+    display: flex;
+    gap: 8px;
     margin-bottom: 16px;
   }
 

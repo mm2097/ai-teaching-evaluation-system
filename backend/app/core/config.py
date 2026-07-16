@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     AI_STUDENT_DAILY_REQUEST_LIMIT: int = Field(default=5, ge=1, le=100)
     AI_STUDENT_MAX_QUESTIONS: int = Field(default=10, ge=1, le=30)
     AI_STAFF_DAILY_REQUEST_LIMIT: int = Field(default=30, ge=1, le=1000)
+    AI_SERVICE_PORT: int = Field(default=8001, ge=1, le=65535)
 
     @model_validator(mode="after")
     def validate_secret_key(self) -> "Settings":

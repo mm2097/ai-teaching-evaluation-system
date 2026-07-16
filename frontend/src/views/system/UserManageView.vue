@@ -1,9 +1,7 @@
 <!--
   用户与权限管理页面
   支持用户 CRUD、角色分配与账号启停
-  数据走本地 mock（演示环境）
-  数据走本地 mock（演示环境）
-  数据走本地 mock（演示环境）
+  用户角色与组织信息均由后端返回
 -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -27,7 +25,6 @@ const form = ref({
   username: '',
   name: '',
   role: 'teacher' as UserRole,
-  department: '',
   status: true,
 })
 
@@ -46,7 +43,7 @@ async function loadUsers(): Promise<void> {
 /** 新增用户 */
 function handleAdd(): void {
   isEdit.value = false
-  form.value = { id: 0, username: '', name: '', role: 'teacher', department: '', status: true }
+  form.value = { id: 0, username: '', name: '', role: 'teacher', status: true }
   dialogVisible.value = true
 }
 
@@ -58,7 +55,6 @@ function handleEdit(row: SystemUser): void {
     username: row.username,
     name: row.name,
     role: row.role,
-    department: row.department,
     status: row.status,
   }
   dialogVisible.value = true
@@ -105,7 +101,6 @@ async function saveUser(): Promise<void> {
       await userApi.update(form.value.id, {
         name: form.value.name,
         role: form.value.role,
-        department: form.value.department,
         status: form.value.status,
       })
     } else {
@@ -113,7 +108,6 @@ async function saveUser(): Promise<void> {
         username: form.value.username,
         name: form.value.name,
         role: form.value.role,
-        department: form.value.department,
         status: form.value.status,
       })
     }
@@ -192,7 +186,6 @@ onMounted(loadUsers)
             <el-option v-for="(label, key) in RoleLabels" :key="key" :label="label" :value="key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="院系"><el-input v-model="form.department" /></el-form-item>
         <el-form-item label="状态"><el-switch v-model="form.status" :disabled="form.role === 'admin'" /></el-form-item>
       </el-form>
       <template #footer>

@@ -24,15 +24,12 @@ def _check_dashboard_access(
 ) -> None:
     """校验看板数据查看权限。
 
-    - 管理员（admin）：可查看全部
     - 任课教师（teacher）：查看本课程时必须是自己授课的课程；不指定课程时允许
     - 学生（student）：无权查看看板统计
+    - 管理员（admin）：使用系统治理工作台，不接触教学统计
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-
-    if role_code == "admin":
-        return
 
     if role_code == "teacher":
         if course_id is not None:
@@ -63,7 +60,7 @@ def get_stats(
 ) -> dict:
     """首页统计数据。
 
-    权限：仅管理员和任课教师可查看。支持按班级筛选。
+    权限：仅任课教师可查看。支持按班级筛选。
     """
     _check_dashboard_access(session, current_user, course_id)
 
@@ -188,7 +185,7 @@ def get_grade_trend(
     """按批次计算成绩趋势（用于折线图）。支持班级或个人维度。
 
     权限：
-    - 教师/管理员可查看班级或课程级趋势
+    - 教师可查看班级或课程级趋势
     - 学生仅可查看自己的成绩趋势（student_id 须与本人一致）
     """
     role = session.get(SysRole, current_user.role_id)
@@ -204,7 +201,7 @@ def get_grade_trend(
         if not student or student.student_id != student_id:
             raise HTTPException(status_code=403, detail="学生仅可查看自己的成绩趋势")
     else:
-        # 教师/管理员：校验课程权限
+        # 教师：校验课程权限；管理员会被拒绝
         _check_dashboard_access(session, current_user, course_id)
     stmt = select(ExamBatch)
     if course_id:

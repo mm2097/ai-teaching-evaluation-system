@@ -16,11 +16,13 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.core.database import get_session
+from app.core.permissions import require_teacher
+from app.models import SysUser
 from app.services.agent.base import run_agent, run_agent_stream
 from app.services.agent.registry import get_registry
 from app.services.agent.tools import register_all_tools
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teacher)])
 
 
 class AgentChatRequest(BaseModel):
@@ -53,15 +55,14 @@ def _session_factory():
 def agent_chat(
     req: AgentChatRequest,
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(require_teacher),
 ) -> AgentChatResponse:
     """同步版 Agent 对话（阻塞等待完整结果）。
 
-    user_id 暂从 session 上下文取（演示阶段用固定 1）。
-    生产环境应从 JWT 解析。
+    user_id 从当前 JWT 登录用户解析。
     """
     _ensure_registered()
-    # 演示阶段：user_id 固定 1（admin）
-    user_id = 1
+    user_id = current_user.user_id
 
     try:
         result = run_agent(
@@ -88,10 +89,13 @@ def agent_chat(
 
 
 @router.post("/agent/chat/stream", tags=["Agent"])
-def agent_chat_stream(req: AgentChatRequest) -> StreamingResponse:
+def agent_chat_stream(
+    req: AgentChatRequest,
+    current_user: SysUser = Depends(require_teacher),
+) -> StreamingResponse:
     """SSE 流式版：实时推送工具调用过程，最后推送最终答案。"""
     _ensure_registered()
-    user_id = 1
+    user_id = current_user.user_id
 
     def event_stream():
         try:

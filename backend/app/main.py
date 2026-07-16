@@ -23,6 +23,7 @@ from app.api.v1.judge import router as judge_router
 from app.api.v1.agent import router as agent_router
 from app.api.v1.report import router as report_router
 from app.api.v1.vector_admin import router as vector_admin_router
+from app.api.v1.admin import router as admin_router
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -81,3 +82,4 @@ app.include_router(judge_router, prefix="/api/v1", tags=["AI 判题"])
 app.include_router(agent_router, prefix="/api/v1", tags=["AI Agent"])
 app.include_router(report_router, prefix="/api/v1", tags=["报告生成"])
 app.include_router(vector_admin_router, prefix="/api/v1", tags=["向量索引"])
+app.include_router(admin_router, prefix="/api/v1", tags=["系统管理"])

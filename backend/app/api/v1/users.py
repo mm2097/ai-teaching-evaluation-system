@@ -3,9 +3,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
+from app.core.operation_log import get_client_ip, save_operation_log
+from app.core.permissions import require_admin
 from app.core.security import hash_password
-from app.models import SysUser, SysRole, UserCreate, UserRead, UserUpdate
+from app.models import (
+    ClassInfo,
+    Student,
+    SysRole,
+    SysUser,
+    Teacher,
+    UserCreate,
+    UserUpdate,
+)
 
 router = APIRouter()
 
@@ -19,19 +28,72 @@ def _check_admin_protection(session: Session, target_user: SysUser, current_user
             raise HTTPException(status_code=403, detail="管理员不能操作其他管理员账号")
 
 
-@router.get("/users", response_model=list[UserRead], tags=["用户管理"])
-def list_users(session: Session = Depends(get_session)) -> list[SysUser]:
+def _serialize_user(session: Session, user: SysUser) -> dict:
+    """Return management fields without exposing password hashes."""
+    role = session.get(SysRole, user.role_id)
+    department = ""
+    if role and role.role_code == "teacher":
+        teacher = session.exec(
+            select(Teacher).where(Teacher.user_id == user.user_id)
+        ).first()
+        department = teacher.college if teacher else ""
+    elif role and role.role_code == "student":
+        student = session.exec(
+            select(Student).where(Student.user_id == user.user_id)
+        ).first()
+        class_info = session.get(ClassInfo, student.class_id) if student else None
+        department = class_info.college if class_info else ""
+    elif role and role.role_code == "admin":
+        department = "系统管理"
+
+    return {
+        "user_id": user.user_id,
+        "username": user.username,
+        "real_name": user.real_name,
+        "role_id": user.role_id,
+        "role_code": role.role_code if role else "",
+        "role_name": role.role_name if role else "",
+        "department": department,
+        "status": user.status,
+        "create_time": user.create_time,
+    }
+
+
+@router.get("/roles", tags=["用户管理"])
+def list_roles(
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(require_admin),
+) -> list[dict]:
+    """List roles available for account assignment."""
+    roles = session.exec(select(SysRole).order_by(SysRole.role_id)).all()
+    return [
+        {
+            "role_id": role.role_id,
+            "role_code": role.role_code,
+            "role_name": role.role_name,
+            "description": role.description,
+        }
+        for role in roles
+    ]
+
+
+@router.get("/users", tags=["用户管理"])
+def list_users(
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(require_admin),
+) -> list[dict]:
     """列出所有用户。"""
-    return session.exec(select(SysUser)).all()
+    users = session.exec(select(SysUser).order_by(SysUser.create_time.desc())).all()
+    return [_serialize_user(session, user) for user in users]
 
 
-@router.post("/users", response_model=UserRead, status_code=201, tags=["用户管理"])
+@router.post("/users", status_code=201, tags=["用户管理"])
 def create_user(
     payload: UserCreate,
     request: Request,
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
-) -> SysUser:
+    current_user: SysUser = Depends(require_admin),
+) -> dict:
     """创建用户。用户名重复返回 400。"""
     if session.exec(select(SysUser).where(SysUser.username == payload.username)).first():
         raise HTTPException(status_code=400, detail="用户名已存在")
@@ -54,26 +116,30 @@ def create_user(
         content=f"创建用户：{user.username}",
         ip_address=get_client_ip(request),
     )
-    return user
+    return _serialize_user(session, user)
 
 
-@router.get("/users/{user_id}", response_model=UserRead, tags=["用户管理"])
-def get_user(user_id: int, session: Session = Depends(get_session)) -> SysUser:
+@router.get("/users/{user_id}", tags=["用户管理"])
+def get_user(
+    user_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(require_admin),
+) -> dict:
     """查询单个用户。不存在返回 404。"""
     user = session.get(SysUser, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
-    return user
+    return _serialize_user(session, user)
 
 
-@router.put("/users/{user_id}", response_model=UserRead, tags=["用户管理"])
+@router.put("/users/{user_id}", tags=["用户管理"])
 def update_user(
     user_id: int,
     payload: UserUpdate,
     request: Request,
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
-) -> SysUser:
+    current_user: SysUser = Depends(require_admin),
+) -> dict:
     """更新用户(只改传入的字段)。"""
     user = session.get(SysUser, user_id)
     if not user:
@@ -102,7 +168,7 @@ def update_user(
         content=f"更新用户：{user.username}",
         ip_address=get_client_ip(request),
     )
-    return user
+    return _serialize_user(session, user)
 
 
 @router.delete("/users/{user_id}", status_code=204, tags=["用户管理"])
@@ -110,7 +176,7 @@ def delete_user(
     user_id: int,
     request: Request,
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_admin),
 ) -> None:
     """删除用户。"""
     user = session.get(SysUser, user_id)

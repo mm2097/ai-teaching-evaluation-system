@@ -6,13 +6,20 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { routeParentMap, routeTitleMap } from '@/config/menu'
+import { useUserStore } from '@/stores/user'
 
 const route = useRoute()
+const userStore = useUserStore()
 
 /** 面包屑项列表 */
 const breadcrumbs = computed(() => {
   const path = route.path
-  const items: { title: string; path?: string }[] = [{ title: '首页', path: '/dashboard' }]
+  const homePath = userStore.userInfo?.role === 'admin'
+    ? '/admin/dashboard'
+    : userStore.userInfo?.role === 'student'
+      ? '/student/dashboard'
+      : '/dashboard'
+  const items: { title: string; path?: string }[] = [{ title: '首页', path: homePath }]
 
   const parent = routeParentMap[path]
   if (parent) {
@@ -20,7 +27,7 @@ const breadcrumbs = computed(() => {
   }
 
   const currentTitle = routeTitleMap[path]
-  if (currentTitle && path !== '/dashboard') {
+  if (currentTitle && path !== homePath) {
     items.push({ title: currentTitle })
   }
 

@@ -2,6 +2,7 @@
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
 import request, { USE_MOCK } from '@/utils/request'
+import { getToken } from '@/utils/auth'
 import {
   appendLocalErrorBook,
   buildErrorBookItems,
@@ -146,7 +147,15 @@ export interface SaveQuizAssignmentParams {
 }
 
 function buildGeneratePayload(params: GenerateQuizParams) {
-  const payload: Record<string, any> = {
+  const payload: {
+    courseId: number
+    knowledgePoints: string[]
+    questionTypes: ExerciseType[]
+    questionCount: number
+    extraRequirements: string
+    difficultyDistribution?: GenerateQuizParams['difficultyDistribution']
+    difficulty?: DifficultyLevel
+  } = {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
     questionTypes: params.questionTypes,
@@ -223,7 +232,10 @@ export async function generateQuizStream(params: GenerateQuizParams, callbacks: 
   try {
     const response = await fetch('/api/v1/exercises/generate/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken() || ''}`,
+      },
       body: JSON.stringify(payload),
     })
 
@@ -321,6 +333,7 @@ export interface QuizSubmitResult {
   score: number
   totalScore: number
   correctCount: number
+  manualRequiredCount?: number
   taskId?: number
   taskTitle?: string
   allowReview?: boolean

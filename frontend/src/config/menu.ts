@@ -7,10 +7,16 @@ import type { MenuItem, UserRole } from '@/types'
 /** 完整菜单树 */
 export const menuList: MenuItem[] = [
   {
+    path: '/admin/dashboard',
+    title: '管理工作台',
+    icon: 'Monitor',
+    roles: ['admin'],
+  },
+  {
     path: '/dashboard',
     title: '综合看板',
     icon: 'Odometer',
-    roles: ['admin', 'teacher'],
+    roles: ['teacher'],
   },
   // ---- 学生端 ----
   {
@@ -33,12 +39,12 @@ export const menuList: MenuItem[] = [
     path: '/analysis',
     title: '智能分析',
     icon: 'DataAnalysis',
-    roles: ['admin', 'teacher'],
+    roles: ['teacher'],
     children: [
       { path: '/analysis/profile', title: '学情画像', icon: 'User' },
       { path: '/analysis/trend', title: '成绩趋势预测', icon: 'TrendCharts' },
       { path: '/analysis/knowledge', title: '知识点掌握度', icon: 'Grid' },
-      { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell', roles: ['admin', 'teacher'] },
+      { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell' },
     ],
   },
   // ---- 学生端分析 ----
@@ -57,12 +63,13 @@ export const menuList: MenuItem[] = [
     path: '/quiz',
     title: 'AI 智能辅助教学',
     icon: 'EditPen',
+    roles: ['teacher', 'student'],
     children: [
       { path: '/quiz/bank', title: '题库管理', icon: 'Collection', roles: ['teacher'] },
       { path: '/quiz/manage', title: 'AI 出题', icon: 'MagicStick', roles: ['teacher'] },
       { path: '/quiz/records', title: '答题记录', icon: 'List', roles: ['teacher'] },
       { path: '/quiz/answer', title: '在线答题', icon: 'Edit', roles: ['student'] },
-      { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound' },
+      { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound', roles: ['teacher'] },
       { path: '/student/quiz-list', title: '答题任务', icon: 'List', roles: ['student'] },
     ],
   },
@@ -90,8 +97,9 @@ export const menuList: MenuItem[] = [
     path: '/report',
     title: '报告中心',
     icon: 'Tickets',
+    roles: ['teacher', 'student'],
     children: [
-      { path: '/report/center', title: '报告生成导出', icon: 'Download' },
+      { path: '/report/center', title: '报告生成导出', icon: 'Download', roles: ['teacher', 'student'] },
     ],
   },
   {
@@ -102,7 +110,7 @@ export const menuList: MenuItem[] = [
     children: [
       { path: '/system/user', title: '用户权限管理', icon: 'UserFilled' },
       { path: '/system/log', title: '系统日志', icon: 'List' },
-      { path: '/system/config', title: '基础参数配置', icon: 'Operation' },
+      { path: '/system/config', title: '基础数据概览', icon: 'Operation' },
     ],
   },
 ]
@@ -128,6 +136,7 @@ export function filterMenusByRole(menus: MenuItem[], role: UserRole): MenuItem[]
 
 /** 路由 meta 标题映射，用于面包屑 */
 export const routeTitleMap: Record<string, string> = {
+  '/admin/dashboard': '管理工作台',
   '/dashboard': '综合看板',
   '/data/import': '数据上传',
   '/data/manage': '数据管理',
@@ -145,7 +154,7 @@ export const routeTitleMap: Record<string, string> = {
   '/report/center': '报告生成导出',
   '/system/user': '用户权限管理',
   '/system/log': '系统日志',
-  '/system/config': '基础参数配置',
+  '/system/config': '基础数据概览',
   '/student/dashboard': '我的学习',
   '/student/profile': '个人学情画像',
   '/student/knowledge': '知识点掌握度',

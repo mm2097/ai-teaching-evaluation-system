@@ -66,6 +66,11 @@ function handleEdit(row: SystemUser): void {
 
 /** 删除用户 */
 async function handleDelete(row: SystemUser): Promise<void> {
+  // 系统管理员账号不允许删除（包括自己），防止管理员账号被清除
+  if (row.role === 'admin') {
+    ElMessage.warning('不允许删除系统管理员账号')
+    return
+  }
   await ElMessageBox.confirm(`确定删除用户 "${row.name}" 吗？`, '删除确认', { type: 'warning' })
   try {
     await userApi.remove(row.id)
@@ -160,10 +165,9 @@ onMounted(loadUsers)
         <el-table-column prop="department" label="所属院系" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tooltip v-if="row.role === 'admin'" content="不允许启用/禁用系统管理员账号" placement="top">
-              <span><el-switch :model-value="row.status" :disabled="true" /></span>
+            <el-tooltip :disabled="row.role !== 'admin'" content="不允许启用/禁用系统管理员账号" placement="top">
+              <el-switch :model-value="row.status" :disabled="row.role === 'admin'" @change="toggleStatus(row)" />
             </el-tooltip>
-            <el-switch v-else :model-value="row.status" @change="toggleStatus(row)" />
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="120" />
@@ -171,7 +175,9 @@ onMounted(loadUsers)
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
             <el-button type="warning" link size="small" @click="resetPassword(row)">重置密码</el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+            <el-tooltip :disabled="row.role !== 'admin'" content="不允许删除系统管理员账号" placement="top">
+              <el-button type="danger" link size="small" :disabled="row.role === 'admin'" @click="handleDelete(row)">删除</el-button>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>

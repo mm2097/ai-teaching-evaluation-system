@@ -138,6 +138,14 @@ export interface TeachingDataRecord {
   attendance?: string
   homework?: string
   dataType: 'score' | 'attendance' | 'assignment'
+  /** 成绩数据的批次名称（如"期中考试""期末考试"），考勤数据的状态文本 */
+  batchName?: string
+  /** 知识点/备注信息 */
+  remark?: string
+  /** 考核批次 ID */
+  batchId?: number
+  /** 原始上传行数据 JSON（含完整表头-值对） */
+  sourceData?: string
   importLogId?: number
   sourceFileName?: string
 }
@@ -164,6 +172,7 @@ export interface StudentProfileData {
   courseName: string
   tags: string[]
   radarValues: number[]
+  radarIndicators?: { name: string; max: number }[]
   dimensionScores: { name: string; score: number; desc: string }[]
   strongPoints: string
   weakPoints: string
@@ -244,6 +253,8 @@ export interface ValidationError {
   row: number
   column: string
   message: string
+  /** 多 sheet 文件时标识所属 sheet 名 */
+  sheet?: string
 }
 
 /** 题目类型（对齐后端 Exercise.type） */
@@ -313,6 +324,7 @@ export interface ExerciseOption {
 export interface QuizQuestion {
   id: number
   courseId?: number
+  courseName?: string
   type: ExerciseType
   stem: string
   options?: ExerciseOption[]
@@ -412,6 +424,16 @@ export interface QuizAssignment {
   publishTime?: string
   deadline?: string
   questions: QuizQuestion[]
+  /** 当前学生是否已提交 */
+  submitted?: boolean
+  /** 当前学生得分（已提交时） */
+  myScore?: number
+  /** 当前学生提交记录 ID（用于查看结果） */
+  mySubmissionId?: number
+  /** 最大答题次数 */
+  maxAttempts?: number
+  /** 是否允许交卷后查看题目详情 */
+  allowReview?: boolean
 }
 
 /** 学生答题记录 */
@@ -423,7 +445,7 @@ export interface QuizSubmission {
   score: number
   totalScore: number
   submitTime: string
-  answers: Record<number, string | boolean>
+  answers: Record<number, string | string[] | boolean>
 }
 
 /** 角色中文名称映射 */

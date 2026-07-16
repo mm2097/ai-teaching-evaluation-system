@@ -14,6 +14,8 @@ const props = defineProps<{
   icon: string
   color: string
   trend?: number
+  /** 'number' 大数字展示（默认），'text' 文本展示（小字、可换行） */
+  variant?: 'number' | 'text'
 }>()
 
 /** 动态解析 Element Plus 图标组件 */
@@ -23,7 +25,7 @@ const IconComponent = computed(() => {
 </script>
 
 <template>
-  <div class="stat-card">
+  <div class="stat-card" :class="{ 'stat-card--text': variant === 'text' }">
     <div class="stat-card__icon" :style="{ background: `${color}15`, color }">
       <el-icon :size="28"><component :is="IconComponent" /></el-icon>
     </div>
@@ -67,10 +69,18 @@ const IconComponent = computed(() => {
     flex-shrink: 0;
   }
 
+  &__content {
+    overflow: hidden;
+    min-width: 0;
+  }
+
   &__title {
     font-size: 13px;
     color: #64748b;
     margin-bottom: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__value {
@@ -78,13 +88,32 @@ const IconComponent = computed(() => {
       font-size: 28px;
       font-weight: 700;
       color: #1e293b;
-      line-height: 1;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+      display: inline-block;
     }
 
     .unit {
       font-size: 14px;
       color: #94a3b8;
       margin-left: 4px;
+    }
+  }
+
+  // 文本型卡片：小字、允许换行，便于展示完整课程/班级名称
+  &--text {
+    .stat-card__value .num {
+      font-size: 17px;
+      font-weight: 600;
+      line-height: 1.35;
+      white-space: normal;
+      word-break: break-all;
+      overflow: visible;
+      text-overflow: unset;
+      display: block;
     }
   }
 

@@ -13,7 +13,9 @@ from sqlmodel import Session, select
 from app.models import (
     Course,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
+    IndividualScore,
     ScoreRecord,
     Student,
 )
@@ -75,20 +77,41 @@ def build_class_context(
 
     # 班级最近一次 batch 成绩统计
     batches = session.exec(
-        select(ExamBatch).where(ExamBatch.course_id == course_id).order_by(ExamBatch.exam_time)
+        select(ExamBatch).where(ExamBatch.course_id == course_id).order_by(ExamBatch.create_time)
     ).all()
     if batches:
         last = batches[-1]
-        scores = session.exec(
+        # 从三张表收集成绩
+        all_scores: list[float] = []
+        # ScoreRecord（旧表兼容）
+        sr_scores = session.exec(
             select(ScoreRecord.score).where(
                 ScoreRecord.batch_id == last.batch_id,
                 ScoreRecord.student_id.in_(sids),  # type: ignore
             )
         ).all()
-        if scores:
-            ctx.avg_score = round(sum(scores) / len(scores), 1)
-            ctx.pass_rate = round(sum(1 for s in scores if s >= 60) / len(scores) * 100, 1)
-            ctx.excellent_rate = round(sum(1 for s in scores if s >= 85) / len(scores) * 100, 1)
+        all_scores.extend(float(s) for s in sr_scores)
+        # IndividualScore
+        ind_scores = session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.exam_batch_id == last.batch_id,
+                IndividualScore.student_id.in_(sids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in ind_scores)
+        # CourseTestDetail
+        dtl_scores = session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.exam_batch_id == last.batch_id,
+                CourseTestDetail.student_id.in_(sids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in dtl_scores)
+
+        if all_scores:
+            ctx.avg_score = round(sum(all_scores) / len(all_scores), 1)
+            ctx.pass_rate = round(sum(1 for s in all_scores if s >= 60) / len(all_scores) * 100, 1)
+            ctx.excellent_rate = round(sum(1 for s in all_scores if s >= 85) / len(all_scores) * 100, 1)
 
     # 知识点薄弱
     class_mastery = compute_class_mastery(session, course_id, class_id)

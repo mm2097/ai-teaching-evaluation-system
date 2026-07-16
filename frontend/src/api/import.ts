@@ -1,40 +1,46 @@
 /**
- * 数据导入 API（调用真实后端 /api/v1/* 接口）
+ * 数据导入 API — 调用真实后端 /api/v1/teaching-data/upload
  */
 import request from '@/utils/request'
-import type { ImportLog, ImportType } from '@/types'
+import type { ImportLog } from '@/types'
 
-export interface ImportExecuteParams {
-  importType: ImportType
-  dataSource: 'excel' | 'txt' | 'database'
+// ---------------------------------------------------------------------------
+// 导入结果（对应后端 upload_teaching_data 返回值）
+// ---------------------------------------------------------------------------
+
+export interface ImportResult {
   fileName: string
-  totalCount?: number
-  operatorName: string
+  courseId: number
+  courseName: string
+  detectedTemplate: string | null
+  sheetsProcessed: string[]
+  successCount: number
+  errorCount: number
+  errors: { sheet: string; row: number; field: string; message: string }[]
+  analysisRefresh: Record<string, unknown>
 }
 
 /** 获取导入日志列表（当前后端暂无导入日志表，返回空列表） */
-export async function fetchImportLogs(_importType?: ImportType): Promise<ImportLog[]> {
+export async function fetchImportLogs(): Promise<ImportLog[]> {
   return []
 }
 
-/** 执行数据导入（模拟成功，后续可接入真实后端） */
-export async function executeImport(params: ImportExecuteParams): Promise<ImportLog> {
-  const newLog: ImportLog = {
-    id: Date.now(),
-    importType: params.importType,
-    dataSource: params.dataSource,
-    fileName: params.fileName,
-    totalCount: params.totalCount || 0,
-    successCount: (params.totalCount || 0) - Math.floor(Math.random() * 5),
-    failCount: Math.floor(Math.random() * 5),
-    operatorName: params.operatorName,
-    importTime: new Date().toLocaleString('zh-CN', { hour12: false }).replace(/\//g, '-'),
-    status: 1,
-  }
-  return newLog
-}
+/**
+ * 上传文件到后端并执行数据导入。
+ * POST /api/v1/teaching-data/upload (multipart/form-data)
+ */
+export async function executeImport(
+  file: File,
+  courseId: number,
+): Promise<ImportResult> {
+  const formData = new FormData()
+  formData.append('file', file)
 
-/** 根据 ID 获取导入日志 */
-export async function fetchImportLogById(_id: number): Promise<ImportLog | undefined> {
-  return undefined
+  const res = await request.post('/v1/teaching-data/upload', formData, {
+    params: { course_id: courseId },
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,  // 大文件多 sheet 上传需要较长时间
+  })
+
+  return res.data as ImportResult
 }

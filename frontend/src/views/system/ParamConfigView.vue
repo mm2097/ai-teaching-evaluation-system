@@ -71,9 +71,8 @@ function addDepartment(): void {
     return
   }
   basicData.value.departments.push({
-    id: Date.now(),
     label: newDeptName.value,
-    value: newDeptName.value.slice(0, 2).toLowerCase(),
+    value: Date.now(),
   })
   deptDialogVisible.value = false
   newDeptName.value = ''

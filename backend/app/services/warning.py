@@ -21,8 +21,11 @@ from sqlmodel import Session, select
 
 from app.models import (
     AttendanceRecord,
+    AttendanceSheet,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
+    IndividualScore,
     InteractionRecord,
     ScoreRecord,
     StudyWarning,
@@ -66,51 +69,106 @@ def _check_w1_w2_scores(
 ) -> list[WarningHit]:
     """W1 成绩下滑 + W2 暴跌离群。"""
     hits: list[WarningHit] = []
+
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        .order_by(ExamBatch.create_time)
+    ).all()
+    if len(batch_ids) < 2:
+        return hits
+
+    # Collect score entries across all three tables
+    score_entries: list[tuple[int, str, float, int]] = []
+    # (batch_id, batch_name, score, source_type: 1=ScoreRecord, 2=IndividualScore, 3=CourseTestDetail)
+
+    # 1. ScoreRecord（旧表兼容）
     rows = session.exec(
         select(ScoreRecord, ExamBatch)
         .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
         .where(
             ScoreRecord.student_id == student_id,
-            ScoreRecord.course_id == course_id,
+            ScoreRecord.batch_id.in_(batch_ids),
         )
-        .order_by(ExamBatch.exam_time)
+        .order_by(ExamBatch.create_time)
     ).all()
-    if len(rows) < 2:
+    for sr, eb in rows:
+        score_entries.append((eb.batch_id, eb.batch_name, float(sr.score), 1))
+
+    # 2. IndividualScore
+    ind_rows = session.exec(
+        select(IndividualScore, ExamBatch)
+        .join(ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            IndividualScore.student_id == student_id,
+            IndividualScore.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for isc, eb in ind_rows:
+        score_entries.append((eb.batch_id, eb.batch_name, float(isc.score), 2))
+
+    # 3. CourseTestDetail
+    dtl_rows = session.exec(
+        select(CourseTestDetail, ExamBatch)
+        .join(ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            CourseTestDetail.student_id == student_id,
+            CourseTestDetail.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for ctd, eb in dtl_rows:
+        score_entries.append((eb.batch_id, eb.batch_name, float(ctd.total_score), 3))
+
+    # Sort by batch creation order
+    bid_order = {bid: i for i, bid in enumerate(batch_ids)}
+    score_entries.sort(key=lambda x: bid_order.get(x[0], 999))
+
+    if len(score_entries) < 2:
         return hits
 
     # W1：相邻下降
     cfg_drop = WARNING_CONFIG["w1_drop"]
     cfg_severe = WARNING_CONFIG["w1_severe_drop"]
-    for i in range(1, len(rows)):
-        prev = float(rows[i - 1][0].score)
-        curr = float(rows[i][0].score)
+    for i in range(1, len(score_entries)):
+        prev = score_entries[i - 1][2]
+        curr = score_entries[i][2]
         drop = prev - curr
         if drop >= cfg_severe:
             hits.append(WarningHit(
                 rule="W1", level="中",
-                reason=f"{rows[i][1].batch_name}较上次下滑 {drop:.1f} 分（严重）"
+                reason=f"{score_entries[i][1]}较上次下滑 {drop:.1f} 分（严重）"
             ))
         elif drop >= cfg_drop:
             hits.append(WarningHit(
                 rule="W1", level="低",
-                reason=f"{rows[i][1].batch_name}较上次下滑 {drop:.1f} 分"
+                reason=f"{score_entries[i][1]}较上次下滑 {drop:.1f} 分"
             ))
 
     # W2：单次低于班级均值 2σ
     cfg_sigma = WARNING_CONFIG["w2_sigma"]
-    for sr, eb in rows:
-        class_scores = session.exec(
-            select(ScoreRecord.score).where(ScoreRecord.batch_id == eb.batch_id)
-        ).all()
+    for bid, bname, sscore, stype in score_entries:
+        if stype == 1:  # ScoreRecord
+            class_scores = session.exec(
+                select(ScoreRecord.score).where(ScoreRecord.batch_id == bid)
+            ).all()
+        elif stype == 2:  # IndividualScore
+            class_scores = session.exec(
+                select(IndividualScore.score).where(IndividualScore.exam_batch_id == bid)
+            ).all()
+        else:  # CourseTestDetail
+            class_scores = session.exec(
+                select(CourseTestDetail.total_score).where(CourseTestDetail.exam_batch_id == bid)
+            ).all()
         if len(class_scores) < 3:
             continue
         mean = sum(class_scores) / len(class_scores)
         var = sum((s - mean) ** 2 for s in class_scores) / len(class_scores)
         std = math.sqrt(var) or 1.0
-        if (mean - float(sr.score)) > cfg_sigma * std:
+        if (mean - sscore) > cfg_sigma * std:
             hits.append(WarningHit(
                 rule="W2", level="高",
-                reason=f"{eb.batch_name}成绩低于班级均值 {cfg_sigma}σ（统计离群）"
+                reason=f"{bname}成绩低于班级均值 {cfg_sigma}σ（统计离群）"
             ))
     return hits
 
@@ -119,16 +177,56 @@ def _check_w3_attendance(
     session: Session, student_id: int, course_id: int
 ) -> list[WarningHit]:
     """W3 缺勤超标。"""
+
+    _ATTENDANCE_SLOTS = [
+        "attendance_1", "attendance_2", "attendance_3", "attendance_4",
+        "attendance_5", "attendance_6", "attendance_7", "attendance_8",
+        "attendance_9", "attendance_10", "attendance_11", "attendance_12",
+        "attendance_13", "attendance_14", "attendance_15", "attendance_16",
+        "attendance_17", "attendance_18", "attendance_19", "attendance_20",
+        "attendance_21", "attendance_22", "attendance_23", "attendance_24",
+        "attendance_25", "attendance_26", "attendance_27", "attendance_28",
+        "attendance_29", "attendance_30", "attendance_31", "attendance_32",
+    ]
+
+    attendance_batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+
+    # AttendanceRecord（旧表兼容）
     records = session.exec(
         select(AttendanceRecord).where(
             AttendanceRecord.student_id == student_id,
             AttendanceRecord.course_id == course_id,
         )
     ).all()
-    if not records:
+    absent_old = sum(1 for r in records if r.status == 3)
+
+    # AttendanceSheet（新表）
+    sheets = session.exec(
+        select(AttendanceSheet).where(
+            AttendanceSheet.student_id == student_id,
+            AttendanceSheet.exam_batch_id.in_(attendance_batch_ids),  # type: ignore
+        )
+    ).all()
+
+    absent_new = 0
+    att_sheet_slots = 0
+    for sh in sheets:
+        for attr in _ATTENDANCE_SLOTS:
+            val = getattr(sh, attr, None)
+            if val is not None:
+                att_sheet_slots += 1
+                if "缺" in str(val):
+                    absent_new += 1
+
+    absent = absent_old + absent_new
+    att_total = len(records) + att_sheet_slots
+
+    if not records and not sheets:
         return []
-    absent = sum(1 for r in records if r.status == 3)  # status=3 缺勤
-    rate = absent / len(records)
+
+    rate = absent / max(att_total, 1)
     if absent >= WARNING_CONFIG["w3_absence_count"] or rate > WARNING_CONFIG["w3_absence_rate"]:
         return [WarningHit(
             rule="W3", level="低",
@@ -140,38 +238,8 @@ def _check_w3_attendance(
 def _check_w4_homework(
     session: Session, student_id: int, course_id: int
 ) -> list[WarningHit]:
-    """W4 作业未提交。简化：以班级最大提交数为分母。"""
-    own = session.exec(
-        select(InteractionRecord).where(
-            InteractionRecord.student_id == student_id,
-            InteractionRecord.course_id == course_id,
-            InteractionRecord.type == 3,
-        )
-    ).all()
-    course_students = session.exec(
-        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    ).all()
-    max_sub = 0
-    for sid in course_students:
-        c = sum(
-            1 for _ in session.exec(
-                select(InteractionRecord).where(
-                    InteractionRecord.student_id == sid,
-                    InteractionRecord.course_id == course_id,
-                    InteractionRecord.type == 3,
-                )
-            )
-        )
-        max_sub = max(max_sub, c)
-    if max_sub == 0:
-        return []
-    miss = max_sub - len(own)
-    if miss >= WARNING_CONFIG["w4_miss_hw"]:
-        return [WarningHit(
-            rule="W4", level="低",
-            reason=f"累计未提交作业 {miss} 次"
-        )]
-    return []
+    """W4 作业未提交（已禁用）。"""
+    return []  # disabled
 
 
 def _check_w5_mastery(

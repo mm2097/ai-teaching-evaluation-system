@@ -42,6 +42,10 @@ onMounted(async () => {
   if (userStore.userInfo?.studentId && userStore.userRole === 'student') {
     genParams.value.studentId = userStore.userInfo.studentId
     genParams.value.classId = userStore.userInfo.classId ?? genParams.value.classId
+    // 学生自动设置课程（取所选课程列表第一门）
+    if (courses.value.length > 0) {
+      genParams.value.courseId = courses.value[0].id
+    }
   }
 })
 
@@ -141,7 +145,10 @@ async function loadDashboardStats() {
 async function generateReport(): Promise<void> {
   generating.value = true
   try {
-    await loadDashboardStats()
+    // 看板统计仅教师/管理员可访问，学生跳过
+    if (!isStudent.value) {
+      await loadDashboardStats()
+    }
 
     // 学生个人报告/学习质量报告需要验证 studentId
     if ((genParams.value.reportType === 2 || genParams.value.reportType === 4) && !genParams.value.studentId) {
@@ -168,8 +175,9 @@ async function generateReport(): Promise<void> {
       format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
     })
     ElMessage.success('报告生成成功！')
-  } catch {
-    ElMessage.error('报告生成失败，请确认已选择课程和班级')
+  } catch (e: any) {
+    const msg = e?.response?.data?.detail || e?.message || '报告生成失败，请确认已选择课程和班级'
+    ElMessage.error(typeof msg === 'string' ? msg : '报告生成失败')
   } finally {
     generating.value = false
   }
@@ -291,6 +299,7 @@ function exportReport(): void {
       <div v-if="reportData" class="report-preview">
         <h2 style="text-align: center; margin-bottom: 20px">{{ previewTitle }}</h2>
 
+        <template v-if="!isStudent">
         <h3>一、核心指标概览</h3>
         <el-descriptions :column="2" border style="margin: 16px 0">
           <el-descriptions-item label="学生总数">{{ dashboardStats.studentCount ?? '-' }} 人</el-descriptions-item>
@@ -300,14 +309,15 @@ function exportReport(): void {
           <el-descriptions-item label="平均出勤率">{{ dashboardStats.attendanceRate ?? '-' }}%</el-descriptions-item>
           <el-descriptions-item label="预警学生">{{ dashboardStats.warningCount ?? '-' }} 人</el-descriptions-item>
         </el-descriptions>
+        </template>
 
-        <h3>二、总体概述 <el-tag size="small" :type="reportSourceTag">{{ reportSourceLabel }}</el-tag></h3>
+        <h3>{{ isStudent ? '一' : '二' }}、总体概述 <el-tag size="small" :type="reportSourceTag">{{ reportSourceLabel }}</el-tag></h3>
         <p>{{ reportData.summary }}</p>
 
-        <h3>三、关键结论</h3>
+        <h3>{{ isStudent ? '二' : '三' }}、关键结论</h3>
         <p>{{ reportData.conclusion }}</p>
 
-        <h3>四、建议措施</h3>
+        <h3>{{ isStudent ? '三' : '四' }}、建议措施</h3>
         <p>{{ reportData.suggestion }}</p>
 
         <el-alert

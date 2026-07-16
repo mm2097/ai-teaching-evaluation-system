@@ -41,6 +41,10 @@ const emit = defineEmits<{
 const filteredTargetTypes = targetTypeOptions.filter((o) =>
   props.allowedTargetTypes.includes(o.value),
 )
+
+function emitTargetId(value: string | number | undefined): void {
+  emit('update:targetId', value == null || value === '' ? undefined : Number(value))
+}
 </script>
 
 <template>
@@ -111,7 +115,7 @@ const filteredTargetTypes = targetTypeOptions.filter((o) =>
       :model-value="targetId"
       :students="studentList ?? []"
       :loading="studentLoading"
-      @update:model-value="emit('update:targetId', $event)"
+      @update:model-value="emitTargetId"
     />
 
     <el-button v-if="showQueryButton" type="primary" @click="emit('query')">查询</el-button>

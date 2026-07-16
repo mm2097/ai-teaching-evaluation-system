@@ -5,6 +5,9 @@ from typing import Optional
 from sqlalchemy import Text
 from sqlmodel import Field, SQLModel
 
+TASK_TYPE_ASSIGNMENT = "assignment"
+TASK_TYPE_SELF_PRACTICE = "self_practice"
+
 
 class AiQuestion(SQLModel, table=True):
     """AI 题目表 ai_question。"""
@@ -32,9 +35,12 @@ class AnswerTask(SQLModel, table=True):
     task_id: Optional[int] = Field(default=None, primary_key=True)
     course_id: int = Field(foreign_key="course.course_id", index=True)
     task_name: str = Field(max_length=64)
+    task_type: str = Field(default=TASK_TYPE_ASSIGNMENT, max_length=20)
     publish_time: datetime = Field(default_factory=datetime.now)
     deadline: datetime
     status: int = Field(default=0)  # 0=未开始, 1=进行中, 2=已结束
+    max_attempts: int = Field(default=1)  # 最大答题次数，默认1次
+    allow_review: int = Field(default=0)  # 0=交卷后不允许查看题目详情, 1=允许查看
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)
 
@@ -48,6 +54,17 @@ class TaskQuestion(SQLModel, table=True):
     task_id: int = Field(foreign_key="answer_task.task_id", index=True)
     question_id: int = Field(foreign_key="ai_question.question_id", index=True)
     sort_num: int = Field(default=0)
+    create_time: datetime = Field(default_factory=datetime.now)
+
+
+class AnswerTaskClass(SQLModel, table=True):
+    """答题任务的目标班级；没有关联记录表示课程内全部班级。"""
+
+    __tablename__ = "answer_task_class"
+
+    rel_id: Optional[int] = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="answer_task.task_id", unique=True, index=True)
+    class_id: int = Field(foreign_key="class_info.class_id", index=True)
     create_time: datetime = Field(default_factory=datetime.now)
 
 

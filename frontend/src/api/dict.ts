@@ -46,9 +46,9 @@ function mapClass(raw: any): ClassInfo {
     classCode: '',
     className: raw.class_name,
     majorId: 0,
-    majorName: '',
+    majorName: raw.major || '',
     deptId: 0,
-    grade: String(raw.enroll_year ?? ''),
+    grade: raw.grade || '',
   }
 }
 
@@ -66,13 +66,38 @@ export async function fetchDepartments(): Promise<Department[]> {
 
 /* ---------- 专业（暂无明细表，从班级 college 聚合） ---------- */
 
-export async function fetchMajors(params?: { deptId?: number }): Promise<Major[]> {
-  // 专业暂未独立建表，返回空列表
-  return []
+export async function fetchMajors(params?: {
+  deptId?: number
+  semesterCode?: string
+  grade?: string
+  teacherId?: number
+} | number): Promise<Major[]> {
+  const q: any = {}
+  if (typeof params === 'object' && params) {
+    if (params.semesterCode) q.semester = params.semesterCode
+    if (params.grade) q.grade = params.grade
+  }
+  const res = await request.get('/v1/dictionaries/majors', { params: q })
+  return (res.data as any[]).map((m: any) => ({
+    id: m.id,
+    majorCode: '',
+    majorName: m.majorName,
+    deptId: 0,
+  }))
 }
 
-export async function fetchDashboardGrades(_params: any): Promise<string[]> {
-  return []
+export async function fetchDashboardGrades(params?: {
+  deptId?: number
+  semesterCode?: string
+  majorId?: number
+  majorName?: string
+  teacherId?: number
+}): Promise<string[]> {
+  const q: any = {}
+  if (params?.semesterCode) q.semester = params.semesterCode
+  if (params?.majorName) q.major = params.majorName
+  const res = await request.get('/v1/dictionaries/grades', { params: q })
+  return res.data as string[]
 }
 
 /* ---------- 班级 ---------- */

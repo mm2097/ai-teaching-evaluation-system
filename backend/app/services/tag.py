@@ -18,7 +18,9 @@ from sqlmodel import Session, select
 from app.models import (
     AttendanceRecord,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
+    IndividualScore,
     InteractionRecord,
     ScoreRecord,
 )
@@ -45,27 +47,8 @@ def _score_std(scores: list[float]) -> float:
 
 
 def _interaction_p90(session: Session, course_id: int) -> int:
-    """班级互动次数 P90。"""
-    sids = session.exec(
-        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    ).all()
-    counts = []
-    for sid in sids:
-        c = sum(
-            1 for _ in session.exec(
-                select(InteractionRecord).where(
-                    InteractionRecord.student_id == sid,
-                    InteractionRecord.course_id == course_id,
-                    InteractionRecord.type.in_([1, 2, 4]),  # type: ignore
-                )
-            )
-        )
-        counts.append(c)
-    if not counts:
-        return 0
-    counts.sort()
-    idx = int(len(counts) * 0.9)
-    return counts[min(idx, len(counts) - 1)]
+    """班级互动次数 P90（已禁用）。"""
+    return 0  # disabled
 
 
 def generate_tags(
@@ -75,16 +58,46 @@ def generate_tags(
     tags: list[str] = []
 
     # 1. 稳定 / 2. 下滑 / 3. 进步（共用回归）
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        .order_by(ExamBatch.create_time)
+    ).all()
+
+    scores: list[float] = []
+    # ScoreRecord（旧表兼容）
     rows = session.exec(
         select(ScoreRecord, ExamBatch)
         .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
         .where(
             ScoreRecord.student_id == student_id,
-            ScoreRecord.course_id == course_id,
+            ScoreRecord.batch_id.in_(batch_ids),
         )
-        .order_by(ExamBatch.exam_time)
+        .order_by(ExamBatch.create_time)
     ).all()
-    scores = [float(r[0].score) for r in rows]
+    scores.extend(float(r[0].score) for r in rows)
+    # IndividualScore
+    ind_rows = session.exec(
+        select(IndividualScore, ExamBatch)
+        .join(ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            IndividualScore.student_id == student_id,
+            IndividualScore.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    scores.extend(float(isc.score) for isc, _ in ind_rows)
+    # CourseTestDetail
+    dtl_rows = session.exec(
+        select(CourseTestDetail, ExamBatch)
+        .join(ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            CourseTestDetail.student_id == student_id,
+            CourseTestDetail.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    scores.extend(float(ctd.total_score) for ctd, _ in dtl_rows)
+
     if len(scores) >= 3:
         std = _score_std(scores)
         if std < TAG_CONFIG["stable_std"]:
@@ -120,19 +133,19 @@ def generate_tags(
         if absent / len(atts) > TAG_CONFIG["absence_rate"]:
             tags.append("出勤风险")
 
-    # 6. 互动积极
-    own_int = sum(
-        1 for _ in session.exec(
-            select(InteractionRecord).where(
-                InteractionRecord.student_id == student_id,
-                InteractionRecord.course_id == course_id,
-                InteractionRecord.type.in_([1, 2, 4]),  # type: ignore
-            )
-        )
-    )
-    p90 = _interaction_p90(session, course_id)
-    if p90 > 0 and own_int >= p90:
-        tags.append("互动积极")
+    # 6. 互动积极（已禁用）
+    # own_int = sum(
+    #     1 for _ in session.exec(
+    #         select(InteractionRecord).where(
+    #             InteractionRecord.student_id == student_id,
+    #             InteractionRecord.course_id == course_id,
+    #             InteractionRecord.type.in_([1, 2, 4]),  # type: ignore
+    #         )
+    #     )
+    # )
+    # p90 = _interaction_p90(session, course_id)
+    # if p90 > 0 and own_int >= p90:
+    #     tags.append("互动积极")
 
     # 兜底：一个标签都没有，给个默认
     if not tags:

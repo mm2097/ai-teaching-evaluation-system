@@ -6,3 +6,5 @@ pydantic-settings
 pyjwt
 httpx
 chromadb
+openpyxl
+python-multipart

@@ -13,11 +13,13 @@ from sqlmodel import func, select
 from app.models import (
     AiQuestion,
     AttendanceRecord,
+    AttendanceSheet,
     ClassInfo,
     Course,
     CourseStudent,
+    CourseTestDetail,
     ExamBatch,
-    InteractionRecord,
+    IndividualScore,
     KnowledgeMastery,
     KnowledgePoint,
     KnowledgeModule,
@@ -65,21 +67,42 @@ def _t_get_course_overview(ctx, course_id: int = 0, **_) -> dict:
 
     # 最近一次考核成绩
     batches = ctx.session.exec(
-        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.exam_time)
+        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.create_time)
     ).all()
     avg_score = 0.0
     pass_rate = 0.0
     if batches:
         last = batches[-1]
-        scores = ctx.session.exec(
+        # 从三张表收集成绩
+        all_scores: list[float] = []
+        # ScoreRecord（旧表兼容）
+        sr_scores = ctx.session.exec(
             select(ScoreRecord.score).where(
                 ScoreRecord.batch_id == last.batch_id,
                 ScoreRecord.student_id.in_(student_ids),  # type: ignore
             )
         ).all()
-        if scores:
-            avg_score = round(sum(scores) / len(scores), 1)
-            pass_rate = round(sum(1 for s in scores if s >= 60) / len(scores) * 100, 1)
+        all_scores.extend(float(s) for s in sr_scores)
+        # IndividualScore
+        ind_scores = ctx.session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.exam_batch_id == last.batch_id,
+                IndividualScore.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in ind_scores)
+        # CourseTestDetail
+        dtl_scores = ctx.session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.exam_batch_id == last.batch_id,
+                CourseTestDetail.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in dtl_scores)
+
+        if all_scores:
+            avg_score = round(sum(all_scores) / len(all_scores), 1)
+            pass_rate = round(sum(1 for s in all_scores if s >= 60) / len(all_scores) * 100, 1)
 
     # 出勤率
     att_records = ctx.session.exec(
@@ -121,7 +144,7 @@ def _t_get_score_list(ctx, course_id: int = 0, assessment_id: int = 0, top_n: in
         return {"error": "未提供 course_id"}
 
     batches = ctx.session.exec(
-        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.exam_time)
+        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.create_time)
     ).all()
     if not batches:
         return {"assessment": None, "scores": []}
@@ -135,26 +158,58 @@ def _t_get_score_list(ctx, course_id: int = 0, assessment_id: int = 0, top_n: in
     else:
         target = batches[-1]
 
-    rows = ctx.session.exec(
+    # 从三张表收集成绩（去重：同一学生只取最高分）
+    student_score_map: dict[int, float] = {}
+
+    # ScoreRecord（旧表兼容）
+    sr_rows = ctx.session.exec(
         select(ScoreRecord, Student)
         .join(Student, ScoreRecord.student_id == Student.student_id)
         .where(ScoreRecord.batch_id == target.batch_id)
         .order_by(ScoreRecord.score.desc())
     ).all()
+    for sr, stu in sr_rows:
+        if stu.student_id not in student_score_map:
+            student_score_map[stu.student_id] = float(sr.score)
+
+    # IndividualScore
+    ind_rows = ctx.session.exec(
+        select(IndividualScore, Student)
+        .join(Student, IndividualScore.student_id == Student.student_id)
+        .where(IndividualScore.exam_batch_id == target.batch_id)
+        .order_by(IndividualScore.score.desc())
+    ).all()
+    for isc, stu in ind_rows:
+        if stu.student_id not in student_score_map:
+            student_score_map[stu.student_id] = float(isc.score)
+
+    # CourseTestDetail
+    dtl_rows = ctx.session.exec(
+        select(CourseTestDetail, Student)
+        .join(Student, CourseTestDetail.student_id == Student.student_id)
+        .where(CourseTestDetail.exam_batch_id == target.batch_id)
+        .order_by(CourseTestDetail.total_score.desc())
+    ).all()
+    for ctd, stu in dtl_rows:
+        if stu.student_id not in student_score_map:
+            student_score_map[stu.student_id] = float(ctd.total_score)
 
     student_ids = set(ctx.session.exec(
         select(CourseStudent.student_id).where(CourseStudent.course_id == cid)
     ).all())
 
+    # Build sorted list
+    score_list = [(sid, sc) for sid, sc in student_score_map.items() if sid in student_ids]
+    score_list.sort(key=lambda x: x[1], reverse=True)
+
     scores = []
-    for rank, (sr, stu) in enumerate(rows, 1):
-        if stu.student_id not in student_ids:
-            continue
+    for rank, (sid, sc) in enumerate(score_list, 1):
+        stu = ctx.session.get(Student, sid)
         scores.append({
             "rank": rank,
-            "student_id": stu.student_id,
-            "name": stu.real_name,
-            "score": round(float(sr.score), 1),
+            "student_id": sid,
+            "name": stu.real_name if stu else "",
+            "score": round(sc, 1),
         })
         if top_n and rank >= top_n:
             break
@@ -171,7 +226,7 @@ def _t_get_score_trend(ctx, course_id: int = 0, student_id: int = 0, **_) -> dic
         return {"error": "未提供 course_id"}
 
     batches = ctx.session.exec(
-        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.exam_time)
+        select(ExamBatch).where(ExamBatch.course_id == cid).order_by(ExamBatch.create_time)
     ).all()
     if not batches:
         return {"trend": []}
@@ -184,29 +239,73 @@ def _t_get_score_trend(ctx, course_id: int = 0, student_id: int = 0, **_) -> dic
         # 个人趋势
         trend = []
         for b in batches:
+            score: float | None = None
+            # ScoreRecord
             sr = ctx.session.exec(
-                select(ScoreRecord).where(
+                select(ScoreRecord.score).where(
                     ScoreRecord.batch_id == b.batch_id,
                     ScoreRecord.student_id == student_id,
                 )
             ).first()
+            if sr is not None:
+                score = round(float(sr[0]), 1)
+            else:
+                # IndividualScore
+                isc = ctx.session.exec(
+                    select(IndividualScore.score).where(
+                        IndividualScore.exam_batch_id == b.batch_id,
+                        IndividualScore.student_id == student_id,
+                    )
+                ).first()
+                if isc is not None:
+                    score = round(float(isc[0]), 1)
+                else:
+                    # CourseTestDetail
+                    ctd = ctx.session.exec(
+                        select(CourseTestDetail.total_score).where(
+                            CourseTestDetail.exam_batch_id == b.batch_id,
+                            CourseTestDetail.student_id == student_id,
+                        )
+                    ).first()
+                    if ctd is not None:
+                        score = round(float(ctd[0]), 1)
             trend.append({
                 "assessment": b.batch_name,
-                "score": round(float(sr.score), 1) if sr else None,
+                "score": score,
             })
         return {"scope": "student", "student_id": student_id, "trend": trend}
 
     # 班级趋势
     trend = []
     for b in batches:
-        scores = ctx.session.exec(
+        all_scores: list[float] = []
+        # ScoreRecord
+        sr_scores = ctx.session.exec(
             select(ScoreRecord.score).where(
                 ScoreRecord.batch_id == b.batch_id,
                 ScoreRecord.student_id.in_(student_ids),  # type: ignore
             )
         ).all()
-        avg = round(sum(scores) / len(scores), 1) if scores else 0.0
-        trend.append({"assessment": b.batch_name, "avg_score": avg, "count": len(scores)})
+        all_scores.extend(float(s) for s in sr_scores)
+        # IndividualScore
+        ind_scores = ctx.session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.exam_batch_id == b.batch_id,
+                IndividualScore.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in ind_scores)
+        # CourseTestDetail
+        dtl_scores = ctx.session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.exam_batch_id == b.batch_id,
+                CourseTestDetail.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        all_scores.extend(float(s) for s in dtl_scores)
+
+        avg = round(sum(all_scores) / len(all_scores), 1) if all_scores else 0.0
+        trend.append({"assessment": b.batch_name, "avg_score": avg, "count": len(all_scores)})
     return {"scope": "class", "trend": trend}
 
 
@@ -218,6 +317,11 @@ def _t_get_attendance(ctx, course_id: int = 0, student_id: int = 0, **_) -> dict
     if not cid:
         return {"error": "未提供 course_id"}
 
+    # 获取课程所有 batch_id 用于查询 AttendanceSheet
+    batch_ids = ctx.session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == cid)
+    ).all()
+
     if student_id:
         records = ctx.session.exec(
             select(AttendanceRecord).where(
@@ -225,14 +329,40 @@ def _t_get_attendance(ctx, course_id: int = 0, student_id: int = 0, **_) -> dict
                 AttendanceRecord.student_id == student_id,
             ).order_by(AttendanceRecord.attendance_date)
         ).all()
-        if not records:
+
+        # AttendanceSheet
+        sheets = ctx.session.exec(
+            select(AttendanceSheet).where(
+                AttendanceSheet.student_id == student_id,
+                AttendanceSheet.exam_batch_id.in_(batch_ids),  # type: ignore
+            )
+        ).all()
+
+        if not records and not sheets:
             return {"student_id": student_id, "rate": None, "absent_dates": []}
-        present = sum(1 for r in records if r.status == 0)
-        rate = round(present / len(records) * 100, 1)
+
+        # AttendanceRecord stats
+        ar_present = sum(1 for r in records if r.status == 0)
+        ar_total = len(records)
+        # AttendanceSheet stats
+        as_present = sum(sh.present_count or 0 for sh in sheets)
+        as_total = sum(sh.total_count or 0 for sh in sheets)
+
+        present = ar_present + as_present
+        total = ar_total + as_total
+        rate = round(present / total * 100, 1) if total else None
+
         absent = [
             {"date": str(r.attendance_date), "status": _attendance_status_name(r.status)}
             for r in records if r.status != 0
         ]
+        # 从 AttendanceSheet 统计缺勤
+        for sh in sheets:
+            for attr in _ATTENDANCE_FIELDS:
+                val = getattr(sh, attr, None)
+                if val and "缺" in str(val):
+                    absent.append({"date": f"batch_{sh.exam_batch_id}_{attr}", "status": "缺勤"})
+
         return {"student_id": student_id, "rate": rate, "absent_dates": absent}
 
     # 班级
@@ -245,11 +375,39 @@ def _t_get_attendance(ctx, course_id: int = 0, student_id: int = 0, **_) -> dict
             AttendanceRecord.student_id.in_(student_ids),  # type: ignore
         )
     ).all()
-    if not records:
+
+    # 班级 AttendanceSheet
+    sheets = ctx.session.exec(
+        select(AttendanceSheet).where(
+            AttendanceSheet.student_id.in_(student_ids),  # type: ignore
+            AttendanceSheet.exam_batch_id.in_(batch_ids),  # type: ignore
+        )
+    ).all()
+
+    if not records and not sheets:
         return {"scope": "class", "avg_rate": None}
-    present = sum(1 for r in records if r.status == 0)
-    avg_rate = round(present / len(records) * 100, 1)
-    return {"scope": "class", "avg_rate": avg_rate, "total_records": len(records)}
+
+    ar_present = sum(1 for r in records if r.status == 0)
+    ar_total = len(records)
+    as_present = sum(sh.present_count or 0 for sh in sheets)
+    as_total = sum(sh.total_count or 0 for sh in sheets)
+
+    present = ar_present + as_present
+    total = ar_total + as_total
+    avg_rate = round(present / total * 100, 1) if total else None
+    return {"scope": "class", "avg_rate": avg_rate, "total_records": total}
+
+
+_ATTENDANCE_FIELDS = [
+    "attendance_1", "attendance_2", "attendance_3", "attendance_4",
+    "attendance_5", "attendance_6", "attendance_7", "attendance_8",
+    "attendance_9", "attendance_10", "attendance_11", "attendance_12",
+    "attendance_13", "attendance_14", "attendance_15", "attendance_16",
+    "attendance_17", "attendance_18", "attendance_19", "attendance_20",
+    "attendance_21", "attendance_22", "attendance_23", "attendance_24",
+    "attendance_25", "attendance_26", "attendance_27", "attendance_28",
+    "attendance_29", "attendance_30", "attendance_31", "attendance_32",
+]
 
 
 def _attendance_status_name(status: int) -> str:
@@ -355,13 +513,48 @@ def _t_get_student_detail(ctx, course_id: int = 0, student_id: int = 0, **_) -> 
         return {"error": f"学生 {student_id} 不存在"}
 
     # 成绩历史
-    rows = ctx.session.exec(
+    batch_ids = ctx.session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == cid)
+        .order_by(ExamBatch.create_time)
+    ).all()
+
+    raw_scores: list[dict] = []
+    # ScoreRecord（旧表兼容）
+    sr_rows = ctx.session.exec(
         select(ScoreRecord, ExamBatch)
         .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
-        .where(ScoreRecord.student_id == student_id, ScoreRecord.course_id == cid)
-        .order_by(ExamBatch.exam_time)
+        .where(ScoreRecord.student_id == student_id, ScoreRecord.batch_id.in_(batch_ids))  # type: ignore
+        .order_by(ExamBatch.create_time)
     ).all()
-    scores = [{"assessment": eb.batch_name, "score": round(float(sr.score), 1)} for sr, eb in rows]
+    for sr, eb in sr_rows:
+        raw_scores.append({"assessment": eb.batch_name, "score": round(float(sr.score), 1), "batch_id": eb.batch_id})
+    # IndividualScore
+    ind_rows = ctx.session.exec(
+        select(IndividualScore, ExamBatch)
+        .join(ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id)
+        .where(IndividualScore.student_id == student_id, IndividualScore.exam_batch_id.in_(batch_ids))  # type: ignore
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for isc, eb in ind_rows:
+        raw_scores.append({"assessment": eb.batch_name, "score": round(float(isc.score), 1), "batch_id": eb.batch_id})
+    # CourseTestDetail
+    dtl_rows = ctx.session.exec(
+        select(CourseTestDetail, ExamBatch)
+        .join(ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id)
+        .where(CourseTestDetail.student_id == student_id, CourseTestDetail.exam_batch_id.in_(batch_ids))  # type: ignore
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for ctd, eb in dtl_rows:
+        raw_scores.append({"assessment": eb.batch_name, "score": round(float(ctd.total_score), 1), "batch_id": eb.batch_id})
+
+    # Sort by batch_id order, deduplicate
+    raw_scores.sort(key=lambda h: h["batch_id"])
+    seen: set[int] = set()
+    scores = []
+    for h in raw_scores:
+        if h["batch_id"] not in seen:
+            seen.add(h["batch_id"])
+            scores.append({"assessment": h["assessment"], "score": h["score"]})
 
     # 考勤
     atts = ctx.session.exec(

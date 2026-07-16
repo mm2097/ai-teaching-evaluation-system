@@ -40,13 +40,13 @@ class SysUser(SQLModel, table=True):
 
 
 class LoginRequest(SQLModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
 
 
 class UserCreate(SQLModel):
     username: str
-    password: str
+    password: str = Field(min_length=6, max_length=128)
     real_name: str
     role_id: int
     status: int = 1
@@ -54,7 +54,7 @@ class UserCreate(SQLModel):
 
 class UserUpdate(SQLModel):
     username: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=6, max_length=128)
     real_name: Optional[str] = None
     role_id: Optional[int] = None
     status: Optional[int] = None

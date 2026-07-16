@@ -19,6 +19,7 @@ class AttendanceRecord(SQLModel, table=True):
     attendance_date: date
     status: int = Field(default=0)  # 0=出勤, 1=迟到, 2=早退, 3=缺勤, 4=请假
     remark: Optional[str] = Field(default=None, max_length=255)
+    source_data: Optional[str] = Field(default=None)  # 原始上传行数据 JSON
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)

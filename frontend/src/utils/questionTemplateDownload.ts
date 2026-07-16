@@ -57,11 +57,24 @@ const sampleRows: string[][] = [
     '简单',
     '5',
   ],
+  [
+    '简答题',
+    '简述 TCP 三次握手的过程及其必要性。',
+    '',
+    '',
+    '',
+    '',
+    'TCP 三次握手用于建立可靠连接：客户端发送 SYN，服务器回复 SYN+ACK，客户端发送 ACK 确认。',
+    '评分要点：准确描述三次握手步骤；说明 SYN/ACK 作用；解释为何需要三次',
+    'TCP/IP协议',
+    '困难',
+    '10',
+  ],
 ]
 
 /** 下载题库 Excel 模板 */
 export function downloadQuestionExcelTemplate(): void {
-  const ws = XLSX.utils.aoa_to_sheet([questionTemplateHeaders, ...sampleRows])
+  const ws = XLSX.utils.aoa_to_sheet([[...questionTemplateHeaders], ...sampleRows])
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, '题库')
   XLSX.writeFile(wb, '题库批量导入模板.xlsx')

@@ -13,5 +13,6 @@ class ClassInfo(SQLModel, table=True):
     class_id: Optional[int] = Field(default=None, primary_key=True)
     class_name: str = Field(max_length=64)
     college: str = Field(max_length=64)
-    enroll_year: int
+    major: str = Field(default="", max_length=64)
+    grade: str = Field(default="", max_length=16)
     create_time: datetime = Field(default_factory=datetime.now)

@@ -1,12 +1,47 @@
 """课程管理 API。"""
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlmodel import Session, select
+from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
-from app.models import Course, SysUser
+from app.models import Course, SysUser, Teacher, ExamBatch
 
 router = APIRouter()
+
+
+@router.get("/courses/my", tags=["课程管理"])
+def list_my_courses(
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """返回当前登录教师所授课程列表。
+
+    教师登录后调用此接口即可获取其名下所有课程，无需手动传 teacher_id。
+    学生/管理员返回空列表。
+    """
+    teacher = session.exec(
+        select(Teacher).where(Teacher.user_id == current_user.user_id)
+    ).first()
+    if not teacher:
+        return []
+
+    courses = session.exec(
+        select(Course).where(Course.teacher_id == teacher.teacher_id)
+    ).all()
+    return [
+        {
+            "course_id": c.course_id,
+            "course_code": c.course_code,
+            "course_name": c.course_name,
+            "teacher_id": c.teacher_id,
+            "semester": c.semester,
+            "college": c.college,
+            "credit": c.credit,
+            "status": c.status,
+        }
+        for c in courses
+    ]
 
 
 @router.get("/courses", tags=["课程管理"])
@@ -23,7 +58,16 @@ def list_courses(
     if college:
         stmt = stmt.where(Course.college == college)
     if semester:
-        stmt = stmt.where(Course.semester == semester)
+        # 学期筛选：课程自身学期匹配，或该课程在目标学期有考试批次数据
+        exam_course_ids = session.exec(
+            select(ExamBatch.course_id).where(ExamBatch.semester == semester).distinct()
+        ).all()
+        stmt = stmt.where(
+            or_(
+                Course.semester == semester,
+                Course.course_id.in_(exam_course_ids),
+            )
+        )
     courses = session.exec(stmt).all()
     return [
         {

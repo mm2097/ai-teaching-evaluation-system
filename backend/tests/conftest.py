@@ -61,7 +61,7 @@ def _seed_test_data(eng):
         # 教师 + 班级
         s.add(Teacher(teacher_id=1, teacher_no="T001", real_name="王老师", title="教授",
                        user_id=1, college="计算机学院", phone="138", email="t@edu.cn"))
-        s.add(ClassInfo(class_id=1, class_name="计科2401", college="计算机学院", enroll_year=2024))
+        s.add(ClassInfo(class_id=1, class_name="计科2401", college="计算机学院", major="计算机科学与技术", grade="2024级"))
         s.commit()
 
         # 课程

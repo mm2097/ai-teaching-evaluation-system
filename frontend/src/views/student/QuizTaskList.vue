@@ -15,23 +15,19 @@ const userStore = useUserStore()
 const loading = ref(true)
 
 const allQuizzes = ref<QuizAssignment[]>([])
-const submissions = ref<{ assignmentId: number; score: number; totalScore: number; submitTime: string }[]>([])
 const activeTab = ref<'pending' | 'completed'>('pending')
 
 const pendingQuizzes = computed(() =>
-  allQuizzes.value.filter((q) => !submissions.value.some((s) => s.assignmentId === q.id)),
+  allQuizzes.value.filter((q) => !q.submitted),
 )
 
 const completedQuizzes = computed(() =>
-  allQuizzes.value.filter((q) => submissions.value.some((s) => s.assignmentId === q.id)).map((q) => {
-    const sub = submissions.value.find((s) => s.assignmentId === q.id)!
-    return { ...q, score: sub.score, submitTime: sub.submitTime }
-  }),
+  allQuizzes.value.filter((q) => q.submitted),
 )
 
-const statusMap: Record<string, { label: string; type: 'success' | 'warning' }> = {
-  published: { label: '待完成', type: 'warning' },
-  closed: { label: '已关闭', type: 'success' },
+const statusMap: Record<string, { label: string; type: 'success' | 'warning' | 'info' | 'danger' }> = {
+  published: { label: '进行中', type: 'warning' },
+  closed: { label: '已关闭', type: 'info' },
 }
 
 onMounted(async () => {
@@ -39,22 +35,33 @@ onMounted(async () => {
   try {
     const studentId = userStore.userInfo?.studentId || 1
     allQuizzes.value = await fetchStudentQuizzes(studentId)
-    // 模拟部分已完成
-    submissions.value = [
-      { assignmentId: allQuizzes.value[0]?.id || 1, score: 85, totalScore: 100, submitTime: '2026-03-15 10:30' },
-      { assignmentId: allQuizzes.value[1]?.id || 2, score: 72, totalScore: 100, submitTime: '2026-03-14 16:00' },
-    ]
   } finally {
     loading.value = false
   }
 })
 
+/** 判断任务是否已过截止时间 */
+function isExpired(quiz: QuizAssignment): boolean {
+  if (!quiz.deadline) return false
+  return new Date(quiz.deadline.replace(' ', 'T')) < new Date()
+}
+
 function startQuiz(quiz: QuizAssignment): void {
+  if (isExpired(quiz)) {
+    return  // 已截止，按钮已禁用，兜底拦截
+  }
+  if (quiz.submitted) {
+    return  // 已提交，兜底拦截
+  }
   router.push(`/quiz/answer?start=${quiz.id}`)
 }
 
-function viewResult(submissionId: number): void {
-  router.push(`/student/quiz-result?id=${submissionId}`)
+function viewResult(quiz: QuizAssignment): void {
+  if (quiz.mySubmissionId) {
+    router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
+  } else {
+    router.push(`/student/quiz-result?id=${quiz.id}`)
+  }
 }
 </script>
 
@@ -69,7 +76,7 @@ function viewResult(submissionId: number): void {
       <!-- 待完成 -->
       <div v-if="activeTab === 'pending'">
         <el-empty v-if="!pendingQuizzes.length" description="暂无待完成的练习" />
-        <div v-for="quiz in pendingQuizzes" :key="quiz.id" class="quiz-card">
+        <div v-for="quiz in pendingQuizzes" :key="quiz.id" class="quiz-card" :class="{ expired: isExpired(quiz) }">
           <div class="quiz-info">
             <h3>{{ quiz.title }}</h3>
             <p class="quiz-meta">{{ quiz.courseName }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
@@ -78,27 +85,66 @@ function viewResult(submissionId: number): void {
                 {{ kp }}
               </el-tag>
             </div>
-            <p v-if="quiz.deadline" class="deadline">
-              <el-icon><Clock /></el-icon> 截止：{{ quiz.deadline }}
+            <p v-if="quiz.deadline" class="deadline" :class="{ 'deadline--expired': isExpired(quiz) }">
+              截止：{{ quiz.deadline }}
             </p>
           </div>
-          <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
+          <template v-if="isExpired(quiz)">
+            <el-tag type="danger" size="small" effect="plain" style="margin-right: 12px">已截止</el-tag>
+            <el-button type="info" :icon="Edit" disabled>已截止</el-button>
+          </template>
+          <template v-else>
+            <el-tag type="warning" size="small" effect="plain" style="margin-right: 12px">待完成</el-tag>
+            <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
+          </template>
         </div>
       </div>
 
       <!-- 已完成 -->
       <div v-if="activeTab === 'completed'">
         <el-empty v-if="!completedQuizzes.length" description="暂无已完成的练习" />
-        <div v-for="quiz in completedQuizzes" :key="quiz.id" class="quiz-card completed">
+        <div
+          v-for="quiz in completedQuizzes"
+          :key="quiz.id"
+          class="quiz-card completed"
+          :class="{ expired: isExpired(quiz), closed: quiz.status === 'closed' }"
+        >
           <div class="quiz-info">
-            <h3>{{ quiz.title }}</h3>
+            <h3>
+              {{ quiz.title }}
+              <el-tag v-if="quiz.status === 'closed'" type="info" size="small" effect="plain">已关闭</el-tag>
+              <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
+            </h3>
             <p class="quiz-meta">
               {{ quiz.courseName }} · {{ quiz.questionCount }} 题 ·
-              得分：<span class="completed-score">{{ quiz.score }} / {{ quiz.totalScore }}</span>
+              得分：<span class="completed-score">{{ quiz.myScore ?? 0 }} / {{ quiz.totalScore }}</span>
             </p>
-            <p class="quiz-meta">提交时间：{{ quiz.submitTime }}</p>
+            <div class="quiz-tags">
+              <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">
+                {{ kp }}
+              </el-tag>
+            </div>
+            <p v-if="quiz.deadline" class="deadline" :class="{ 'deadline--expired': isExpired(quiz) || quiz.status === 'closed' }">
+              截止：{{ quiz.deadline }}
+            </p>
           </div>
-          <el-button type="primary" :icon="View" plain @click="viewResult(quiz.id)">查看结果</el-button>
+          <el-tag type="success" size="small" effect="plain" style="margin-right: 12px">已答题</el-tag>
+          <el-button
+            v-if="quiz.allowReview !== false"
+            type="primary"
+            :icon="View"
+            plain
+            @click="viewResult(quiz)"
+          >
+            查看结果
+          </el-button>
+          <el-tooltip
+            v-else
+            content="教师已关闭本题详情查看权限"
+            placement="top"
+          >
+            <el-button type="info" :icon="View" plain disabled>不可查看</el-button>
+          </el-tooltip>
         </div>
       </div>
     </div>
@@ -120,6 +166,14 @@ function viewResult(submissionId: number): void {
 
   &.completed {
     background: #f8fafc;
+  }
+
+  &.expired {
+    background: #fef2f2;
+  }
+
+  &.closed {
+    background: #f1f5f9;
   }
 
   h3 { font-size: 16px; margin-bottom: 6px; }

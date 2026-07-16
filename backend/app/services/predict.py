@@ -14,7 +14,12 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
-from app.models import ExamBatch, ScoreRecord
+from app.models import (
+    CourseTestDetail,
+    ExamBatch,
+    IndividualScore,
+    ScoreRecord,
+)
 
 
 @dataclass
@@ -88,17 +93,72 @@ def predict_student_scores(
 
     输出: {current, predicted, trend, confidence, slope, r_squared, degraded, history}
     """
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        .order_by(ExamBatch.create_time)
+    ).all()
+
+    # Collect history entries from all three tables
+    raw_history: list[dict] = []
+
+    # 1. ScoreRecord（旧表兼容）
     rows = session.exec(
         select(ScoreRecord, ExamBatch)
         .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
         .where(
             ScoreRecord.student_id == student_id,
-            ScoreRecord.course_id == course_id,
+            ScoreRecord.batch_id.in_(batch_ids),
         )
-        .order_by(ExamBatch.exam_time)
+        .order_by(ExamBatch.create_time)
     ).all()
+    for sr, eb in rows:
+        raw_history.append({
+            "name": eb.batch_name, "score": round(float(sr.score), 1),
+            "batch_id": eb.batch_id,
+        })
 
-    if not rows:
+    # 2. IndividualScore
+    ind_rows = session.exec(
+        select(IndividualScore, ExamBatch)
+        .join(ExamBatch, IndividualScore.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            IndividualScore.student_id == student_id,
+            IndividualScore.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for isc, eb in ind_rows:
+        raw_history.append({
+            "name": eb.batch_name, "score": round(float(isc.score), 1),
+            "batch_id": eb.batch_id,
+        })
+
+    # 3. CourseTestDetail
+    dtl_rows = session.exec(
+        select(CourseTestDetail, ExamBatch)
+        .join(ExamBatch, CourseTestDetail.exam_batch_id == ExamBatch.batch_id)
+        .where(
+            CourseTestDetail.student_id == student_id,
+            CourseTestDetail.exam_batch_id.in_(batch_ids),
+        )
+        .order_by(ExamBatch.create_time)
+    ).all()
+    for ctd, eb in dtl_rows:
+        raw_history.append({
+            "name": eb.batch_name, "score": round(float(ctd.total_score), 1),
+            "batch_id": eb.batch_id,
+        })
+
+    # Sort chronologically by batch_id, then deduplicate by batch_id (first wins)
+    raw_history.sort(key=lambda h: h["batch_id"])
+    seen: set[int] = set()
+    history: list[dict] = []
+    for h in raw_history:
+        if h["batch_id"] not in seen:
+            seen.add(h["batch_id"])
+            history.append({"name": h["name"], "score": h["score"]})
+
+    if not history:
         return {
             "current": 70,
             "predicted": "65-75",
@@ -110,8 +170,8 @@ def predict_student_scores(
             "history": [],
         }
 
-    xs = [float(i + 1) for i in range(len(rows))]
-    ys = [float(r[0].score) for r in rows]
+    xs = [float(i + 1) for i in range(len(history))]
+    ys = [float(h["score"]) for h in history]
 
     reg = simple_linear_regression(xs, ys)
     current = ys[-1]
@@ -139,10 +199,7 @@ def predict_student_scores(
         "slope": round(reg.slope, 2),
         "r_squared": round(reg.r_squared, 2),
         "degraded": reg.degraded,
-        "history": [
-            {"name": r[1].batch_name, "score": round(float(r[0].score), 1)}
-            for r in rows
-        ],
+        "history": history,
     }
 
 
@@ -168,20 +225,57 @@ def get_student_slope(
     session: Session, student_id: int, course_id: int
 ) -> tuple[float, bool]:
     """获取某学生成绩回归斜率（D04 进步分用）。返回 (slope, degraded)。"""
-    rows = session.exec(
-        select(ScoreRecord, ExamBatch)
-        .join(ExamBatch, ScoreRecord.batch_id == ExamBatch.batch_id)
-        .where(
-            ScoreRecord.student_id == student_id,
-            ScoreRecord.course_id == course_id,
-        )
-        .order_by(ExamBatch.exam_time)
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        .order_by(ExamBatch.create_time)
     ).all()
 
-    if not rows:
+    # Collect scores from all three tables, deduplicated by batch_id
+    seen: set[int] = set()
+    ys: list[float] = []
+
+    for bid in batch_ids:
+        if bid in seen:
+            continue
+        # Try ScoreRecord
+        sr = session.exec(
+            select(ScoreRecord.score).where(
+                ScoreRecord.student_id == student_id,
+                ScoreRecord.batch_id == bid,
+            )
+        ).first()
+        if sr is not None:
+            ys.append(float(sr[0]))
+            seen.add(bid)
+            continue
+        # Try IndividualScore
+        isc = session.exec(
+            select(IndividualScore.score).where(
+                IndividualScore.student_id == student_id,
+                IndividualScore.exam_batch_id == bid,
+            )
+        ).first()
+        if isc is not None:
+            ys.append(float(isc[0]))
+            seen.add(bid)
+            continue
+        # Try CourseTestDetail
+        ctd = session.exec(
+            select(CourseTestDetail.total_score).where(
+                CourseTestDetail.student_id == student_id,
+                CourseTestDetail.exam_batch_id == bid,
+            )
+        ).first()
+        if ctd is not None:
+            ys.append(float(ctd[0]))
+            seen.add(bid)
+            continue
+
+    if len(ys) < 2:
+        if ys:
+            return 0.0, True
         return 0.0, True
 
-    xs = [float(i + 1) for i in range(len(rows))]
-    ys = [float(r[0].score) for r in rows]
+    xs = [float(i + 1) for i in range(len(ys))]
     reg = simple_linear_regression(xs, ys)
     return reg.slope, reg.degraded

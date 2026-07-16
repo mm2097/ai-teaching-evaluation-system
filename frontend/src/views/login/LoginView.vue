@@ -22,7 +22,7 @@ const loginForm = reactive({
 /** 登录加载状态 */
 const loading = ref(false)
 
-/** 演示账号列表 */
+/** 演示账号列表（与 backend seed 数据一致） */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
   { username: 'teacher1', role: '任课教师' },

@@ -27,10 +27,11 @@ from app.models import (
     KnowledgePoint,
     KnowledgeModule,
 )
+from app.services.question_answers import answer_for_response, encode_correct_answer
 
 router = APIRouter()
 
-# type 映射
+# type 映射（与 models/question.py、quiz.py 一致：5=简答）
 _TYPE_STR_TO_INT = {
     "single_choice": 1,
     "multi_choice": 2,
@@ -164,6 +165,7 @@ def list_question_bank(
             except (json.JSONDecodeError, TypeError):
                 options = []
 
+        answer, answer_list = answer_for_response(q.type, q.correct_answer)
         result.append({
             "id": q.question_id,
             "courseId": q.course_id,
@@ -172,7 +174,8 @@ def list_question_bank(
             "type": _TYPE_INT_TO_STR.get(q.type, "single_choice"),
             "content": q.content,
             "options": options,
-            "answer": q.correct_answer,
+            "answer": answer,
+            "answerList": answer_list,
             "explanation": q.analysis or "",
             "difficulty": _difficulty_str(len(q.content) % 10),
             "status": status or "published",
@@ -225,9 +228,7 @@ def add_questions_to_bank(
         if item.options:
             options_str = json.dumps(item.options, ensure_ascii=False)
 
-        answer = item.answer
-        if item.answerList:
-            answer = ",".join(item.answerList)
+        answer = encode_correct_answer(item.type, item.answer, item.answerList)
 
         q = AiQuestion(
             course_id=item.courseId,
@@ -289,7 +290,7 @@ def question_bank_stats(
         stmt = stmt.where(AiQuestion.course_id == course_id)
     questions = session.exec(stmt).all()
 
-    by_type = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0}
+    by_type = {"single_choice": 0, "multi_choice": 0, "judge": 0, "fill_blank": 0, "short_answer": 0}
     by_source = {"ai": 0, "manual": 0, "import": 0}
     by_difficulty = {"easy": 0, "medium": 0, "hard": 0}
 
@@ -325,11 +326,8 @@ def update_question(
         q.content = req.stem
     if req.options is not None:
         q.options = json.dumps(req.options, ensure_ascii=False) if req.options else None
-    if req.answer:
-        answer = req.answer
-        if req.answerList:
-            answer = ",".join(req.answerList)
-        q.correct_answer = answer
+    if req.answer or req.answerList:
+        q.correct_answer = encode_correct_answer(req.type, req.answer, req.answerList)
     if req.explanation is not None:
         q.analysis = req.explanation
     if req.type:
@@ -445,9 +443,11 @@ def import_questions_from_file(
             options_str = json.dumps(opts, ensure_ascii=False)
 
         q_type = _TYPE_STR_TO_INT.get(row.get("type", "single_choice"), 1)
-        answer = row.get("answer", "")
-        if row.get("answerList"):
-            answer = ",".join(row["answerList"])
+        answer = encode_correct_answer(
+            q_type,
+            str(row.get("answer", "")),
+            row.get("answerList"),
+        )
 
         q = AiQuestion(
             course_id=req.courseId,
@@ -548,13 +548,18 @@ def import_questions_from_builtin(
         if opts:
             options_str = json.dumps(opts, ensure_ascii=False)
 
+        question_type = _TYPE_STR_TO_INT.get(q_data.get("type", "single_choice"), 1)
         q = AiQuestion(
             course_id=req.courseId,
             point_id=point_id,
-            type=_TYPE_STR_TO_INT.get(q_data.get("type", "single_choice"), 1),
+            type=question_type,
             content=q_data["stem"],
             options=options_str,
-            correct_answer=q_data.get("answer", ""),
+            correct_answer=encode_correct_answer(
+                question_type,
+                q_data.get("answer", ""),
+                q_data.get("answerList") or q_data.get("answer_list"),
+            ),
             analysis=q_data.get("explanation"),
             create_by=1,
         )

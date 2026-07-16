@@ -11,6 +11,7 @@ import QuestionBankImportDialog from '@/components/quiz/QuestionBankImportDialog
 import {
   fetchQuestionBank,
   fetchQuestionBankStats,
+  fetchCourseKnowledgePoints,
   createQuestion,
   updateQuestion,
   deleteQuestion,
@@ -21,7 +22,6 @@ import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type {
   DifficultyLevel,
   ExerciseSource,
-  ExerciseStatus,
   ExerciseType,
   QuestionBankStats,
   QuizQuestion,
@@ -41,7 +41,6 @@ const filters = ref({
   type: '' as ExerciseType | '',
   difficulty: '' as DifficultyLevel | '',
   source: '' as ExerciseSource | '',
-  status: 'published' as ExerciseStatus | '',
   keyword: '',
 })
 
@@ -60,12 +59,17 @@ const sourceLabels: Record<ExerciseSource, string> = {
   import: '模板导入',
 }
 
-const statusMap: Record<string, { label: string; type: 'success' | 'info' | 'warning' }> = {
-  published: { label: '已入库', type: 'success' },
-  closed: { label: '已归档', type: 'warning' },
-}
-
-const filteredQuestions = computed(() => questions.value)
+const filteredQuestions = computed(() => {
+  const kw = filters.value.keyword.trim().toLowerCase()
+  return questions.value.filter((q) => {
+    if (filters.value.knowledgePoint && q.knowledgePoint !== filters.value.knowledgePoint) return false
+    if (filters.value.type && q.type !== filters.value.type) return false
+    if (filters.value.difficulty && q.difficulty !== filters.value.difficulty) return false
+    if (filters.value.source && q.source !== filters.value.source) return false
+    if (kw && !q.stem.toLowerCase().includes(kw)) return false
+    return true
+  })
+})
 
 const pagedQuestions = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -76,12 +80,11 @@ async function loadData(): Promise<void> {
   loading.value = true
   try {
     const params = {
-      courseId: filters.value.courseId,
+      course_id: filters.value.courseId,
       knowledgePoint: filters.value.knowledgePoint || undefined,
       type: filters.value.type || undefined,
       difficulty: filters.value.difficulty || undefined,
       source: filters.value.source || undefined,
-      status: filters.value.status || undefined,
       keyword: filters.value.keyword || undefined,
     }
     const [list, stat] = await Promise.all([
@@ -102,24 +105,27 @@ onMounted(async () => {
   if (courseOptions.value.length) {
     filters.value.courseId = courseOptions.value[0]!.value
   }
-  syncKnowledgePoints()
+  await syncKnowledgePoints()
   await loadData()
 })
 
-function syncKnowledgePoints(): void {
-  // Knowledge points will be loaded from the backend when available
-  knowledgePointOptions.value = []
+async function syncKnowledgePoints(): Promise<void> {
+  if (!filters.value.courseId) {
+    knowledgePointOptions.value = []
+    return
+  }
+  knowledgePointOptions.value = await fetchCourseKnowledgePoints(filters.value.courseId)
 }
 
-watch(() => filters.value.courseId, () => {
-  syncKnowledgePoints()
+watch(() => filters.value.courseId, async () => {
+  await syncKnowledgePoints()
   filters.value.knowledgePoint = ''
   currentPage.value = 1
   loadData()
 })
 
 watch(
-  () => [filters.value.knowledgePoint, filters.value.type, filters.value.difficulty, filters.value.source, filters.value.status],
+  () => [filters.value.knowledgePoint, filters.value.type, filters.value.difficulty, filters.value.source],
   () => {
     currentPage.value = 1
     loadData()
@@ -175,6 +181,7 @@ async function handleSave(question: QuizQuestion): Promise<void> {
     ElMessage.success('题目已更新')
   }
   await loadData()
+  await syncKnowledgePoints()
 }
 
 async function handleDelete(q: QuizQuestion): Promise<void> {
@@ -204,28 +211,40 @@ function sourceLabel(source?: ExerciseSource): string {
       <p class="page-desc">管理课程练习题库，支持手动录入、模板批量导入、AI 生成题入库。智能组卷 Agent 将复用本题库数据。</p>
 
       <el-row :gutter="12" class="stat-row">
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.total ?? 0 }}</span>
             <span class="stat-label">题库总量</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.byType.single_choice ?? 0 }}</span>
             <span class="stat-label">单选题</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
             <span class="stat-value">{{ stats?.byType.multi_choice ?? 0 }}</span>
             <span class="stat-label">多选题</span>
           </div>
         </el-col>
-        <el-col :span="6">
+        <el-col :span="4">
           <div class="stat-item">
-            <span class="stat-value">{{ (stats?.byType.judge ?? 0) + (stats?.byType.fill_blank ?? 0) }}</span>
-            <span class="stat-label">判断/填空</span>
+            <span class="stat-value">{{ stats?.byType.judge ?? 0 }}</span>
+            <span class="stat-label">判断题</span>
+          </div>
+        </el-col>
+        <el-col :span="4">
+          <div class="stat-item">
+            <span class="stat-value">{{ stats?.byType.fill_blank ?? 0 }}</span>
+            <span class="stat-label">填空题</span>
+          </div>
+        </el-col>
+        <el-col :span="4">
+          <div class="stat-item">
+            <span class="stat-value">{{ stats?.byType.short_answer ?? 0 }}</span>
+            <span class="stat-label">简答题</span>
           </div>
         </el-col>
       </el-row>
@@ -258,12 +277,6 @@ function sourceLabel(source?: ExerciseSource): string {
             <el-option v-for="(label, key) in sourceLabels" :key="key" :label="label" :value="key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" clearable placeholder="全部" style="width: 110px">
-            <el-option label="已入库" value="published" />
-            <el-option label="已归档" value="closed" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="关键词">
           <el-input v-model="filters.keyword" placeholder="搜索题干" clearable style="width: 160px" @keyup.enter="handleSearch" />
         </el-form-item>
@@ -293,6 +306,7 @@ function sourceLabel(source?: ExerciseSource): string {
           <template #default="{ row }">{{ typeLabel(row.type) }}</template>
         </el-table-column>
         <el-table-column prop="knowledgePoint" label="知识点" width="120" />
+        <el-table-column prop="courseName" label="课程" width="140" show-overflow-tooltip />
         <el-table-column label="难度" width="80" align="center">
           <template #default="{ row }">{{ difficultyLabels[row.difficulty] }}</template>
         </el-table-column>
@@ -300,13 +314,6 @@ function sourceLabel(source?: ExerciseSource): string {
         <el-table-column label="来源" width="100" align="center">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ sourceLabel(row.source) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag :type="statusMap[row.status || 'published']?.type" size="small">
-              {{ statusMap[row.status || 'published']?.label }}
-            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right" align="center">
@@ -338,7 +345,7 @@ function sourceLabel(source?: ExerciseSource): string {
     <QuestionBankImportDialog
       v-model="importVisible"
       :course-id="filters.courseId"
-      @imported="loadData"
+      @imported="async () => { await loadData(); await syncKnowledgePoints() }"
     />
   </div>
 </template>

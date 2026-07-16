@@ -12,11 +12,13 @@ from datetime import date, datetime
 from sqlmodel import Session, SQLModel, select
 
 from app.core.database import engine, init_db
+from app.core.security import hash_password
 from app.models import (
     SysUser, SysRole, Teacher, Student, ClassInfo, Course, CourseStudent,
     KnowledgeModule, KnowledgePoint,
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
+    IndividualScore, AttendanceSheet, CourseTestDetail,
     AiQuestion, AnswerTask, TaskQuestion, StudentAnswerRecord,
     EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore,
     KnowledgeMastery, StudyWarning, StudentProfile,
@@ -65,9 +67,91 @@ def seed() -> None:
             SysUser(username="stu09", password="123456", real_name="王志强", role_id=3, status=1),
             SysUser(username="stu10", password="123456", real_name="李思琪", role_id=3, status=1),
         ]
+        for user in users:
+            user.password = hash_password(user.password)
         session.add_all(users)
         session.commit()
         print(f"  用户: {len(users)} 条")
+
+        # 测试数据学生用户（47人，来自"测试数据"文件夹的三个 Excel 文件）
+        test_student_users = [
+            # ── 软件1801 班（25人）──
+            SysUser(username="201726010101", password="123456", real_name="孔祥宁", role_id=3, status=1),
+            SysUser(username="201803030311", password="123456", real_name="杨伯昊", role_id=3, status=1),
+            SysUser(username="201826010102", password="123456", real_name="徐颖", role_id=3, status=1),
+            SysUser(username="201826010103", password="123456", real_name="甘凌志", role_id=3, status=1),
+            SysUser(username="201826010104", password="123456", real_name="陈佳伟", role_id=3, status=1),
+            SysUser(username="201826010105", password="123456", real_name="张峻宇", role_id=3, status=1),
+            SysUser(username="201826010106", password="123456", real_name="蔡君浩", role_id=3, status=1),
+            SysUser(username="201826010109", password="123456", real_name="钟婧", role_id=3, status=1),
+            SysUser(username="201826010112", password="123456", real_name="丁嘉欣", role_id=3, status=1),
+            SysUser(username="201826010113", password="123456", real_name="肖云杰", role_id=3, status=1),
+            SysUser(username="201826010114", password="123456", real_name="张馀玎", role_id=3, status=1),
+            SysUser(username="201826010115", password="123456", real_name="詹家坤", role_id=3, status=1),
+            SysUser(username="201826010117", password="123456", real_name="张楠", role_id=3, status=1),
+            SysUser(username="201826010118", password="123456", real_name="何楚强", role_id=3, status=1),
+            SysUser(username="201826010119", password="123456", real_name="李雨辰", role_id=3, status=1),
+            SysUser(username="201826010120", password="123456", real_name="李星沛", role_id=3, status=1),
+            SysUser(username="201826010122", password="123456", real_name="吴催波", role_id=3, status=1),
+            SysUser(username="201826010123", password="123456", real_name="周兴宇", role_id=3, status=1),
+            SysUser(username="201826010124", password="123456", real_name="杨家豪", role_id=3, status=1),
+            SysUser(username="201826010126", password="123456", real_name="梁金子", role_id=3, status=1),
+            SysUser(username="201826010127", password="123456", real_name="李瀚林", role_id=3, status=1),
+            SysUser(username="201826010128", password="123456", real_name="徐静茹", role_id=3, status=1),
+            SysUser(username="201826010129", password="123456", real_name="钱辰", role_id=3, status=1),
+            SysUser(username="201826010130", password="123456", real_name="加拉力丁·依马木", role_id=3, status=1),
+            SysUser(username="201829010201", password="123456", real_name="李世颂", role_id=3, status=1),
+            # ── 软件1803 班（22人）──
+            SysUser(username="201808030406", password="123456", real_name="赵双艺", role_id=3, status=1),
+            SysUser(username="201808030408", password="123456", real_name="黄舟瑜", role_id=3, status=1),
+            SysUser(username="201826010302", password="123456", real_name="张佳妮", role_id=3, status=1),
+            SysUser(username="201826010303", password="123456", real_name="李元哲", role_id=3, status=1),
+            SysUser(username="201826010304", password="123456", real_name="虞绮春", role_id=3, status=1),
+            SysUser(username="201826010305", password="123456", real_name="张智清", role_id=3, status=1),
+            SysUser(username="201826010306", password="123456", real_name="彭浩宇", role_id=3, status=1),
+            SysUser(username="201826010307", password="123456", real_name="潘星辰", role_id=3, status=1),
+            SysUser(username="201826010308", password="123456", real_name="沈伟峰", role_id=3, status=1),
+            SysUser(username="201826010310", password="123456", real_name="杨晓迪", role_id=3, status=1),
+            SysUser(username="201826010311", password="123456", real_name="王成龙", role_id=3, status=1),
+            SysUser(username="201826010313", password="123456", real_name="杨佳", role_id=3, status=1),
+            SysUser(username="201826010316", password="123456", real_name="陈扬霈", role_id=3, status=1),
+            SysUser(username="201826010318", password="123456", real_name="李俊", role_id=3, status=1),
+            SysUser(username="201826010319", password="123456", real_name="李菲菲", role_id=3, status=1),
+            SysUser(username="201826010321", password="123456", real_name="宁君辉", role_id=3, status=1),
+            SysUser(username="201826010322", password="123456", real_name="胡亮", role_id=3, status=1),
+            SysUser(username="201826010323", password="123456", real_name="谭晓杰", role_id=3, status=1),
+            SysUser(username="201826010325", password="123456", real_name="刘海天", role_id=3, status=1),
+            SysUser(username="201826010326", password="123456", real_name="李明光", role_id=3, status=1),
+            SysUser(username="201826010327", password="123456", real_name="陈熙麟", role_id=3, status=1),
+            SysUser(username="201826010329", password="123456", real_name="江北辰", role_id=3, status=1),
+            # ── 软件1802 班（21人，来自期中考试文件的 软件1802 Sheet，header在row2）──
+            SysUser(username="201713010118", password="123456", real_name="郭晗婕", role_id=3, status=1),
+            SysUser(username="201804050215", password="123456", real_name="鲍炜杰", role_id=3, status=1),
+            SysUser(username="201804061214", password="123456", real_name="方浩楠", role_id=3, status=1),
+            SysUser(username="201826010201", password="123456", real_name="高伊格", role_id=3, status=1),
+            SysUser(username="201826010203", password="123456", real_name="梁耀升", role_id=3, status=1),
+            SysUser(username="201826010204", password="123456", real_name="潘琳", role_id=3, status=1),
+            SysUser(username="201826010206", password="123456", real_name="李锦浩", role_id=3, status=1),
+            SysUser(username="201826010209", password="123456", real_name="陈柏宇", role_id=3, status=1),
+            SysUser(username="201826010214", password="123456", real_name="洪绵权", role_id=3, status=1),
+            SysUser(username="201826010215", password="123456", real_name="刘大卫", role_id=3, status=1),
+            SysUser(username="201826010216", password="123456", real_name="肖欣", role_id=3, status=1),
+            SysUser(username="201826010217", password="123456", real_name="殷浩翔", role_id=3, status=1),
+            SysUser(username="201826010218", password="123456", real_name="邹智翼", role_id=3, status=1),
+            SysUser(username="201826010219", password="123456", real_name="雷佳晨", role_id=3, status=1),
+            SysUser(username="201826010220", password="123456", real_name="马诗丹", role_id=3, status=1),
+            SysUser(username="201826010222", password="123456", real_name="曹芊", role_id=3, status=1),
+            SysUser(username="201826010223", password="123456", real_name="唐诗远", role_id=3, status=1),
+            SysUser(username="201826010227", password="123456", real_name="刘佳雨", role_id=3, status=1),
+            SysUser(username="201826010228", password="123456", real_name="吴优", role_id=3, status=1),
+            SysUser(username="201826010229", password="123456", real_name="鄢蝶", role_id=3, status=1),
+            SysUser(username="201826010230", password="123456", real_name="麦麦提·阿卜杜赛米", role_id=3, status=1),
+        ]
+        for user in test_student_users:
+            user.password = hash_password(user.password)
+        session.add_all(test_student_users)
+        session.commit()
+        print(f"  测试学生用户: {len(test_student_users)} 条")
 
         # ========== 3. 教师（4人，不同职称） ==========
         teachers = [
@@ -84,15 +168,25 @@ def seed() -> None:
 
         # ========== 4. 班级（5个） ==========
         classes = [
-            ClassInfo(class_name="计科2401班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="计科2402班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="软工2401班", college="计算机学院", enroll_year=2024),
-            ClassInfo(class_name="计科2301班", college="计算机学院", enroll_year=2023),
-            ClassInfo(class_name="数统2401班", college="数学与统计学院", enroll_year=2024),
+            ClassInfo(class_name="计科2401班", college="计算机学院", major="计算机科学与技术", grade="2024级"),
+            ClassInfo(class_name="计科2402班", college="计算机学院", major="计算机科学与技术", grade="2024级"),
+            ClassInfo(class_name="软工2401班", college="计算机学院", major="软件工程", grade="2024级"),
+            ClassInfo(class_name="计科2301班", college="计算机学院", major="计算机科学与技术", grade="2023级"),
+            ClassInfo(class_name="数统2401班", college="数学与统计学院", major="数学与应用数学", grade="2024级"),
         ]
         session.add_all(classes)
         session.commit()
         print(f"  班级: {len(classes)} 条")
+
+        # 测试数据班级（对应模板中 软件1801/1802/1803 三个 Sheet）
+        test_classes = [
+            ClassInfo(class_name="软件1801班", college="计算机学院", major="软件工程", grade="2018级"),
+            ClassInfo(class_name="软件1802班", college="计算机学院", major="软件工程", grade="2018级"),
+            ClassInfo(class_name="软件1803班", college="计算机学院", major="软件工程", grade="2018级"),
+        ]
+        session.add_all(test_classes)
+        session.commit()
+        print(f"  测试班级: {len(test_classes)} 条")
 
         # ========== 5. 学生（10人，分散在不同班级、不同性别） ==========
         students = [
@@ -120,6 +214,85 @@ def seed() -> None:
         session.add_all(students)
         session.commit()
         print(f"  学生: {len(students)} 条")
+
+        # 测试数据学生记录（47人，user_id 对应上一批测试用户 15~61）
+        # class_id: 6=软件1801班, 8=软件1803班
+        test_students = [
+            # ── 软件1801 班（25人，user_id 15~39）──
+            Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=6, user_id=15),
+            Student(student_no="201803030311", real_name="杨伯昊", gender=1, class_id=6, user_id=16),
+            Student(student_no="201826010102", real_name="徐颖",    gender=0, class_id=6, user_id=17),
+            Student(student_no="201826010103", real_name="甘凌志",  gender=1, class_id=6, user_id=18),
+            Student(student_no="201826010104", real_name="陈佳伟",  gender=1, class_id=6, user_id=19),
+            Student(student_no="201826010105", real_name="张峻宇",  gender=1, class_id=6, user_id=20),
+            Student(student_no="201826010106", real_name="蔡君浩",  gender=1, class_id=6, user_id=21),
+            Student(student_no="201826010109", real_name="钟婧",    gender=0, class_id=6, user_id=22),
+            Student(student_no="201826010112", real_name="丁嘉欣",  gender=0, class_id=6, user_id=23),
+            Student(student_no="201826010113", real_name="肖云杰",  gender=1, class_id=6, user_id=24),
+            Student(student_no="201826010114", real_name="张馀玎",  gender=1, class_id=6, user_id=25),
+            Student(student_no="201826010115", real_name="詹家坤",  gender=1, class_id=6, user_id=26),
+            Student(student_no="201826010117", real_name="张楠",    gender=0, class_id=6, user_id=27),
+            Student(student_no="201826010118", real_name="何楚强",  gender=1, class_id=6, user_id=28),
+            Student(student_no="201826010119", real_name="李雨辰",  gender=0, class_id=6, user_id=29),
+            Student(student_no="201826010120", real_name="李星沛",  gender=1, class_id=6, user_id=30),
+            Student(student_no="201826010122", real_name="吴催波",  gender=1, class_id=6, user_id=31),
+            Student(student_no="201826010123", real_name="周兴宇",  gender=1, class_id=6, user_id=32),
+            Student(student_no="201826010124", real_name="杨家豪",  gender=1, class_id=6, user_id=33),
+            Student(student_no="201826010126", real_name="梁金子",  gender=0, class_id=6, user_id=34),
+            Student(student_no="201826010127", real_name="李瀚林",  gender=1, class_id=6, user_id=35),
+            Student(student_no="201826010128", real_name="徐静茹",  gender=0, class_id=6, user_id=36),
+            Student(student_no="201826010129", real_name="钱辰",    gender=1, class_id=6, user_id=37),
+            Student(student_no="201826010130", real_name="加拉力丁·依马木", gender=1, class_id=6, user_id=38),
+            Student(student_no="201829010201", real_name="李世颂",  gender=1, class_id=6, user_id=39),
+            # ── 软件1803 班（22人，user_id 40~61）──
+            Student(student_no="201808030406", real_name="赵双艺",  gender=0, class_id=8, user_id=40),
+            Student(student_no="201808030408", real_name="黄舟瑜",  gender=1, class_id=8, user_id=41),
+            Student(student_no="201826010302", real_name="张佳妮",  gender=0, class_id=8, user_id=42),
+            Student(student_no="201826010303", real_name="李元哲",  gender=1, class_id=8, user_id=43),
+            Student(student_no="201826010304", real_name="虞绮春",  gender=0, class_id=8, user_id=44),
+            Student(student_no="201826010305", real_name="张智清",  gender=1, class_id=8, user_id=45),
+            Student(student_no="201826010306", real_name="彭浩宇",  gender=1, class_id=8, user_id=46),
+            Student(student_no="201826010307", real_name="潘星辰",  gender=1, class_id=8, user_id=47),
+            Student(student_no="201826010308", real_name="沈伟峰",  gender=1, class_id=8, user_id=48),
+            Student(student_no="201826010310", real_name="杨晓迪",  gender=0, class_id=8, user_id=49),
+            Student(student_no="201826010311", real_name="王成龙",  gender=1, class_id=8, user_id=50),
+            Student(student_no="201826010313", real_name="杨佳",    gender=0, class_id=8, user_id=51),
+            Student(student_no="201826010316", real_name="陈扬霈",  gender=1, class_id=8, user_id=52),
+            Student(student_no="201826010318", real_name="李俊",    gender=1, class_id=8, user_id=53),
+            Student(student_no="201826010319", real_name="李菲菲",  gender=0, class_id=8, user_id=54),
+            Student(student_no="201826010321", real_name="宁君辉",  gender=1, class_id=8, user_id=55),
+            Student(student_no="201826010322", real_name="胡亮",    gender=1, class_id=8, user_id=56),
+            Student(student_no="201826010323", real_name="谭晓杰",  gender=1, class_id=8, user_id=57),
+            Student(student_no="201826010325", real_name="刘海天",  gender=1, class_id=8, user_id=58),
+            Student(student_no="201826010326", real_name="李明光",  gender=1, class_id=8, user_id=59),
+            Student(student_no="201826010327", real_name="陈熙麟",  gender=1, class_id=8, user_id=60),
+            Student(student_no="201826010329", real_name="江北辰",  gender=1, class_id=8, user_id=61),
+            # ── 软件1802 班（21人，user_id 62~82）──
+            Student(student_no="201713010118", real_name="郭晗婕",  gender=0, class_id=7, user_id=62),
+            Student(student_no="201804050215", real_name="鲍炜杰",  gender=1, class_id=7, user_id=63),
+            Student(student_no="201804061214", real_name="方浩楠",  gender=1, class_id=7, user_id=64),
+            Student(student_no="201826010201", real_name="高伊格",  gender=1, class_id=7, user_id=65),
+            Student(student_no="201826010203", real_name="梁耀升",  gender=1, class_id=7, user_id=66),
+            Student(student_no="201826010204", real_name="潘琳",    gender=0, class_id=7, user_id=67),
+            Student(student_no="201826010206", real_name="李锦浩",  gender=1, class_id=7, user_id=68),
+            Student(student_no="201826010209", real_name="陈柏宇",  gender=1, class_id=7, user_id=69),
+            Student(student_no="201826010214", real_name="洪绵权",  gender=1, class_id=7, user_id=70),
+            Student(student_no="201826010215", real_name="刘大卫",  gender=1, class_id=7, user_id=71),
+            Student(student_no="201826010216", real_name="肖欣",    gender=0, class_id=7, user_id=72),
+            Student(student_no="201826010217", real_name="殷浩翔",  gender=1, class_id=7, user_id=73),
+            Student(student_no="201826010218", real_name="邹智翼",  gender=1, class_id=7, user_id=74),
+            Student(student_no="201826010219", real_name="雷佳晨",  gender=1, class_id=7, user_id=75),
+            Student(student_no="201826010220", real_name="马诗丹",  gender=0, class_id=7, user_id=76),
+            Student(student_no="201826010222", real_name="曹芊",    gender=0, class_id=7, user_id=77),
+            Student(student_no="201826010223", real_name="唐诗远",  gender=1, class_id=7, user_id=78),
+            Student(student_no="201826010227", real_name="刘佳雨",  gender=0, class_id=7, user_id=79),
+            Student(student_no="201826010228", real_name="吴优",    gender=0, class_id=7, user_id=80),
+            Student(student_no="201826010229", real_name="鄢蝶",    gender=0, class_id=7, user_id=81),
+            Student(student_no="201826010230", real_name="麦麦提·阿卜杜赛米", gender=1, class_id=7, user_id=82),
+        ]
+        session.add_all(test_students)
+        session.commit()
+        print(f"  测试学生: {len(test_students)} 条")
 
         # ========== 6. 课程（5门，跨两个学院） ==========
         courses = [
@@ -172,6 +345,14 @@ def seed() -> None:
         session.commit()
         print(f"  选修关系: {len(course_students)} 条")
 
+        # 测试数据学生全部选修计算机网络（student_id 11~78，共68人）
+        test_course_students = [
+            CourseStudent(course_id=1, student_id=sid) for sid in range(11, 79)
+        ]
+        session.add_all(test_course_students)
+        session.commit()
+        print(f"  测试选修关系: {len(test_course_students)} 条")
+
         # ========== 8. 知识模块 & 知识点 ==========
         modules = [
             KnowledgeModule(course_id=1, module_name="网络体系结构", description="OSI 与 TCP/IP 模型", sort_num=1),
@@ -212,27 +393,27 @@ def seed() -> None:
         batches = [
             # 计算机网络
             ExamBatch(course_id=1, batch_name="平时作业", batch_type=1, batch_weight=20,
-                      exam_time=datetime(2026, 3, 20, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="实验报告", batch_type=2, batch_weight=15,
-                      exam_time=datetime(2026, 4, 10, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="期中考试", batch_type=3, batch_weight=25,
-                      exam_time=datetime(2026, 4, 25, 14, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=1, batch_name="期末考试", batch_type=4, batch_weight=40,
-                      exam_time=datetime(2026, 6, 28, 9, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             # 操作系统
             ExamBatch(course_id=2, batch_name="平时作业", batch_type=1, batch_weight=20,
-                      exam_time=datetime(2026, 3, 18, 10, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=2, batch_name="期中考试", batch_type=3, batch_weight=30,
-                      exam_time=datetime(2026, 4, 22, 14, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             ExamBatch(course_id=2, batch_name="期末考试", batch_type=4, batch_weight=50,
-                      exam_time=datetime(2026, 6, 30, 9, 0), full_score=100, create_by=2),
+                      semester="2025-2026-2", full_score=100, create_by=2),
             # 数据结构
             ExamBatch(course_id=3, batch_name="平时作业", batch_type=1, batch_weight=25,
-                      exam_time=datetime(2026, 3, 22, 10, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
             ExamBatch(course_id=3, batch_name="期中考试", batch_type=3, batch_weight=25,
-                      exam_time=datetime(2026, 4, 28, 14, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
             ExamBatch(course_id=3, batch_name="期末考试", batch_type=4, batch_weight=50,
-                      exam_time=datetime(2026, 6, 26, 9, 0), full_score=100, create_by=3),
+                      semester="2025-2026-2", full_score=100, create_by=3),
         ]
         session.add_all(batches)
         session.commit()
@@ -357,36 +538,36 @@ def seed() -> None:
         session.commit()
         print(f"  考勤记录: {len(attendances)} 条")
 
-        # ========== 12. 课堂互动（差异化） ==========
-        interactions = [
-            # 赵伟：互动积极，成绩好
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
-                              type=1, score=9.0, remark="回答准确", create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
-                              type=2, score=8.5, remark="小组讨论出色", create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
-                              type=3, score=9.5, create_by=2),
-            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
-                              type=4, score=8.0, create_by=2),
-            # 钱丽华：中等
-            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
-                              type=1, score=7.0, create_by=2),
-            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
-                              type=3, score=7.5, create_by=2),
-            # 孙浩然：互动少
-            InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
-                              type=1, score=5.0, remark="回答不够完整", create_by=2),
-            # 冯文博（数据结构课）：进步明显
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
-                              type=1, score=4.0, remark="表现一般", create_by=3),
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
-                              type=2, score=7.5, remark="讨论中进步", create_by=3),
-            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
-                              type=4, score=9.0, remark="测验成绩好", create_by=3),
-        ]
-        session.add_all(interactions)
-        session.commit()
-        print(f"  课堂互动: {len(interactions)} 条")
+        # ========== 12. 课堂互动（已禁用 - 功能暂不展示） ==========
+        # interactions = [
+        #     # 赵伟：互动积极，成绩好
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=9.0, remark="回答准确", create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
+        #                       type=2, score=8.5, remark="小组讨论出色", create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
+        #                       type=3, score=9.5, create_by=2),
+        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
+        #                       type=4, score=8.0, create_by=2),
+        #     # 钱丽华：中等
+        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=7.0, create_by=2),
+        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
+        #                       type=3, score=7.5, create_by=2),
+        #     # 孙浩然：互动少
+        #     InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
+        #                       type=1, score=5.0, remark="回答不够完整", create_by=2),
+        #     # 冯文博（数据结构课）：进步明显
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
+        #                       type=1, score=4.0, remark="表现一般", create_by=3),
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
+        #                       type=2, score=7.5, remark="讨论中进步", create_by=3),
+        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
+        #                       type=4, score=9.0, remark="测验成绩好", create_by=3),
+        # ]
+        # session.add_all(interactions)
+        # session.commit()
+        # print(f"  课堂互动: {len(interactions)} 条")
 
         # ========== 13. AI 题目（8道，覆盖题型） ==========
         questions = [

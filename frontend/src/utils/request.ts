@@ -72,12 +72,18 @@ request.interceptors.request.use(
 request.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const isLoginRequest = error.config?.url === '/login'
+    if (error.response?.status === 401 && !isLoginRequest) {
       ElMessage.error('登录已过期，请重新登录')
       router.push('/login')
     }
+    const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
+    const isNetwork = error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')
     const detail = error.response?.data?.detail
-    const msg = typeof detail === 'string' ? detail : error.message || '请求失败'
+    let msg = typeof detail === 'string' ? detail : error.message || '请求失败'
+    if (!USE_MOCK && (isTimeout || isNetwork)) {
+      msg = '无法连接后端服务（请确认 backend 已在 8000 端口启动：uvicorn app.main:app --reload）'
+    }
     if (!USE_MOCK) {
       ElMessage.error(msg)
     }

@@ -136,6 +136,17 @@ watch(queryParams, async (val) => {
               {{ tag }}
             </el-tag>
           </div>
+          <el-divider />
+          <div class="strength-weakness">
+            <div class="sw-item success">
+              <h4>优势知识点</h4>
+              <p>{{ profileData?.strongPoints || '-' }}</p>
+            </div>
+            <div class="sw-item danger">
+              <h4>薄弱知识点</h4>
+              <p>{{ profileData?.weakPoints || '-' }}</p>
+            </div>
+          </div>
         </div>
       </el-col>
       <el-col :xs="24" :lg="16">
@@ -199,5 +210,19 @@ watch(queryParams, async (val) => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.strength-weakness {
+  .sw-item {
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+
+    h4 { font-size: 14px; margin-bottom: 4px; }
+    p { font-size: 13px; color: #64748b; }
+
+    &.success { background: #ecfdf5; h4 { color: #10b981; } }
+    &.danger { background: #fef2f2; h4 { color: #ef4444; } }
+  }
 }
 </style>

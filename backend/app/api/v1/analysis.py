@@ -13,7 +13,7 @@ from app.models import (
     IndividualScore, CourseTestDetail, ExamBatch,
 )
 from app.services.predict import predict_student_scores
-from app.services.mastery import compute_assignment_accuracy_index
+from app.services.mastery import compute_assignment_accuracy_index, compute_mastery_index_with_fallback
 from app.services.warning import scan_course_warnings, persist_warnings
 
 router = APIRouter()
@@ -289,7 +289,7 @@ def get_knowledge_heatmap(
             for mastery in all_masteries
         }
     else:
-        mastery_index = compute_assignment_accuracy_index(session, course_id, student_ids)
+        mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
 
     student_names = []
     for sid in student_ids:
@@ -324,7 +324,7 @@ def get_knowledge_heatmap(
         avg_stmt = avg_stmt.where(CourseStudent.student_id.in_(avg_in_class))  # type: ignore
     avg_student_ids = session.exec(avg_stmt).all()
 
-    avg_index = compute_assignment_accuracy_index(session, course_id, avg_student_ids)
+    avg_index = compute_mastery_index_with_fallback(session, course_id, avg_student_ids)
 
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):

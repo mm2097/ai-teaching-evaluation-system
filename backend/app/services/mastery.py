@@ -156,6 +156,45 @@ def refresh_student_mastery(session: Session, student_id: int, course_id: int) -
         session.add(mastery)
 
 
+def compute_mastery_index_with_fallback(
+    session: Session,
+    course_id: int,
+    student_ids: list[int],
+) -> dict[tuple[int, int], float]:
+    """教师/管理员视角：优先答题记录，无记录时回退到 KnowledgeMastery 表。
+
+    这样即使学生没有答题记录（如预注入的演示数据），教师也能看到
+    知识点掌握度热力图，而不是全为 0。
+    """
+    answer_index = compute_assignment_accuracy_index(session, course_id, student_ids)
+
+    # 收集 answer_index 中已有的 (student_id, point_id) 组合
+    answered_pairs = set(answer_index.keys())
+
+    # KnowledgeMastery 回退（仅填充缺失项）
+    if answered_pairs:
+        answered_students = {sid for sid, _ in answered_pairs}
+        answered_points = {pid for _, pid in answered_pairs}
+        fully_missed_students = [sid for sid in student_ids if sid not in answered_students]
+    else:
+        fully_missed_students = list(student_ids)
+        answered_points = set()
+
+    if fully_missed_students or True:  # 始终检查 KnowledgeMastery 兜底
+        km_records = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == course_id,
+                KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
+            )
+        ).all()
+        for km in km_records:
+            pair = (km.student_id, km.point_id)
+            if pair not in answer_index:
+                answer_index[pair] = km.mastery_score
+
+    return answer_index
+
+
 def compute_assignment_accuracy_index(
     session: Session,
     course_id: int,

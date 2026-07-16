@@ -281,6 +281,7 @@ def get_grade_trend(
 
     return {
         "months": months,
+        "labels": months,         # 兼容前端旧字段名
         "avgScore": avg_scores,
         "passRate": pass_rates,
         "maxScore": max_scores,

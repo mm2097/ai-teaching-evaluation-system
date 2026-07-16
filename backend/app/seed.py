@@ -1194,27 +1194,38 @@ def inject_analysis_data() -> None:
       5. StudentEvaluationResult + EvalDimensionScore（学习质量评价）
       6. StudyWarning（异常学情预警）
     """
-    print("[inject-analysis] 开始为测试学生注入智能分析数据...")
+    print("[inject-analysis] 开始为所有学生注入智能分析数据...")
 
     with Session(engine) as session:
-        # 获取测试学生列表（student_id 11-78，共68人）
-        test_student_ids = list(range(11, 79))
+        # 覆盖所有学生（1-78），包括基础种子学生和测试学生
+        all_student_ids = list(range(1, 79))
 
-        # 目标课程：计算机网络 (course_id=1)，所有测试学生都选修了这门课
+        # 目标课程：计算机网络 (course_id=1)
         course_id = 1
 
         # 确认学生存在
         existing_ids = session.exec(
-            select(Student.student_id).where(Student.student_id.in_(test_student_ids))
+            select(Student.student_id).where(Student.student_id.in_(all_student_ids))
         ).all()
         if not existing_ids:
-            print("[inject-analysis] 未找到测试学生，请先运行 seed --reset")
+            print("[inject-analysis] 未找到学生数据，请先运行 seed --reset")
             return
 
         print(f"  目标学生: {len(existing_ids)} 人")
         print(f"  目标课程: 计算机网络 (course_id={course_id})")
 
-        # ========== 1. 检查并清空已有测试学生分析数据 ==========
+        # ========== 0. 确保所有学生选修了目标课程 ==========
+        enrolled_ids = set(session.exec(
+            select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+        ).all())
+        missing_enrollment = [sid for sid in existing_ids if sid not in enrolled_ids]
+        if missing_enrollment:
+            for sid in missing_enrollment:
+                session.add(CourseStudent(course_id=course_id, student_id=sid))
+            session.commit()
+            print(f"  补充选修关系: {len(missing_enrollment)} 人")
+
+        # ========== 1. 检查并清空已有学生分析数据 ==========
         # ScoreRecord
         old_scores = session.exec(
             select(ScoreRecord).where(
@@ -1505,7 +1516,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="灌入演示数据")
     parser.add_argument("--reset", action="store_true", help="删库重建后再灌入")
     parser.add_argument("--inject-analysis", action="store_true",
-                        help="为测试学生注入智能分析数据（学情画像/成绩预测/知识点/预警）")
+                        help="为所有学生注入智能分析数据（学情画像/成绩趋势/知识点/预警）")
     args = parser.parse_args()
     if args.inject_analysis:
         inject_analysis_data()

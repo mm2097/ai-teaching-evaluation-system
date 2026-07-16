@@ -174,6 +174,8 @@ async function generateReport(): Promise<void> {
       type: typeName.slice(0, 4),
       time: new Date().toLocaleString('zh-CN'),
       format: genParams.value.format === 'pdf' ? 'PDF' : 'Excel',
+      data: reportData.value,
+      stats: { ...dashboardStats.value },
     })
     ElMessage.success('报告生成成功！')
   } catch (e: any) {
@@ -302,6 +304,19 @@ function buildCsvReport(data: any, meta: { courseName: string; typeName: string 
   rows.push(`"建议措施","${(data.suggestion || '-').replace(/"/g, '""')}"`)
   return rows.join('\n')
 }
+
+function previewHistoryReport(row: any): void {
+  reportData.value = row.data
+  dashboardStats.value = row.stats || {}
+  previewVisible.value = true
+}
+
+function downloadHistoryReport(row: any): void {
+  reportData.value = row.data
+  dashboardStats.value = row.stats || {}
+  genParams.value.format = row.format === 'PDF' ? 'pdf' : 'excel'
+  exportReport()
+}
 </script>
 
 <template>
@@ -389,9 +404,9 @@ function buildCsvReport(data: any, meta: { courseName: string; typeName: string 
             </el-table-column>
             <el-table-column prop="time" label="生成时间" width="170" />
             <el-table-column label="操作" width="140" align="center">
-              <template #default>
-                <el-button type="primary" link size="small">预览</el-button>
-                <el-button type="success" link size="small">下载</el-button>
+              <template #default="{ row }">
+                <el-button type="primary" link size="small" @click="previewHistoryReport(row)">预览</el-button>
+                <el-button type="success" link size="small" @click="downloadHistoryReport(row)">下载</el-button>
               </template>
             </el-table-column>
           </el-table>

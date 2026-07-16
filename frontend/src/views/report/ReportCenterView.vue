@@ -191,12 +191,94 @@ function previewReport(): void {
   previewVisible.value = true
 }
 
-function exportReport(): void {
+async function exportReport(): Promise<void> {
   if (!reportData.value) {
     ElMessage.info('请先生成报告')
     return
   }
-  ElMessage.success(`报告已导出为 ${genParams.value.format.toUpperCase()} 格式`)
+
+  try {
+    const ext = genParams.value.format === 'pdf' ? '.html' : '.csv'
+    const mime = genParams.value.format === 'pdf' ? 'text/html' : 'text/csv;charset=utf-8'
+    const courseName = courses.value.find((c: any) => c.id === genParams.value.courseId)?.courseName || '未知课程'
+    const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
+
+    const content = genParams.value.format === 'pdf'
+      ? buildHtmlReport(reportData.value, { courseName, typeName })
+      : buildCsvReport(reportData.value, { courseName, typeName })
+
+    const fileName = `${courseName}_${typeName.slice(0, 4)}报告_${new Date().toISOString().slice(0, 10)}${ext}`
+
+    // 优先使用原生「另存为」对话框（Chromium + localhost/HTTPS）
+    if ('showSaveFilePicker' in window) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: fileName,
+          types: [{
+            description: ext === '.html' ? 'HTML 文件' : 'CSV 文件',
+            accept: { [mime]: [ext] },
+          }],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(content)
+        await writable.close()
+        ElMessage.success(`报告已保存：${handle.name}`)
+        return
+      } catch (e: any) {
+        if (e.name === 'AbortError') return // 用户取消保存
+      }
+    }
+
+    // 降级：触发浏览器下载
+    const blob = new Blob(['\uFEFF' + content], { type: `${mime};charset=utf-8` })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileName
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success(`报告已导出为 ${genParams.value.format.toUpperCase()} 格式`)
+  } catch (e: any) {
+    ElMessage.error('导出失败：' + (e?.message || '未知错误'))
+  }
+}
+
+function buildHtmlReport(data: any, meta: { courseName: string; typeName: string }): string {
+  const isPersonal = (data.scope === 'student' || data.report_type === 2 || data.report_type === 4)
+  let sections = ''
+
+  if (!isPersonal) {
+    sections += `<h2>一、核心指标概览</h2><p>（班级整体统计指标略）</p>`
+    sections += `<h2>二、总体概述</h2><p>${(data.summary || '').replace(/\n/g, '<br>')}</p>`
+    sections += `<h2>三、关键结论</h2><p>${(data.conclusion || '').replace(/\n/g, '<br>')}</p>`
+    sections += `<h2>四、建议措施</h2><p>${(data.suggestion || '').replace(/\n/g, '<br>')}</p>`
+  } else {
+    sections += `<h2>一、总体概述</h2><p>${(data.summary || '').replace(/\n/g, '<br>')}</p>`
+    sections += `<h2>二、关键结论</h2><p>${(data.conclusion || '').replace(/\n/g, '<br>')}</p>`
+    sections += `<h2>三、建议措施</h2><p>${(data.suggestion || '').replace(/\n/g, '<br>')}</p>`
+  }
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>${meta.courseName} - ${meta.typeName}</title>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; padding: 40px 60px; color: #333; line-height: 1.8; }
+  h1 { text-align: center; font-size: 22px; margin-bottom: 24px; }
+  h2 { font-size: 16px; margin-top: 28px; border-bottom: 2px solid #409EFF; padding-bottom: 6px; }
+  p { margin: 8px 0; white-space: pre-wrap; }
+</style></head>
+<body><h1>${meta.courseName}<br>${meta.typeName}</h1>${sections}</body></html>`
+}
+
+function buildCsvReport(data: any, meta: { courseName: string; typeName: string }): string {
+  const rows: string[] = []
+  rows.push(`"${meta.courseName} - ${meta.typeName}"`)
+  rows.push('')
+  rows.push('"章节","内容"')
+  rows.push(`"总体概述","${(data.summary || '-').replace(/"/g, '\"\"')}"`)
+  rows.push(`"关键结论","${(data.conclusion || '-').replace(/"/g, '\"\"')}"`)
+  rows.push(`"建议措施","${(data.suggestion || '-').replace(/"/g, '\"\"')}"`)
+  return rows.join('\n')
 }
 </script>
 

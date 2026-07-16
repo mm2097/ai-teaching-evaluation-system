@@ -78,6 +78,11 @@ async function handleDelete(row: SystemUser): Promise<void> {
 
 /** 切换用户状态 */
 async function toggleStatus(row: SystemUser): Promise<void> {
+  // 系统管理员账号不允许启用/禁用（包括自己），防止死锁
+  if (row.role === 'admin') {
+    ElMessage.warning('不允许启用/禁用系统管理员账号')
+    return
+  }
   try {
     await userApi.update(row.id, { status: !row.status })
     row.status = !row.status
@@ -145,7 +150,7 @@ onMounted(loadUsers)
         stripe
         border
       >
-        <el-table-column prop="username" label="账号" width="120" />
+        <el-table-column prop="username" label="账号" width="150" show-overflow-tooltip />
         <el-table-column prop="name" label="姓名" width="100" />
         <el-table-column prop="role" label="角色" width="130">
           <template #default="{ row }">
@@ -155,7 +160,10 @@ onMounted(loadUsers)
         <el-table-column prop="department" label="所属院系" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-switch :model-value="row.status" @change="toggleStatus(row)" />
+            <el-tooltip v-if="row.role === 'admin'" content="不允许启用/禁用系统管理员账号" placement="top">
+              <span><el-switch :model-value="row.status" :disabled="true" /></span>
+            </el-tooltip>
+            <el-switch v-else :model-value="row.status" @change="toggleStatus(row)" />
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="120" />
@@ -179,7 +187,7 @@ onMounted(loadUsers)
           </el-select>
         </el-form-item>
         <el-form-item label="院系"><el-input v-model="form.department" /></el-form-item>
-        <el-form-item label="状态"><el-switch v-model="form.status" /></el-form-item>
+        <el-form-item label="状态"><el-switch v-model="form.status" :disabled="form.role === 'admin'" /></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>

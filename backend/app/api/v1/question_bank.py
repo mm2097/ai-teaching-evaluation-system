@@ -36,6 +36,7 @@ _TYPE_STR_TO_INT = {
     "multi_choice": 2,
     "judge": 3,
     "fill_blank": 4,
+    "short_answer": 5,
 }
 _TYPE_INT_TO_STR = {v: k for k, v in _TYPE_STR_TO_INT.items()}
 

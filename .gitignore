@@ -33,3 +33,6 @@ Thumbs.db
 
 #AI
 .claude
+
+# 解析脚本中间产物
+scripts/output/

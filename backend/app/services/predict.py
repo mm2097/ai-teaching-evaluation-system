@@ -245,7 +245,7 @@ def get_student_slope(
             )
         ).first()
         if sr is not None:
-            ys.append(float(sr[0]))
+            ys.append(float(sr))
             seen.add(bid)
             continue
         # Try IndividualScore
@@ -256,7 +256,7 @@ def get_student_slope(
             )
         ).first()
         if isc is not None:
-            ys.append(float(isc[0]))
+            ys.append(float(isc))
             seen.add(bid)
             continue
         # Try CourseTestDetail
@@ -267,7 +267,7 @@ def get_student_slope(
             )
         ).first()
         if ctd is not None:
-            ys.append(float(ctd[0]))
+            ys.append(float(ctd))
             seen.add(bid)
             continue
 

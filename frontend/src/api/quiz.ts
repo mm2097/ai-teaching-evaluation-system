@@ -220,38 +220,45 @@ export interface StreamCallbacks {
 export async function generateQuizStream(params: GenerateQuizParams, callbacks: StreamCallbacks): Promise<void> {
   const payload = buildGeneratePayload(params)
 
-  const response = await fetch('/api/v1/exercises/generate/stream', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
+  try {
+    const response = await fetch('/api/v1/exercises/generate/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
 
-  if (!response.ok) {
-    const errText = await response.text().catch(() => 'AI 服务不可用')
-    callbacks.onError?.(errText)
-    return
-  }
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue
-      try {
-        const event = JSON.parse(line.slice(6))
-        if (event.type === 'stage') callbacks.onStage?.(event.stage, event.difficulty)
-        else if (event.type === 'question') callbacks.onQuestion?.(event.question)
-        else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0)
-        else if (event.type === 'error') callbacks.onError?.(event.message || '生成失败')
-      } catch { /* skip malformed */ }
+    if (!response.ok) {
+      const errText = await response.text().catch(() => 'AI 服务不可用')
+      callbacks.onError?.(errText)
+      return
     }
+
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const event = JSON.parse(line.slice(6))
+          if (event.type === 'stage') callbacks.onStage?.(event.stage, event.difficulty)
+          else if (event.type === 'question') callbacks.onQuestion?.(event.question)
+          else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0)
+          else if (event.type === 'error') callbacks.onError?.(event.message || '生成失败')
+        } catch { /* skip malformed */ }
+      }
+    }
+  } catch (e) {
+    // fetch 抛出（服务不可达/网络中断/读流失败）时兜底，避免调用方永久卡在加载态
+    callbacks.onError?.(
+      e instanceof Error ? `无法连接 AI 服务：${e.message}` : 'AI 服务暂不可用',
+    )
   }
 }
 

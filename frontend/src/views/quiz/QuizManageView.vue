@@ -37,7 +37,8 @@ const publishAllowReview = ref(false)
 
 // 题库挑题弹窗
 const bankPickerVisible = ref(false)
-const pickerCourseId = computed(() => step1Ref.value?.form?.courseId)
+// 课程优先取已保存配置（Step 2 时 step1Ref 已被 v-if 卸载为 null），Step 1 回退到子组件表单
+const pickerCourseId = computed(() => savedConfig.value?.courseId ?? step1Ref.value?.form?.courseId)
 const existingIds = computed(() => visibleQuestions.value.map((q) => q.id))
 
 const assignmentRefreshTrigger = ref(0)
@@ -77,39 +78,44 @@ async function handleGenerate(config: {
     title: config.title || `${courseOpt?.label || ''} - 专项练习`,
   }
 
-  await generateQuizStream(
-    {
-      courseId: config.courseId,
-      classId: config.classId,
-      knowledgePoints: config.knowledgePoints,
-      questionTypes: config.questionTypes,
-      questionCount: config.questionCount,
-      difficultyDistribution: config.difficultyDistribution,
-      extraRequirements: config.extraRequirements,
-    },
-    {
-      onStage: (stage, difficulty) => {
-        genStageHint.value = difficulty
-          ? `正在生成${difficultyLabels[difficulty as keyof typeof difficultyLabels] || difficulty}题…`
-          : stage
+  try {
+    await generateQuizStream(
+      {
+        courseId: config.courseId,
+        classId: config.classId,
+        knowledgePoints: config.knowledgePoints,
+        questionTypes: config.questionTypes,
+        questionCount: config.questionCount,
+        difficultyDistribution: config.difficultyDistribution,
+        extraRequirements: config.extraRequirements,
       },
-      onQuestion: (q) => {
-        // 首题到达即视为进入可审核状态，题目逐条追加
-        visibleQuestions.value = [...visibleQuestions.value, q]
-        generating.value = false
+      {
+        onStage: (stage, difficulty) => {
+          genStageHint.value = difficulty
+            ? `正在生成${difficultyLabels[difficulty as keyof typeof difficultyLabels] || difficulty}题…`
+            : stage
+        },
+        onQuestion: (q) => {
+          // 首题到达即视为进入可审核状态，题目逐条追加
+          visibleQuestions.value = [...visibleQuestions.value, q]
+          generating.value = false
+        },
+        onDone: (refs) => {
+          ragReferences.value = refs || []
+          generating.value = false
+        },
+        onError: (msg) => {
+          genError.value = msg || 'AI 服务暂不可用'
+          generating.value = false
+        },
       },
-      onDone: (refs) => {
-        ragReferences.value = refs || []
-        generating.value = false
-      },
-      onError: (msg) => {
-        genError.value = msg || 'AI 服务暂不可用'
-        generating.value = false
-      },
-    },
-  )
-  // 流结束兜底
-  generating.value = false
+    )
+  } catch (e) {
+    genError.value = e instanceof Error ? e.message : 'AI 服务暂不可用'
+  } finally {
+    // 流结束兜底：无论成功/异常都关闭加载态
+    generating.value = false
+  }
 }
 
 // ===== 从题库挑题（弹窗式，追加到审核列表） =====

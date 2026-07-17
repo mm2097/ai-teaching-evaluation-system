@@ -45,8 +45,9 @@ export const useUserStore = defineStore('user', () => {
       setToken(token)
       setStoredUser(JSON.stringify(info))
       return true
-    } catch (e) {
-      ElMessage.error(e instanceof Error ? e.message : '登录失败')
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      ElMessage.error(typeof detail === 'string' ? detail : '登录失败，请检查账号和密码')
       return false
     }
   }

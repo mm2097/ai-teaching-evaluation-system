@@ -9,6 +9,7 @@ import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
+import { countPendingStudentQuizzes } from '@/api/quiz'
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -20,11 +21,13 @@ const courses = ref([
   { id: 3, name: '计算机网络', teacher: '张讲师', progress: 80, score: 78, avgScore: 72, rank: '前35%' },
 ])
 
+const pendingQuizCount = ref(0)
+
 const statCards = computed(() => [
   { title: '课程数', value: courses.value.length, icon: 'Notebook', color: '#2563eb' },
   { title: '平均成绩', value: +(courses.value.reduce((s, c) => s + c.score, 0) / courses.value.length).toFixed(1), unit: '分', icon: 'DataLine', color: '#10b981', trend: 2.5 },
   { title: '总出勤率', value: 94.8, unit: '%', icon: 'Calendar', color: '#06b6d4' },
-  { title: '待完成练习', value: 2, icon: 'EditPen', color: '#f59e0b', link: '/quiz/answer' },
+  { title: '待完成练习', value: pendingQuizCount.value, icon: 'EditPen', color: '#f59e0b', link: '/quiz/answer?tab=assigned' },
   { title: '薄弱知识点', value: 3, icon: 'Grid', color: '#ef4444', link: '/student/knowledge' },
   { title: '班级排名', value: '前15%', icon: 'Trophy', color: '#8b5cf6' },
 ])
@@ -81,6 +84,9 @@ const trendOption = computed<EChartsOption>(() => ({
 onMounted(async () => {
   try {
     const studentId = userStore.userInfo?.studentId
+    if (studentId) {
+      pendingQuizCount.value = await countPendingStudentQuizzes(studentId)
+    }
     // 加载成绩趋势
     const trendRes = await request.get('/v1/dashboard/grade-trend', {
       params: { student_id: studentId, dept_id: 1 },

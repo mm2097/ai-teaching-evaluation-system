@@ -3,7 +3,7 @@
   系统入口，支持演示账号快速登录
 -->
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock, DataAnalysis } from '@element-plus/icons-vue'
@@ -22,12 +22,25 @@ const loginForm = reactive({
 /** 登录加载状态 */
 const loading = ref(false)
 
-/** 演示账号列表（与 backend seed 数据一致） */
+/** 演示账号列表（与 backend seed 数据一致，仅快捷填充账号） */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
   { username: 'teacher', role: '任课教师' },
   { username: '201726010101', role: '学生用户' },
 ]
+
+onMounted(() => {
+  // 进入登录页时清除可能已过期的本地 token，避免后续请求反复弹「登录已过期」
+  userStore.logout()
+})
+
+/**
+ * 快捷填充演示账号（含初始密码，需手动点击登录）
+ */
+function fillDemoAccount(username: string): void {
+  loginForm.username = username
+  loginForm.password = '123456'
+}
 
 /**
  * 提交登录表单
@@ -58,15 +71,6 @@ async function handleLogin(): Promise<void> {
   }
 }
 
-/**
- * 快速填充演示账号并自动登录（密码统一为 123456）
- * @param username 演示账号名
- */
-async function quickLogin(username: string): Promise<void> {
-  loginForm.username = username
-  loginForm.password = '123456'
-  await handleLogin()
-}
 </script>
 
 <template>
@@ -100,6 +104,7 @@ async function quickLogin(username: string): Promise<void> {
               v-model="loginForm.username"
               placeholder="请输入账号"
               :prefix-icon="User"
+              autocomplete="username"
               clearable
             />
           </el-form-item>
@@ -110,6 +115,7 @@ async function quickLogin(username: string): Promise<void> {
               placeholder="请输入密码"
               :prefix-icon="Lock"
               show-password
+              autocomplete="current-password"
               clearable
             />
           </el-form-item>
@@ -122,14 +128,14 @@ async function quickLogin(username: string): Promise<void> {
 
         <!-- 演示账号快捷入口 -->
         <div class="demo-accounts">
-          <p class="demo-title">演示账号（密码均为 123456）</p>
+          <p class="demo-title">演示账号快捷填充（密码 123456，点击后手动登录）</p>
           <div class="demo-tags">
             <el-tag
               v-for="item in demoAccounts"
               :key="item.username"
               class="demo-tag"
               effect="plain"
-              @click="quickLogin(item.username)"
+              @click="fillDemoAccount(item.username)"
             >
               {{ item.role }}
             </el-tag>

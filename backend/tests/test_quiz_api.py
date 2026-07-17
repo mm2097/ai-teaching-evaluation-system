@@ -23,12 +23,13 @@ def _user(session, user_id: int) -> SysUser:
     return session.get(SysUser, user_id)
 
 
-def _create_task(session, question_ids: list[int]) -> AnswerTask:
+def _create_task(session, question_ids: list[int], *, allow_review: int = 1) -> AnswerTask:
     task = AnswerTask(
         course_id=1,
         task_name=f"regression-{datetime.now().timestamp()}",
         deadline=datetime.now() + timedelta(days=1),
         status=1,
+        allow_review=allow_review,
         create_by=1,
     )
     session.add(task)
@@ -122,6 +123,49 @@ def test_answer_record_detail_uses_real_submission_id(session):
     assert detail["score"] == 100
     assert detail["questionResults"][0]["userAnswer"] == "C"
     assert detail["questionResults"][0]["isCorrect"] is True
+
+
+def test_student_cannot_see_submitted_task_when_review_disabled(session):
+    task = _create_task(session, [1], allow_review=0)
+    quiz.submit_answers(
+        quiz.SubmitAnswersRequest(task_id=task.task_id, student_id=1, answers={"1": "C"}),
+        session=session,
+        current_user=_user(session, 2),
+    )
+
+    tasks = quiz.list_answer_tasks(
+        course_id=None,
+        teacher_id=None,
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assert all(item["id"] != task.task_id for item in tasks)
+
+    records = quiz.list_answer_records(
+        task_id=None,
+        student_id=None,
+        course_id=None,
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assert all(item["assignmentId"] != task.task_id for item in records)
+
+
+def test_student_cannot_open_detail_when_review_disabled(session):
+    task = _create_task(session, [1], allow_review=0)
+    result = quiz.submit_answers(
+        quiz.SubmitAnswersRequest(task_id=task.task_id, student_id=1, answers={"1": "C"}),
+        session=session,
+        current_user=_user(session, 2),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        quiz.get_answer_record_detail(
+            result["submissionId"],
+            session=session,
+            current_user=_user(session, 2),
+        )
+    assert exc.value.status_code == 404
 
 
 def test_short_answer_persists_scaled_score(session, monkeypatch):

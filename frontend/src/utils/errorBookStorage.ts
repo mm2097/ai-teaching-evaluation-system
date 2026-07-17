@@ -1,5 +1,5 @@
 /**
- * 错题本本地存储（后端无专用接口，前端持久化）
+ * 错题本本地缓存（后端 /v1/error-book 权威；本地作离线兜底）
  */
 import type { QuizQuestion } from '@/types'
 import type { ErrorBookItem } from '@/api/quiz'

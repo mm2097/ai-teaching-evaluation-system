@@ -180,6 +180,12 @@ const router = createRouter({
           meta: { title: '答题任务', roles: ['student'] },
         },
         {
+          path: 'student/practice-records',
+          name: 'PracticeRecords',
+          component: () => import('@/views/student/PracticeRecordsView.vue'),
+          meta: { title: '练习记录', roles: ['student'] },
+        },
+        {
           path: 'student/quiz-result',
           name: 'QuizResult',
           component: () => import('@/views/student/QuizResultView.vue'),

@@ -30,6 +30,7 @@ const listTab = ref<'assigned' | 'self'>('assigned')
 const quizList = ref<QuizAssignment[]>([])
 const activeQuiz = ref<QuizAssignment | null>(null)
 const quizMode = ref<'assigned' | 'self'>('assigned')
+const lastSubmissionId = ref<number | null>(null)
 
 /** 自主练习配置 */
 const courseOptions = ref<{ label: string; value: number }[]>([])
@@ -77,8 +78,18 @@ const difficultyOptions = [
 ]
 
 onMounted(async () => {
-  const studentId = userStore.userInfo?.studentId || 1
-  quizList.value = (await fetchStudentQuizzes(studentId)) as QuizAssignment[]
+  const studentId = userStore.userInfo?.studentId
+  if (!studentId) {
+    ElMessage.warning('未获取到学生信息，请重新登录')
+    return
+  }
+
+  const tab = route.query.tab
+  if (tab === 'self' || tab === 'assigned') {
+    listTab.value = tab
+  }
+
+  await refreshQuizList(studentId)
 
   const courses = await fetchCourses({ deptId: 1, semesterId: 1 })
   courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
@@ -99,11 +110,16 @@ onMounted(async () => {
         ElMessage.warning('该答题任务已截止，无法作答')
         router.replace('/quiz/answer')
       } else {
+        listTab.value = 'assigned'
         startQuiz(quiz)
       }
     }
   }
 })
+
+async function refreshQuizList(studentId: number): Promise<void> {
+  quizList.value = (await fetchStudentQuizzes(studentId)) as QuizAssignment[]
+}
 
 async function syncSelfKnowledgePoints(): Promise<void> {
   if (!selfForm.value.courseId) {
@@ -154,7 +170,19 @@ function startQuiz(quiz: QuizAssignment): void {
 function viewQuizResult(quiz: QuizAssignment): void {
   if (quiz.mySubmissionId) {
     router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
+  } else {
+    ElMessage.warning('暂无答题记录，请完成练习后再查看')
   }
+}
+
+function viewLastSubmission(): void {
+  if (lastSubmissionId.value) {
+    router.push(`/student/quiz-result?id=${lastSubmissionId.value}`)
+  }
+}
+
+function goPracticeRecords(): void {
+  router.push('/student/practice-records')
 }
 
 async function handleGenerateSelfQuiz(): Promise<void> {
@@ -258,6 +286,7 @@ function applySubmissionResult(submission: {
   // 更新本地 quizList 中的答题状态，避免列表页仍显示为"未答题"
   const currentQuiz = activeQuiz.value
   if (currentQuiz) {
+    lastSubmissionId.value = submission.submissionId ?? null
     const idx = quizList.value.findIndex((q) => q.id === currentQuiz.id)
     const listItem = quizList.value[idx]
     if (listItem) {
@@ -298,7 +327,11 @@ async function handleSubmit(): Promise<void> {
 
   submitting.value = true
   try {
-    const studentId = userStore.userInfo?.studentId || 1
+    const studentId = userStore.userInfo?.studentId
+    if (!studentId) {
+      ElMessage.warning('未获取到学生信息，请重新登录')
+      return
+    }
 
     if (quizMode.value === 'self') {
       const submission = await submitSelfQuiz({
@@ -318,11 +351,17 @@ async function handleSubmit(): Promise<void> {
       applySubmissionResult(submission)
     }
   } catch {
-    ElMessage.error('提交失败，请稍后重试')
+    // 请求拦截器已展示后端错误详情
   } finally {
     submitting.value = false
   }
 }
+
+const progressPercent = computed(() => {
+  const total = activeQuiz.value?.questions.length ?? 0
+  if (!total) return 0
+  return Math.round((answeredCount.value / total) * 100)
+})
 
 const manualCount = computed(() => {
   if (!result.value) return 0
@@ -400,7 +439,6 @@ const resultSubtitle = computed(() => {
             <!-- 已提交：查看结果 -->
             <template v-if="quiz.submitted">
               <el-button
-                v-if="quiz.allowReview !== false"
                 type="primary"
                 :icon="View"
                 plain
@@ -408,13 +446,6 @@ const resultSubtitle = computed(() => {
               >
                 查看结果
               </el-button>
-              <el-tooltip
-                v-else
-                content="教师已关闭本题详情查看权限"
-                placement="top"
-              >
-                <el-button type="info" :icon="View" plain disabled>不可查看</el-button>
-              </el-tooltip>
             </template>
             <!-- 已截止未提交：不可答题 -->
             <template v-else-if="isExpired(quiz)">
@@ -430,7 +461,7 @@ const resultSubtitle = computed(() => {
         <!-- 自主练习配置 -->
         <div v-else class="self-quiz-form">
           <el-alert
-            title="自主出题仅供个人自学使用，不会发布给其他同学；作答结果与教师布置练习一样统计，错题自动加入错题本。"
+            title="自主出题仅供个人自学，不会发布给其他同学；作答记录会保存到「练习记录」，并计入个人知识点掌握度，错题自动加入错题本。"
             type="info"
             :closable="false"
             show-icon
@@ -514,6 +545,14 @@ const resultSubtitle = computed(() => {
         <span v-if="!result" class="progress">已答 {{ answeredCount }} / {{ activeQuiz.questions.length }}</span>
       </div>
 
+      <div v-if="!result" class="content-card progress-card">
+        <div class="progress-row">
+          <span>答题进度</span>
+          <span>{{ progressPercent }}%</span>
+        </div>
+        <el-progress :percentage="progressPercent" :stroke-width="10" :show-text="false" />
+      </div>
+
       <template v-if="result">
         <el-result
           icon="success"
@@ -562,10 +601,16 @@ const resultSubtitle = computed(() => {
             <p v-if="item.question.explanation" class="explanation">解析：{{ item.question.explanation }}</p>
           </div>
           <div class="submit-bar">
-            <el-button v-if="quizMode === 'self'" type="primary" @click="backToList(); listTab = 'self'">
-              继续自主练习
+            <el-button v-if="lastSubmissionId && (quizMode === 'self' || activeQuiz?.allowReview !== false)" type="success" plain :icon="View" @click="viewLastSubmission">
+              查看完整结果页
+            </el-button>
+            <el-button v-if="quizMode === 'self'" type="primary" @click="goPracticeRecords">
+              查看练习记录
             </el-button>
             <el-button v-else type="primary" @click="backToList()">返回练习列表</el-button>
+            <el-button v-if="quizMode === 'self'" plain @click="backToList(); listTab = 'self'">
+              继续自主练习
+            </el-button>
           </div>
         </div>
       </template>
@@ -621,7 +666,8 @@ const resultSubtitle = computed(() => {
           />
         </div>
 
-        <div class="submit-bar content-card">
+        <div class="submit-bar content-card sticky-submit">
+          <p class="submit-hint">请完成全部题目后提交，提交后可在「练习记录」页面查看历史</p>
           <el-button type="primary" size="large" :loading="submitting" :icon="Check" @click="handleSubmit">
             提交答卷
           </el-button>
@@ -671,6 +717,18 @@ const resultSubtitle = computed(() => {
 .self-quiz-form {
   max-width: 640px;
   padding-top: 8px;
+}
+
+.progress-card {
+  padding: 16px 20px;
+
+  .progress-row {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 13px;
+    color: #64748b;
+  }
 }
 
 .quiz-header {
@@ -779,5 +837,18 @@ const resultSubtitle = computed(() => {
 .submit-bar {
   text-align: center;
   padding: 24px;
+
+  .submit-hint {
+    margin: 0 0 12px;
+    font-size: 13px;
+    color: #64748b;
+  }
+}
+
+.sticky-submit {
+  position: sticky;
+  bottom: 16px;
+  z-index: 10;
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
 }
 </style>

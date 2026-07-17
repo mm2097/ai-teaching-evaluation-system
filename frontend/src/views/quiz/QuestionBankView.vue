@@ -1,13 +1,12 @@
 <!--
   题库管理页面
-  支持浏览、筛选、CRUD、模板导入
+  支持浏览、筛选、CRUD
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Upload, Search, Delete, Edit } from '@element-plus/icons-vue'
+import { Plus, Search, Delete, Edit } from '@element-plus/icons-vue'
 import QuestionFormDialog from '@/components/quiz/QuestionFormDialog.vue'
-import QuestionBankImportDialog from '@/components/quiz/QuestionBankImportDialog.vue'
 import {
   fetchQuestionBank,
   fetchQuestionBankStats,
@@ -33,7 +32,6 @@ const courseOptions = ref<{ label: string; value: number }[]>([])
 const questions = ref<QuizQuestion[]>([])
 const stats = ref<QuestionBankStats | null>(null)
 const loading = ref(false)
-const importVisible = ref(false)
 
 const filters = ref({
   courseId: undefined as number | undefined,
@@ -208,7 +206,7 @@ function sourceLabel(source?: ExerciseSource): string {
   <div class="page-container">
     <div class="content-card">
       <div class="content-card__title">题库管理</div>
-      <p class="page-desc">管理课程练习题库，支持手动录入、模板批量导入、AI 生成题入库。智能组卷 Agent 将复用本题库数据。</p>
+      <p class="page-desc">管理课程练习题库，支持手动录入、AI 生成题入库。智能组卷 Agent 将复用本题库数据。</p>
 
       <el-row :gutter="12" class="stat-row">
         <el-col :span="4">
@@ -287,7 +285,6 @@ function sourceLabel(source?: ExerciseSource): string {
 
       <div class="toolbar">
         <el-button type="primary" :icon="Plus" @click="openCreate">新增题目</el-button>
-        <el-button :icon="Upload" @click="importVisible = true">批量导入</el-button>
       </div>
 
       <el-table
@@ -340,12 +337,6 @@ function sourceLabel(source?: ExerciseSource): string {
       :knowledge-point-options="knowledgePointOptions"
       :mode="formMode"
       @save="handleSave"
-    />
-
-    <QuestionBankImportDialog
-      v-model="importVisible"
-      :course-id="filters.courseId"
-      @imported="async () => { await loadData(); await syncKnowledgePoints() }"
     />
   </div>
 </template>

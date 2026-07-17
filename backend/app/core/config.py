@@ -34,11 +34,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secret_key(self) -> "Settings":
-        """生产环境必须显式配置强密钥，开发环境缺省时使用进程随机密钥。"""
+        """生产环境必须显式配置强密钥；开发/测试环境缺省使用固定密钥，避免重启后全员掉线。"""
         if self.ENVIRONMENT == "production" and len(self.SECRET_KEY) < 32:
             raise ValueError("生产环境必须配置至少 32 字符的 SECRET_KEY")
         if not self.SECRET_KEY:
-            self.SECRET_KEY = secrets.token_urlsafe(48)
+            if self.ENVIRONMENT in {"development", "test"}:
+                self.SECRET_KEY = "dev-teaching-eval-secret-key-do-not-use-in-prod"
+            else:
+                self.SECRET_KEY = secrets.token_urlsafe(48)
         return self
 
     # ===== 向量嵌入（RAG 升级） =====

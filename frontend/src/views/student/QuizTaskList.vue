@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Edit, Checked, View } from '@element-plus/icons-vue'
 import { fetchStudentQuizzes } from '@/api/quiz'
 import { useUserStore } from '@/stores/user'
@@ -60,7 +61,7 @@ function viewResult(quiz: QuizAssignment): void {
   if (quiz.mySubmissionId) {
     router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
   } else {
-    router.push(`/student/quiz-result?id=${quiz.id}`)
+    ElMessage.warning('暂无答题记录，请完成练习后再查看')
   }
 }
 </script>
@@ -130,7 +131,6 @@ function viewResult(quiz: QuizAssignment): void {
           </div>
           <el-tag type="success" size="small" effect="plain" style="margin-right: 12px">已答题</el-tag>
           <el-button
-            v-if="quiz.allowReview !== false"
             type="primary"
             :icon="View"
             plain
@@ -138,13 +138,6 @@ function viewResult(quiz: QuizAssignment): void {
           >
             查看结果
           </el-button>
-          <el-tooltip
-            v-else
-            content="教师已关闭本题详情查看权限"
-            placement="top"
-          >
-            <el-button type="info" :icon="View" plain disabled>不可查看</el-button>
-          </el-tooltip>
         </div>
       </div>
     </div>

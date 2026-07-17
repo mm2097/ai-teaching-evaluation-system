@@ -90,6 +90,10 @@ function reviewLabel(item: QuestionResult, idx: number): string {
 }
 
 onMounted(async () => {
+  if (!submissionId.value) {
+    router.replace('/student/practice-records')
+    return
+  }
   loading.value = true
   try {
     const result = await fetchQuizResult(
@@ -107,6 +111,8 @@ onMounted(async () => {
     wrongCount.value = questionResults.value.filter(
       (q) => !q.isCorrect && !q.manualRequired,
     ).length
+  } catch {
+    router.replace('/student/practice-records')
   } finally {
     loading.value = false
   }

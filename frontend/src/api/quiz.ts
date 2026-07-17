@@ -71,7 +71,9 @@ export async function fetchQuizResult(
   if (USE_MOCK) {
     return mockQuizResult(submissionId)
   }
-  const res = await request.get('/v1/answer-records/' + submissionId)
+  const res = await request.get('/v1/answer-records/' + submissionId, {
+    silentError: true,
+  } as Parameters<typeof request.get>[1])
   return res.data
 }
 
@@ -327,6 +329,29 @@ export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssig
   return tasks.filter(
     (t) => (t.status === 'published' || t.status === 'closed') && !isSelfPracticeTask(t.title),
   ) as QuizAssignment[]
+}
+
+/** 获取学生全部已提交练习（含教师布置与自主练习，用于练习记录页） */
+export async function fetchStudentPracticeRecords(_studentId: number): Promise<QuizAssignment[]> {
+  const tasks = await fetchQuizAssignments()
+  return tasks
+    .filter((t) => t.submitted && t.allowReview !== false && (t.status === 'published' || t.status === 'closed'))
+    .sort((a, b) => {
+      const timeA = a.publishTime || a.deadline || ''
+      const timeB = b.publishTime || b.deadline || ''
+      return timeB.localeCompare(timeA)
+    }) as QuizAssignment[]
+}
+
+/** 统计待完成的教师布置练习数量 */
+export async function countPendingStudentQuizzes(_studentId: number): Promise<number> {
+  const tasks = await fetchStudentQuizzes(_studentId)
+  const now = Date.now()
+  return tasks.filter((t) => {
+    if (t.submitted) return false
+    if (!t.deadline) return true
+    return new Date(t.deadline.replace(' ', 'T')).getTime() >= now
+  }).length
 }
 
 /** 学生自主练习提交参数 */

@@ -228,6 +228,9 @@ def list_answer_tasks(
                 sub = student_submissions.get(t.task_id)
                 if not sub or not t.allow_review:
                     continue
+            elif student_submissions.get(t.task_id) and not t.allow_review:
+                # 已提交但教师禁止查看详情：对学生不可见
+                continue
             # status=1: 正常显示（含已截止）
             if _is_self_practice(t) and t.create_by != current_user.user_id:
                 continue
@@ -335,6 +338,8 @@ def list_answer_records(
             continue
         if role_code == "student" and (not current_student or sid != current_student.student_id):
             continue
+        if role_code == "student" and not task.allow_review:
+            continue
 
         # 该任务的题目数（用于算总分）
         q_count = session.exec(
@@ -343,13 +348,16 @@ def list_answer_records(
         total_score = 100.0
         obtained = sum(float(r.score) for r in records)
 
+        course = session.get(Course, task.course_id)
         result.append({
             "id": records[0].answer_id,
             "assignmentId": tid,
             "studentId": sid,
             "studentName": stu.real_name if stu else "",
             "studentNo": stu.student_no if stu else "",
-            "courseName": "",
+            "taskTitle": task.task_name,
+            "isSelfPractice": _is_self_practice(task),
+            "courseName": course.course_name if course else "",
             "score": round(obtained, 1),
             "totalScore": round(total_score),
             "submitTime": records[0].submit_time.strftime("%Y-%m-%d %H:%M") if records[0].submit_time else "",
@@ -381,10 +389,9 @@ def get_answer_record_detail(
     if role_code == "student":
         current_student = _student_for_user(current_user, session)
         if not current_student or first_record.student_id != current_student.student_id:
-            raise HTTPException(status_code=403, detail="无权查看该答题记录")
-        # 自己刚提交的记录可以用于结果页即时反馈；已关闭/非本人仍由上面的权限控制拦截。
-        if not task.allow_review and task.status == 2:
-            raise HTTPException(status_code=403, detail="教师已关闭本题答题详情查看权限")
+            raise HTTPException(status_code=404, detail="答题记录不存在")
+        if not _is_self_practice(task) and not task.allow_review:
+            raise HTTPException(status_code=404, detail="答题记录不存在")
 
     records = session.exec(
         select(StudentAnswerRecord).where(
@@ -1526,7 +1533,7 @@ def start_self_practice(
         task_name=f"{_SELF_PRACTICE_PREFIX}{now.strftime('%Y-%m-%d %H:%M:%S')}",
         task_type=TASK_TYPE_SELF_PRACTICE,
         publish_time=now,
-        deadline=now + timedelta(hours=1),
+        deadline=now + timedelta(hours=24),
         status=1,
         allow_review=1,
         create_by=current_user.user_id,

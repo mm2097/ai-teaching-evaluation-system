@@ -214,22 +214,34 @@ export async function fetchCourseKnowledgePoints(courseId?: number): Promise<str
   if (!courseId) return []
 
   const names = new Set<string>()
+  const silent = { silentError: true } as Parameters<typeof request.get>[1]
+
+  try {
+    const res = await request.get<string[]>(`/v1/courses/${courseId}/knowledge-points`, silent)
+    for (const kp of res.data ?? []) {
+      if (kp?.trim()) names.add(kp.trim())
+    }
+    if (names.size) return Array.from(names).sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  } catch {
+    // 回退旧接口
+  }
 
   try {
     const heatmapRes = await request.get<{ knowledgePoints?: string[] }>(
       '/v1/analysis/knowledge-heatmap',
-      { params: { course_id: courseId } },
+      { params: { course_id: courseId }, ...silent },
     )
     for (const kp of heatmapRes.data?.knowledgePoints ?? []) {
       if (kp?.trim()) names.add(kp.trim())
     }
   } catch {
-    // 热力图接口不可用时，继续从题库提取
+    // ignore
   }
 
   try {
     const bankRes = await request.get<QuestionRecord[]>('/v1/question-bank', {
       params: { course_id: courseId },
+      ...silent,
     })
     for (const q of bankRes.data ?? []) {
       if (q.knowledgePoint?.trim()) names.add(q.knowledgePoint.trim())

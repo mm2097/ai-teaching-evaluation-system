@@ -19,7 +19,7 @@ from app.models import (
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
     IndividualScore, AttendanceSheet, CourseTestDetail,
-    AiQuestion, AnswerTask, TaskQuestion, StudentAnswerRecord,
+    AiQuestion, AnswerTask, AnswerTaskClass, TaskQuestion, StudentAnswerRecord,
     EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore,
     KnowledgeMastery, StudyWarning, StudentProfile,
     SysOperationLog,
@@ -219,7 +219,7 @@ def seed() -> None:
         # class_id: 6=软件1801班, 8=软件1803班
         test_students = [
             # ── 软件1801 班（25人，user_id 15~39）──
-            Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=6, user_id=15),
+            Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=1, user_id=15),
             Student(student_no="201803030311", real_name="杨伯昊", gender=1, class_id=6, user_id=16),
             Student(student_no="201826010102", real_name="徐颖",    gender=0, class_id=6, user_id=17),
             Student(student_no="201826010103", real_name="甘凌志",  gender=1, class_id=6, user_id=18),
@@ -647,11 +647,20 @@ def seed() -> None:
         # ========== 14. 答题任务 & 关联 & 答题记录 ==========
         tasks = [
             AnswerTask(course_id=1, task_name="计算机网络单元测验1",
-                       deadline=datetime(2026, 4, 30, 23, 59), status=1, create_by=2),
+                       deadline=datetime(2026, 4, 30, 23, 59), status=1, allow_review=1,
+                       publish_time=datetime(2026, 3, 1, 9, 0), create_by=2),
             AnswerTask(course_id=3, task_name="数据结构单元测验1",
-                       deadline=datetime(2026, 4, 28, 23, 59), status=1, create_by=3),
+                       deadline=datetime(2026, 4, 28, 23, 59), status=1, allow_review=1,
+                       publish_time=datetime(2026, 3, 1, 9, 0), create_by=3),
         ]
         session.add_all(tasks)
+        session.commit()
+
+        task_classes = [
+            AnswerTaskClass(task_id=1, class_id=1),
+            AnswerTaskClass(task_id=2, class_id=1),
+        ]
+        session.add_all(task_classes)
         session.commit()
 
         task_questions = [

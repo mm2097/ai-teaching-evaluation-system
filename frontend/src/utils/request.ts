@@ -82,6 +82,8 @@ request.interceptors.response.use(
         ElMessage.error('登录已过期，请重新登录')
         router.push('/login')
       }
+    } else if (error.response?.status === 403) {
+      // 权限不足时静默失败，避免反复弹出「当前角色无权…」干扰使用
     } else if (!error.config?.silentError && !isLoginRequest) {
       const isTimeout = error.code === 'ECONNABORTED' || error.message?.includes('timeout')
       const isNetwork = error.code === 'ERR_NETWORK' || error.message?.includes('Network Error')

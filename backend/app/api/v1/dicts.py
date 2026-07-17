@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.models import ClassInfo, Teacher, Course, Student, ExamBatch
+from app.models import ClassInfo, Teacher, Course, Student, ExamBatch, CourseStudent
 
 router = APIRouter()
 
@@ -13,9 +13,10 @@ def list_classes(
     college: str | None = Query(default=None),
     grade: str | None = Query(default=None),
     major: str | None = Query(default=None),
+    course_id: int | None = Query(default=None, description="按课程选修学生所在班级筛选"),
     session: Session = Depends(get_session),
 ) -> list[dict]:
-    """列出班级。可选按学院、年级、专业筛选。"""
+    """列出班级。可选按学院、年级、专业、课程筛选。"""
     stmt = select(ClassInfo)
     if college:
         stmt = stmt.where(ClassInfo.college == college)
@@ -23,6 +24,19 @@ def list_classes(
         stmt = stmt.where(ClassInfo.grade == grade)
     if major:
         stmt = stmt.where(ClassInfo.major == major)
+    if course_id:
+        enrolled_ids = session.exec(
+            select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+        ).all()
+        if enrolled_ids:
+            class_ids = session.exec(
+                select(Student.class_id)
+                .where(Student.student_id.in_(enrolled_ids))  # type: ignore[arg-type]
+                .distinct()
+            ).all()
+            if class_ids:
+                stmt = stmt.where(ClassInfo.class_id.in_(class_ids))  # type: ignore[arg-type]
+    stmt = stmt.order_by(ClassInfo.class_id)
     classes = session.exec(stmt).all()
     return [
         {"class_id": c.class_id, "class_name": c.class_name, "college": c.college, "major": c.major, "grade": c.grade}

@@ -17,10 +17,11 @@ export const authApi = {
         username: data.user.username,
         name: data.user.real_name,
         role: roleMap[data.user.role_code] ?? 'student',
-        department: '',
+        department: data.user.college ?? '',
         studentId: data.user.student_id ?? undefined,
         studentNo: data.user.student_no ?? undefined,
         classId: data.user.class_id ?? undefined,
+        teacherId: data.user.teacher_id ?? undefined,
       },
     }
   },

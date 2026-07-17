@@ -5,7 +5,7 @@ from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
-from app.models import Course, SysUser, Teacher, ExamBatch
+from app.models import Course, SysUser, Teacher, ExamBatch, KnowledgeModule, KnowledgePoint
 
 router = APIRouter()
 
@@ -82,6 +82,30 @@ def list_courses(
         }
         for c in courses
     ]
+
+
+@router.get("/courses/{course_id}/knowledge-points", tags=["课程管理"])
+def list_course_knowledge_points(
+    course_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[str]:
+    """返回课程下的知识点名称列表（学生/教师均可读取，用于自主练习选题）。"""
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+
+    module_ids = session.exec(
+        select(KnowledgeModule.module_id).where(KnowledgeModule.course_id == course_id)
+    ).all()
+    if not module_ids:
+        return []
+
+    points = session.exec(
+        select(KnowledgePoint.point_name).where(KnowledgePoint.module_id.in_(module_ids))  # type: ignore[arg-type]
+    ).all()
+    names = sorted({name.strip() for name in points if name and name.strip()}, key=lambda x: x.casefold())
+    return names
 
 
 @router.get("/courses/{course_id}", tags=["课程管理"])

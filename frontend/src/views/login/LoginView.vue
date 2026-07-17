@@ -22,11 +22,11 @@ const loginForm = reactive({
 /** 登录加载状态 */
 const loading = ref(false)
 
-/** 演示账号列表（与 backend seed 数据一致，仅快捷填充账号） */
+/** 演示账号（teacher / 201726010101 均为计科2401班，便于联调发布练习） */
 const demoAccounts = [
   { username: 'admin', role: '系统管理员' },
-  { username: 'teacher', role: '任课教师' },
-  { username: '201726010101', role: '学生用户' },
+  { username: 'teacher', role: '任课教师（计科2401）' },
+  { username: '201726010101', role: '学生（计科2401）' },
 ]
 
 onMounted(() => {

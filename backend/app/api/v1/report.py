@@ -66,15 +66,12 @@ def _check_report_access(
 ) -> None:
     """报告生成权限校验（Report.UserValid）。
 
-    - 管理员（admin）：全部放行
     - 任课教师（teacher）：仅可查看自己授课课程的报告
     - 学生（student）：仅可生成类型 2（个人学情）/ 4（学习质量），且只能看自己
+    - 管理员（admin）：不接触教学报告
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-
-    if role_code == "admin":
-        return
 
     if role_code == "teacher":
         _check_course_access(session, current_user, course_id)
@@ -226,7 +223,7 @@ def get_report(
     """统一报告生成接口（Report.Generate）。
 
     权限（Report.UserValid）：
-    - 管理员可生成所有报告
+    - 管理员不接触教学报告
     - 任课教师可生成本课程报告
     - 学生可生成类型 2/4 的个人报告（仅限本人）
     """
@@ -273,7 +270,7 @@ def preview_report(
     返回可直接在浏览器中展示的完整 HTML 页面。
 
     权限（Report.UserValid）：
-    - 管理员可预览所有报告
+    - 管理员不接触教学报告
     - 任课教师可预览本课程报告
     - 学生可预览类型 2/4 的个人报告（仅限本人）
     """
@@ -374,7 +371,7 @@ def export_report(
     - Sheet3: 知识点详情（如有）
 
     权限（Report.UserValid）：
-    - 管理员可导出所有报告
+    - 管理员不接触教学报告
     - 任课教师可导出本课程报告
     - 学生可导出类型 2/4 的个人报告（仅限本人）
     """

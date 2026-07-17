@@ -6,5 +6,6 @@
 """
 from .qa import QA_SYSTEM_PROMPT
 from .exam import EXAM_SYSTEM_PROMPT
+from .tutor import TUTOR_SYSTEM_PROMPT
 
-__all__ = ["QA_SYSTEM_PROMPT", "EXAM_SYSTEM_PROMPT"]
+__all__ = ["QA_SYSTEM_PROMPT", "EXAM_SYSTEM_PROMPT", "TUTOR_SYSTEM_PROMPT"]

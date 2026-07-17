@@ -11,9 +11,10 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.core.database import get_session
+from app.core.permissions import require_teaching_user
 from app.models import AiQuestion, StudentAnswerRecord
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teaching_user)])
 
 
 class ShortAnswerJudgeRequest(BaseModel):

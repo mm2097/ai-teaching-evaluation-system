@@ -11,8 +11,43 @@ import { fetchSemesters, fetchCourses, fetchClasses, fetchStudents } from '@/api
 import html2pdf from 'html2pdf.js'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
+import type { ClassInfo, Course, Student } from '@/types'
 
 const userStore = useUserStore()
+
+interface DashboardStats {
+  studentCount?: number
+  courseCount?: number
+  passRate?: number
+  excellentRate?: number
+  attendanceRate?: number
+  warningCount?: number
+}
+
+interface SaveFileHandle {
+  name: string
+  createWritable(): Promise<{
+    write(content: string): Promise<void>
+    close(): Promise<void>
+  }>
+}
+
+interface SaveFilePickerWindow extends Window {
+  showSaveFilePicker(options: {
+    suggestedName: string
+    types: { description: string; accept: Record<string, string[]> }[]
+  }): Promise<SaveFileHandle>
+}
+
+interface RequestError {
+  name?: string
+  message?: string
+  response?: {
+    data?: {
+      detail?: unknown
+    }
+  }
+}
 
 const isStudent = computed(() => userStore.userRole === 'student')
 
@@ -23,9 +58,9 @@ const showStudentPicker = computed(() => {
 })
 
 const semesterOptions = ref<{ label: string; value: string }[]>([])
-const courses = ref<any[]>([])
-const classes = ref<any[]>([])
-const students = ref<any[]>([])
+const courses = ref<Course[]>([])
+const classes = ref<ClassInfo[]>([])
+const students = ref<Student[]>([])
 
 onMounted(async () => {
   try {
@@ -34,7 +69,7 @@ onMounted(async () => {
       fetchCourses({ deptId: 1 }),
       fetchClasses({ deptId: 1 }),
     ])
-    semesterOptions.value = semRes.map((s: any) => ({ label: s.semesterName, value: s.semesterCode }))
+    semesterOptions.value = semRes.map((s) => ({ label: s.semesterName, value: s.semesterCode }))
     courses.value = courseRes
     classes.value = classRes
   } catch { /* empty */ }
@@ -44,14 +79,15 @@ onMounted(async () => {
     genParams.value.studentId = userStore.userInfo.studentId
     genParams.value.classId = userStore.userInfo.classId ?? genParams.value.classId
     // 学生自动设置课程（取所选课程列表第一门）
-    if (courses.value.length > 0) {
-      genParams.value.courseId = courses.value[0].id
+    const firstCourse = courses.value[0]
+    if (firstCourse) {
+      genParams.value.courseId = firstCourse.id
     }
   }
 })
 
 const reportTypes = [
-  { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', roles: ['admin', 'teacher'] },
+  { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', roles: ['teacher'] },
   { id: 2, name: '学生个人学情报告', desc: '包含学生雷达图、知识点掌握、学习建议' },
   { id: 3, name: '课程知识点分析报告', desc: '包含知识点热力图、薄弱项分析、改进建议' },
   { id: 4, name: '学生学习质量报告', desc: '包含学习质量评价得分、维度分析' },
@@ -73,7 +109,7 @@ const genParams = ref({
 const generating = ref(false)
 const previewVisible = ref(false)
 const reportData = ref<ReportResponse | null>(null)
-const dashboardStats = ref<Record<string, any>>({})
+const dashboardStats = ref<DashboardStats>({})
 
 const csCourses = computed(() => courses.value)
 const csClasses = computed(() => classes.value)
@@ -93,7 +129,17 @@ const previewTitle = computed(() => {
     || '学情分析报告'
 })
 
-const historyReports = ref([
+interface HistoryReport {
+  id: number
+  name: string
+  type: string
+  time: string
+  format: string
+  data?: ReportResponse | null
+  stats?: DashboardStats
+}
+
+const historyReports = ref<HistoryReport[]>([
   { id: 1, name: '计科2401班 - 数据结构 班级学情报告', type: '班级学情', time: '2026-03-15 10:30', format: 'PDF' },
   { id: 2, name: '陈同学 - 数据结构 学生个报告', type: '个人学情', time: '2026-03-14 16:00', format: 'PDF' },
   { id: 3, name: '数据结构 知识点分析报告', type: '知识点', time: '2026-03-12 09:00', format: 'PDF' },
@@ -139,14 +185,14 @@ async function loadDashboardStats() {
     const { data } = await request.get('/v1/dashboard/stats', {
       params: { course_id: genParams.value.courseId },
     })
-    dashboardStats.value = data
+    dashboardStats.value = data as DashboardStats
   } catch { dashboardStats.value = {} }
 }
 
 async function generateReport(): Promise<void> {
   generating.value = true
   try {
-    // 看板统计仅教师/管理员可访问，学生跳过
+    // 看板统计仅教师可访问，学生跳过
     if (!isStudent.value) {
       await loadDashboardStats()
     }
@@ -166,8 +212,8 @@ async function generateReport(): Promise<void> {
     })
 
     const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
-    const courseName = courses.value.find((c: any) => c.id === genParams.value.courseId)?.courseName || ''
-    const className = classes.value.find((c: any) => c.id === genParams.value.classId)?.className || ''
+    const courseName = courses.value.find((course) => course.id === genParams.value.courseId)?.courseName || ''
+    const className = classes.value.find((item) => item.id === genParams.value.classId)?.className || ''
     historyReports.value.unshift({
       id: Date.now(),
       name: `${className}${courseName ? ' - ' + courseName : ''} ${typeName.slice(0, 4)}报告`,
@@ -178,8 +224,11 @@ async function generateReport(): Promise<void> {
       stats: { ...dashboardStats.value },
     })
     ElMessage.success('报告生成成功！')
-  } catch (e: any) {
-    const msg = e?.response?.data?.detail || e?.message || '报告生成失败，请确认已选择课程和班级'
+  } catch (error: unknown) {
+    const requestError = error as RequestError
+    const msg = requestError.response?.data?.detail
+      || requestError.message
+      || '报告生成失败，请确认已选择课程和班级'
     ElMessage.error(typeof msg === 'string' ? msg : '报告生成失败')
   } finally {
     generating.value = false
@@ -201,7 +250,7 @@ async function exportReport(): Promise<void> {
   }
 
   try {
-    const courseName = courses.value.find((c: any) => c.id === genParams.value.courseId)?.courseName || '未知课程'
+    const courseName = courses.value.find((course) => course.id === genParams.value.courseId)?.courseName || '未知课程'
     const typeName = reportTypes.find((t) => t.id === genParams.value.reportType)?.name || '报告'
     const ext = genParams.value.format === 'pdf' ? '.pdf' : '.csv'
     const fileName = `${courseName}_${typeName.slice(0, 4)}报告_${new Date().toISOString().slice(0, 10)}${ext}`
@@ -219,7 +268,7 @@ async function exportReport(): Promise<void> {
 
     if ('showSaveFilePicker' in window) {
       try {
-        const handle = await (window as any).showSaveFilePicker({
+        const handle = await (window as SaveFilePickerWindow).showSaveFilePicker({
           suggestedName: fileName,
           types: [{ description: 'CSV 文件', accept: { 'text/csv': ['.csv'] } }],
         })
@@ -228,7 +277,9 @@ async function exportReport(): Promise<void> {
         await writable.close()
         ElMessage.success(`报告已保存：${handle.name}`)
         return
-      } catch (e: any) { if (e.name === 'AbortError') return }
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') return
+      }
     }
 
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8' })
@@ -237,12 +288,17 @@ async function exportReport(): Promise<void> {
     a.href = url; a.download = fileName; a.click()
     URL.revokeObjectURL(url)
     ElMessage.success('报告已导出为 CSV 格式')
-  } catch (e: any) {
-    ElMessage.error('导出失败：' + (e?.message || '未知错误'))
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : '未知错误'
+    ElMessage.error('导出失败：' + message)
   }
 }
 
-function buildHtmlReport(data: any, meta: { courseName: string; typeName: string }, stats: any): string {
+function buildHtmlReport(
+  data: ReportResponse,
+  meta: { courseName: string; typeName: string },
+  stats: DashboardStats,
+): string {
   const isPersonal = (data.scope === 'student' || data.report_type === 2 || data.report_type === 4)
   let sections = ''
 
@@ -281,7 +337,11 @@ function buildHtmlReport(data: any, meta: { courseName: string; typeName: string
 <body><h1>${meta.courseName}<br>${meta.typeName}</h1>${sections}</body></html>`
 }
 
-function buildCsvReport(data: any, meta: { courseName: string; typeName: string }, stats: any): string {
+function buildCsvReport(
+  data: ReportResponse,
+  meta: { courseName: string; typeName: string },
+  stats: DashboardStats,
+): string {
   const isPersonal = (data.scope === 'student' || data.report_type === 2 || data.report_type === 4)
   const rows: string[] = []
   rows.push(`"${meta.courseName} - ${meta.typeName}"`)
@@ -305,14 +365,14 @@ function buildCsvReport(data: any, meta: { courseName: string; typeName: string 
   return rows.join('\n')
 }
 
-function previewHistoryReport(row: any): void {
-  reportData.value = row.data
+function previewHistoryReport(row: HistoryReport): void {
+  reportData.value = row.data ?? null
   dashboardStats.value = row.stats || {}
   previewVisible.value = true
 }
 
-function downloadHistoryReport(row: any): void {
-  reportData.value = row.data
+function downloadHistoryReport(row: HistoryReport): void {
+  reportData.value = row.data ?? null
   dashboardStats.value = row.stats || {}
   genParams.value.format = row.format === 'PDF' ? 'pdf' : 'excel'
   exportReport()

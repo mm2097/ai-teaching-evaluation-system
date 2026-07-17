@@ -80,8 +80,6 @@ def _teacher_for_user(current_user: SysUser, session: Session) -> Teacher | None
 
 def _can_access_course(current_user: SysUser, course_id: int, session: Session) -> bool:
     role_code = _role_code(current_user, session)
-    if role_code == "admin":
-        return True
     if role_code == "teacher":
         teacher = _teacher_for_user(current_user, session)
         course = session.get(Course, course_id)
@@ -173,6 +171,8 @@ def list_answer_tasks(
 ) -> list[dict]:
     """答题任务列表（含题目数、总分、课程/班级名称）。"""
     role_code = _role_code(current_user, session)
+    if role_code not in {"teacher", "student"}:
+        raise HTTPException(status_code=403, detail="当前角色无权查看答题任务")
     if role_code == "teacher":
         teacher = _teacher_for_user(current_user, session)
         if not teacher:
@@ -322,6 +322,8 @@ def list_answer_records(
         grouped.setdefault((r.task_id, r.student_id), []).append(r)
 
     role_code = _role_code(current_user, session)
+    if role_code not in {"teacher", "student"}:
+        raise HTTPException(status_code=403, detail="当前角色无权查看答题记录")
     current_student = _student_for_user(current_user, session) if role_code == "student" else None
     result = []
     for (tid, sid), records in grouped.items():
@@ -380,8 +382,8 @@ def get_answer_record_detail(
         current_student = _student_for_user(current_user, session)
         if not current_student or first_record.student_id != current_student.student_id:
             raise HTTPException(status_code=403, detail="无权查看该答题记录")
-        # 尊重教师设置的"是否允许交卷后查看详情"
-        if not task.allow_review:
+        # 自己刚提交的记录可以用于结果页即时反馈；已关闭/非本人仍由上面的权限控制拦截。
+        if not task.allow_review and task.status == 2:
             raise HTTPException(status_code=403, detail="教师已关闭本题答题详情查看权限")
 
     records = session.exec(
@@ -422,6 +424,69 @@ def get_answer_record_detail(
         "totalScore": 100,
         "questionResults": question_results,
     }
+
+
+@router.get("/error-book", tags=["答题管理"])
+def get_error_book(
+    course_id: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """学生错题本：从答题记录（is_correct=0）实时聚合，跨浏览器/设备持久。
+
+    - 仅返回学生本人错题（客观题判错，或简答题 AI 判分未达标）。
+    - 每道题按最近一次做错取一条，附标准答案与解析，供订正复习。
+    """
+    role_code = _role_code(current_user, session)
+    if role_code != "student":
+        raise HTTPException(status_code=403, detail="错题本仅学生本人可见")
+    student = _student_for_user(current_user, session)
+    if not student:
+        raise HTTPException(status_code=403, detail="学生信息不存在")
+
+    stmt = (
+        select(StudentAnswerRecord, AiQuestion)
+        .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .where(
+            StudentAnswerRecord.student_id == student.student_id,
+            StudentAnswerRecord.is_correct == 0,
+        )
+    )
+    if course_id:
+        stmt = stmt.where(AiQuestion.course_id == course_id)
+
+    rows = session.exec(stmt).all()
+
+    # 待人工批改的简答题（ai_score 为空）不算"确定错题"，从错题本剔除
+    # 按题目去重，保留最近一次做错的记录
+    latest_by_question: dict[int, tuple[StudentAnswerRecord, AiQuestion]] = {}
+    for record, question in rows:
+        if question.type == 5 and record.ai_score is None:
+            continue
+        prev = latest_by_question.get(question.question_id)
+        if prev is None or (record.submit_time and prev[0].submit_time
+                            and record.submit_time > prev[0].submit_time):
+            latest_by_question[question.question_id] = (record, question)
+
+    result = []
+    for record, question in latest_by_question.values():
+        detail = _serialize_question(question, session, 0.0, include_solution=True)
+        result.append({
+            "quizQuestion": detail,
+            "userAnswer": record.user_answer or "",
+            "correctAnswer": detail["answer"],
+            "answerList": detail.get("answerList"),
+            "submitTime": record.submit_time.strftime("%Y-%m-%d %H:%M:%S")
+            if record.submit_time else "",
+            "knowledgePoint": detail["knowledgePoint"],
+            "aiScore": record.ai_score,
+            "aiReason": record.judge_reason or "",
+        })
+
+    # 按做错时间倒序
+    result.sort(key=lambda x: x["submitTime"], reverse=True)
+    return result
+
 
 
 class SubmitAnswersRequest(BaseModel):
@@ -491,19 +556,13 @@ def _grade_task_answers(
     if not tq_rows:
         raise HTTPException(status_code=404, detail="任务不存在或无题目")
 
-    # 检查是否已提交过（当前为单次答题模式，后续扩展多次答题时需改造此处逻辑）
+    # 覆盖同一学生的旧记录，避免重复提交留下多份逐题记录。
     previous_records = session.exec(
         select(StudentAnswerRecord).where(
             StudentAnswerRecord.task_id == task.task_id,
             StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
-    if previous_records and task.max_attempts <= 1:
-        raise HTTPException(
-            status_code=409,
-            detail="你已完成该答题任务，不可重复作答",
-        )
-    # 多次答题模式下删除旧记录后允许重新提交
     for record in previous_records:
         session.delete(record)
     if previous_records:
@@ -573,7 +632,7 @@ def _grade_task_answers(
     refresh_student_mastery(session, student.student_id, task.course_id)
     records_by_question = {record.question_id: record for record in records}
     question_results = []
-    include_solution = bool(task.allow_review)
+    include_solution = True
     for _, question in tq_rows:
         record = records_by_question.get(question.question_id)
         manual_required = bool(question.type == 5 and record and record.ai_score is None)
@@ -594,7 +653,7 @@ def _grade_task_answers(
         "manualRequiredCount": len(manual_question_ids),
         "manualQuestionIds": manual_question_ids,
         "allowReview": bool(task.allow_review),
-        "questionResults": question_results if task.allow_review else [],
+        "questionResults": question_results,
     }
 
 
@@ -764,6 +823,8 @@ def _ensure_question_in_bank(
         options=json.dumps(item.options, ensure_ascii=False) if item.options else None,
         correct_answer=answer,
         analysis=item.explanation,
+        difficulty=item.difficulty or "medium",
+        source="ai",
         create_by=creator_id,
     )
     session.add(q)
@@ -843,7 +904,7 @@ def create_answer_task(
     _require_course_access(current_user, req.courseId, session)
 
     role_code = _role_code(current_user, session)
-    if role_code not in {"admin", "teacher"}:
+    if role_code != "teacher":
         raise HTTPException(status_code=403, detail="无权创建答题任务")
     if req.title.startswith(_SELF_PRACTICE_PREFIX):
         raise HTTPException(status_code=422, detail="自主练习标题为系统保留格式")
@@ -925,7 +986,7 @@ def publish_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权发布答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.status = 1
@@ -945,7 +1006,7 @@ def close_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权关闭答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.status = 2
@@ -970,7 +1031,7 @@ def update_review_policy(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权操作答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.allow_review = 1 if req.allowReview else 0
@@ -999,7 +1060,7 @@ def reopen_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权操作答题任务")
     _require_course_access(current_user, task.course_id, session)
     if task.status not in (1, 2):
@@ -1114,8 +1175,11 @@ def _call_algo_generate(
     question_types_map: dict[str, int],
     reference_questions: list[dict],
     extra_requirements: str,
-) -> list[dict]:
-    """调用一次算法服务生成题目，返回 raw questions 列表。"""
+) -> tuple[list[dict], dict]:
+    """调用一次算法服务生成题目，返回 (raw questions, meta)。
+
+    meta 含算法服务回传的真实 model / elapsed_ms 等；服务未回传时给空 dict。
+    """
     payload = {
         "course_id": course_id,
         "course_name": course_name,
@@ -1129,7 +1193,7 @@ def _call_algo_generate(
         resp = httpx.post("http://127.0.0.1:8001/generate_exercises", json=payload, timeout=60.0)
         resp.raise_for_status()
         data = resp.json()
-        return data.get("questions", [])
+        return data.get("questions", []), data.get("meta", {}) or {}
     except httpx.ConnectError:
         raise HTTPException(status_code=503, detail="AI 算法服务未启动（8001 端口）")
     except httpx.HTTPStatusError as e:
@@ -1188,8 +1252,8 @@ def generate_exercises_proxy(
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """教师/管理员代理调用算法服务 8001 的 /generate_exercises。"""
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    """教师代理调用算法服务 8001 的 /generate_exercises。"""
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="学生请使用自主练习接口")
     return _generate_exercises(
         req,
@@ -1229,6 +1293,9 @@ def _generate_exercises(
     seen_qids: set[int] = set()
 
     raw_questions: list[dict] = []
+    # 累计各批次真实耗时 + 记录模型名（来自算法服务回传的 meta）
+    total_elapsed_ms = 0
+    model_name = ""
 
     if req.difficultyDistribution:
         # ===== 难度分布模式：按 easy/medium/hard 分别生成 =====
@@ -1243,10 +1310,12 @@ def _generate_exercises(
                 if r.get("questionId") not in seen_qids:
                     seen_qids.add(r.get("questionId"))
                     rag_references.append(r)
-            batch = _call_algo_generate(
+            batch, batch_meta = _call_algo_generate(
                 req.courseId, course_name, knowledge_points, difficulty,
                 type_map, ref_qs, extra,
             )
+            total_elapsed_ms += int(batch_meta.get("elapsed_ms", 0) or 0)
+            model_name = model_name or batch_meta.get("model", "")
             # 记录每题的目标难度（LLM 可能不遵守，后处理强制覆盖）
             raw_questions.extend((difficulty, q) for q in batch)
     else:
@@ -1255,10 +1324,12 @@ def _generate_exercises(
         ref_qs, rag_references = _retrieve_reference_questions(
             session, req.courseId, req.knowledgePoints or [], req.difficulty
         )
-        batch = _call_algo_generate(
+        batch, batch_meta = _call_algo_generate(
             req.courseId, course_name, knowledge_points, req.difficulty,
             type_map, ref_qs, extra,
         )
+        total_elapsed_ms += int(batch_meta.get("elapsed_ms", 0) or 0)
+        model_name = model_name or batch_meta.get("model", "")
         raw_questions.extend((req.difficulty, q) for q in batch)
 
     # 转换为前端 QuizQuestion 格式（强制使用请求的难度）
@@ -1288,8 +1359,8 @@ def _generate_exercises(
         "questions": questions,
         "ragReferences": rag_references,
         "meta": {
-            "model": "deepseek-chat",
-            "elapsedMs": 0,
+            "model": model_name or "AI 模型",
+            "elapsedMs": total_elapsed_ms,
         },
     }
 
@@ -1317,6 +1388,7 @@ def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str
 def generate_exercises_stream(
     req: GenerateExercisesRequest,
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """SSE 流式生成：按难度逐批调用算法服务，每批完成后立即推送给前端。
 
@@ -1326,8 +1398,19 @@ def generate_exercises_stream(
       {"type": "done", "ragReferences": [...], "totalCount": N}
       {"type": "error", "message": "..."}
     """
+    if _role_code(current_user, session) != "teacher":
+        raise HTTPException(status_code=403, detail="仅任课教师可使用流式 AI 出题")
     course = session.get(Course, req.courseId)
-    course_name = course.course_name if course else "未知课程"
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    _require_course_access(current_user, req.courseId, session)
+    usage = _consume_ai_quota(
+        req,
+        session,
+        current_user,
+        operation="teacher_generate_stream",
+    )
+    course_name = course.course_name
     knowledge_points = req.knowledgePoints or ["综合"]
     types = req.questionTypes or ["single_choice"]
     extra = req.extraRequirements or ""
@@ -1340,6 +1423,8 @@ def generate_exercises_stream(
         rag_references: list[dict] = []
         seen_qids: set[int] = set()
         qidx = 0
+        total_elapsed_ms = 0
+        model_name = ""
 
         try:
             # 构建生成计划：[(difficulty, count), ...]
@@ -1364,10 +1449,12 @@ def generate_exercises_stream(
                         seen_qids.add(qid)
                         rag_references.append(r)
 
-                batch = _call_algo_generate(
+                batch, batch_meta = _call_algo_generate(
                     req.courseId, course_name, knowledge_points, difficulty,
                     type_map, ref_qs, extra,
                 )
+                total_elapsed_ms += int(batch_meta.get("elapsed_ms", 0) or 0)
+                model_name = model_name or batch_meta.get("model", "")
 
                 # 逐题推送
                 for q in batch:
@@ -1381,11 +1468,21 @@ def generate_exercises_stream(
             for q in all_questions:
                 q["score"] = round(100.0 / total, 1)
 
+            usage.success = 1
+            session.add(usage)
+            session.commit()
             yield _sse({
                 "type": "done",
                 "ragReferences": rag_references,
                 "totalCount": len(all_questions),
+                "meta": {
+                    "model": model_name or "AI 模型",
+                    "elapsedMs": total_elapsed_ms,
+                },
             })
+            usage.success = 1
+            session.add(usage)
+            session.commit()
 
         except HTTPException as e:
             yield _sse({"type": "error", "message": e.detail})
@@ -1431,6 +1528,7 @@ def start_self_practice(
         publish_time=now,
         deadline=now + timedelta(hours=1),
         status=1,
+        allow_review=1,
         create_by=current_user.user_id,
     )
 
@@ -1500,4 +1598,5 @@ def start_self_practice(
         },
         "meta": generated["meta"],
     }
+
 

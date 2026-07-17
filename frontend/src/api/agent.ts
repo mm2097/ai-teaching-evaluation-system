@@ -3,6 +3,7 @@
  * 对接后端 /api/v1/agent/chat 和 /api/v1/agent/chat/stream
  */
 import request, { USE_MOCK } from '@/utils/request'
+import { getToken } from '@/utils/auth'
 import type { AgentType, AgentStreamEvent } from '@/types'
 import { mockStreamAgentChat } from '@/mock/agentMock'
 
@@ -17,6 +18,17 @@ export interface StreamAgentChatParams {
   courseId: number
   courseName?: string
   message: string
+  sessionId?: string
+}
+
+/** 清空 Agent 会话记忆（后端进程内 6 轮记忆） */
+export async function clearAgentSession(sessionId: string): Promise<void> {
+  if (USE_MOCK) return
+  try {
+    await request.delete(`/v1/agent/session/${encodeURIComponent(sessionId)}`)
+  } catch {
+    // 清空记忆失败不阻塞前端重置对话
+  }
 }
 
 /**
@@ -39,13 +51,18 @@ export async function* streamAgentChat(
     return
   }
 
+  const token = getToken()
   const res = await fetch('/api/v1/agent/chat/stream', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({
       message: params.message,
       course_id: params.courseId,
       agent_type: params.agentType,
+      session_id: params.sessionId,
       max_steps: 5,
     }),
   })

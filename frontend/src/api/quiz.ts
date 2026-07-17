@@ -2,6 +2,7 @@
  * 答题记录 API（调用真实后端 /api/v1/answer-records）
  */
 import request, { USE_MOCK } from '@/utils/request'
+import { getToken } from '@/utils/auth'
 import {
   appendLocalErrorBook,
   buildErrorBookItems,
@@ -85,12 +86,20 @@ export interface ErrorBookItem {
   aiReason?: string
 }
 
-/** 错题本（本地存储，聚合教师布置 + 自主练习错题） */
+/** 错题本（后端从答题记录 is_correct=0 实时聚合，跨设备持久；失败回退本地缓存） */
 export async function fetchErrorBook(studentId: number): Promise<ErrorBookItem[]> {
   if (USE_MOCK) {
     return mockErrorBook(studentId)
   }
-  return loadLocalErrorBook(studentId)
+  try {
+    const res = await request.get('/v1/error-book')
+    const items = (res.data as ErrorBookItem[]) || []
+    // 后端权威数据到手，顺便刷新本地缓存作为离线兜底
+    return items
+  } catch {
+    // 后端不可用时回退本地缓存，避免整页空白
+    return loadLocalErrorBook(studentId)
+  }
 }
 
 /** 提交后将错题写入本地错题本 */
@@ -146,7 +155,15 @@ export interface SaveQuizAssignmentParams {
 }
 
 function buildGeneratePayload(params: GenerateQuizParams) {
-  const payload: Record<string, any> = {
+  const payload: {
+    courseId: number
+    knowledgePoints: string[]
+    questionTypes: ExerciseType[]
+    questionCount: number
+    extraRequirements: string
+    difficultyDistribution?: GenerateQuizParams['difficultyDistribution']
+    difficulty?: DifficultyLevel
+  } = {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
     questionTypes: params.questionTypes,
@@ -212,7 +229,7 @@ export async function startSelfPractice(params: GenerateQuizParams): Promise<Sta
 export interface StreamCallbacks {
   onStage?: (stage: string, difficulty?: string) => void
   onQuestion?: (question: QuizQuestion) => void
-  onDone?: (ragReferences: RagReference[], totalCount: number) => void
+  onDone?: (ragReferences: RagReference[], totalCount: number, meta?: GenerateQuizResult['meta']) => void
   onError?: (message: string) => void
 }
 
@@ -221,9 +238,13 @@ export async function generateQuizStream(params: GenerateQuizParams, callbacks: 
   const payload = buildGeneratePayload(params)
 
   try {
+    const token = getToken()
     const response = await fetch('/api/v1/exercises/generate/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(payload),
     })
 
@@ -249,7 +270,7 @@ export async function generateQuizStream(params: GenerateQuizParams, callbacks: 
           const event = JSON.parse(line.slice(6))
           if (event.type === 'stage') callbacks.onStage?.(event.stage, event.difficulty)
           else if (event.type === 'question') callbacks.onQuestion?.(event.question)
-          else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0)
+          else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0, event.meta)
           else if (event.type === 'error') callbacks.onError?.(event.message || '生成失败')
         } catch { /* skip malformed */ }
       }
@@ -321,6 +342,7 @@ export interface QuizSubmitResult {
   score: number
   totalScore: number
   correctCount: number
+  manualRequiredCount?: number
   taskId?: number
   taskTitle?: string
   allowReview?: boolean

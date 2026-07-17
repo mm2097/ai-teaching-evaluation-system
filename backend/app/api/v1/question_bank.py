@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, func, or_, select
 
 from app.core.database import get_session
+from app.core.permissions import require_teacher
 from app.models import (
     AiQuestion,
     Course,
@@ -29,7 +30,7 @@ from app.models import (
 )
 from app.services.question_answers import answer_for_response, encode_correct_answer
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teacher)])
 
 # type 映射（与 models/question.py、quiz.py 一致：5=简答）
 _TYPE_STR_TO_INT = {
@@ -40,14 +41,6 @@ _TYPE_STR_TO_INT = {
     "short_answer": 5,
 }
 _TYPE_INT_TO_STR = {v: k for k, v in _TYPE_STR_TO_INT.items()}
-
-
-def _difficulty_str(score: int) -> str:
-    if score < 3:
-        return "easy"
-    if score <= 7:
-        return "medium"
-    return "hard"
 
 
 def _sync_vector(session: Session, course_id: int, question_id: int, action: str = "upsert") -> None:
@@ -177,7 +170,8 @@ def list_question_bank(
             "answer": answer,
             "answerList": answer_list,
             "explanation": q.analysis or "",
-            "difficulty": _difficulty_str(len(q.content) % 10),
+            "difficulty": q.difficulty or "medium",
+            "source": q.source or "manual",
             "status": status or "published",
             "createdTime": q.create_time.strftime("%Y-%m-%d %H:%M") if q.create_time else "",
         })
@@ -238,6 +232,8 @@ def add_questions_to_bank(
             options=options_str,
             correct_answer=answer,
             analysis=item.explanation,
+            difficulty=item.difficulty or "medium",
+            source=req.source or "manual",
             create_by=1,
         )
         session.add(q)
@@ -298,10 +294,12 @@ def question_bank_stats(
         type_str = _TYPE_INT_TO_STR.get(q.type, "single_choice")
         if type_str in by_type:
             by_type[type_str] += 1
-        diff_str = _difficulty_str(len(q.content) % 10)
+        diff_str = q.difficulty or "medium"
         if diff_str in by_difficulty:
             by_difficulty[diff_str] += 1
-        by_source["manual"] += 1  # 当前所有题均归为 manual
+        src = q.source or "manual"
+        if src in by_source:
+            by_source[src] += 1
 
     return {
         "total": len(questions),
@@ -332,6 +330,8 @@ def update_question(
         q.analysis = req.explanation
     if req.type:
         q.type = _TYPE_STR_TO_INT.get(req.type, q.type)
+    if req.difficulty:
+        q.difficulty = req.difficulty
     if req.knowledgePoint:
         point_id = _find_or_create_knowledge_point(session, q.course_id, req.knowledgePoint)
         if point_id:
@@ -457,6 +457,8 @@ def import_questions_from_file(
             options=options_str,
             correct_answer=str(answer),
             analysis=row.get("explanation"),
+            difficulty=row.get("difficulty") or "medium",
+            source="import",
             create_by=1,
         )
         session.add(q)
@@ -561,6 +563,8 @@ def import_questions_from_builtin(
                 q_data.get("answerList") or q_data.get("answer_list"),
             ),
             analysis=q_data.get("explanation"),
+            difficulty=q_data.get("difficulty") or "medium",
+            source="import",
             create_by=1,
         )
         session.add(q)

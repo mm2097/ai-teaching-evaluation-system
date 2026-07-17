@@ -153,12 +153,14 @@ export function useDashboardFilter() {
       if (clearClass) filters.value.classId = undefined
       return
     }
+    const majorName = majorOptions.value.find((m) => m.value === filters.value.majorId)?.label
     const list = await fetchClasses({
       ...queryBase(),
       courseId: resolvedCourseId,
+      major: majorName,
     })
     classOptions.value = list.map((c) => ({
-      label: `${c.className}（${c.majorName} ${c.grade}）`,
+      label: c.className,
       value: c.id,
     }))
     if (clearClass) {

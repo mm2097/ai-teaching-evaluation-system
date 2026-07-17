@@ -15,6 +15,7 @@ interface ReviewedQuestion {
 const props = defineProps<{
   questions: ReviewedQuestion[]
   meta?: { model: string; elapsedMs: number } | null
+  generationPending?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -171,20 +172,29 @@ const difficultyColor: Record<DifficultyLevel, string> = {
       <el-text type="info" size="small">学生交卷后能否查看题目及答案解析</el-text>
     </div>
 
+    <el-alert
+      v-if="props.generationPending"
+      title="AI is still generating questions. Save and publish will be available when generation finishes."
+      type="info"
+      :closable="false"
+      show-icon
+      class="pending-alert"
+    />
+
     <!-- 操作按钮 -->
     <div class="summary-actions">
       <el-button
         type="warning"
         plain
         :icon="FolderAdd"
-        :disabled="!acceptedCount"
+        :disabled="props.generationPending || !acceptedCount"
         @click="emit('addAllToBank')"
       >
         全部加入题库
       </el-button>
       <el-button
         :icon="EditPen"
-        :disabled="!acceptedCount"
+        :disabled="props.generationPending || !acceptedCount"
         @click="emit('saveDraft')"
       >
         保存草稿
@@ -192,7 +202,7 @@ const difficultyColor: Record<DifficultyLevel, string> = {
       <el-button
         type="success"
         :icon="Promotion"
-        :disabled="!acceptedCount"
+        :disabled="props.generationPending || !acceptedCount"
         @click="emit('publish')"
       >
         发布给班级（{{ acceptedCount }} 题）

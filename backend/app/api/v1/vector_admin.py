@@ -12,10 +12,11 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from app.core.database import get_session
+from app.core.permissions import require_teacher
 from app.services.rag_service import get_rag_service
 from app.services.vector_store import get_vector_store
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teacher)])
 
 
 class RebuildRequest(BaseModel):

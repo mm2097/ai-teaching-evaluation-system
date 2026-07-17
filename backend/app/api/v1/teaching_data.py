@@ -826,13 +826,13 @@ def upload_teaching_data(
 # ============================================================================
 
 def _check_template_access(current_user: SysUser, session: Session) -> None:
-    """校验模板下载权限：管理员或任课教师（Data.Template.UserValid）。"""
+    """校验模板下载权限：仅任课教师（Data.Template.UserValid）。"""
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-    if role_code not in ("admin", "teacher"):
+    if role_code != "teacher":
         raise HTTPException(
             status_code=403,
-            detail="仅管理员和任课教师可下载模板",
+            detail="仅任课教师可下载模板",
         )
 
 
@@ -844,7 +844,7 @@ def list_templates(
     """返回可下载的模板列表（Data.Template.Type）。
 
     按 dataType 分组：成绩、考勤。
-    权限：管理员或任课教师。
+    权限：任课教师。
     """
     _check_template_access(current_user, session)
     return [
@@ -872,7 +872,7 @@ def download_template(
       - xlsx（默认）：Excel 格式，含表头样式和填写说明
       - txt：UTF-8 逗号分隔文本，含注释说明、表头行和示例行
 
-    权限：管理员或任课教师。
+    权限：任课教师。
     """
     _check_template_access(current_user, session)
 

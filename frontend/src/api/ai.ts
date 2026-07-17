@@ -2,8 +2,10 @@
  * AI 能力 & 报告 API
  */
 import request from '@/utils/request'
+import { generateQuizQuestions } from '@/api/quiz'
 
 export interface AIQuestionParams {
+  courseId?: number
   knowledgePoint: string
   count: number
   types: string[]
@@ -30,9 +32,24 @@ export interface ReportResponse {
   error?: string
 }
 
-/** 生成练习题（当前返回空，后续接入 AI 服务） */
-export async function generateExercises(_params: AIQuestionParams): Promise<GeneratedQuestion[]> {
-  return []
+/** 生成练习题（兼容旧调用，实际走后端 AI 出题代理） */
+export async function generateExercises(params: AIQuestionParams): Promise<GeneratedQuestion[]> {
+  const result = await generateQuizQuestions({
+    courseId: params.courseId ?? 1,
+    classId: 0,
+    knowledgePoints: params.knowledgePoint ? [params.knowledgePoint] : [],
+    questionTypes: params.types as any,
+    questionCount: params.count,
+    difficulty: 'medium',
+  })
+  return result.questions.map((question) => ({
+    content: question.stem,
+    type: question.type,
+    options: question.options?.map((option) => option.text),
+    answer: question.answer,
+    knowledgePoint: question.knowledgePoint,
+    difficulty: question.difficulty,
+  }))
 }
 
 /** 生成报告（统一接口，后端按 report_type 返回不同内容） */

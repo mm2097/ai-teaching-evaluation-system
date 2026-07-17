@@ -248,7 +248,7 @@ def _t_get_score_trend(ctx, course_id: int = 0, student_id: int = 0, **_) -> dic
                 )
             ).first()
             if sr is not None:
-                score = round(float(sr[0]), 1)
+                score = round(float(sr), 1)
             else:
                 # IndividualScore
                 isc = ctx.session.exec(
@@ -258,7 +258,7 @@ def _t_get_score_trend(ctx, course_id: int = 0, student_id: int = 0, **_) -> dic
                     )
                 ).first()
                 if isc is not None:
-                    score = round(float(isc[0]), 1)
+                    score = round(float(isc), 1)
                 else:
                     # CourseTestDetail
                     ctd = ctx.session.exec(
@@ -268,7 +268,7 @@ def _t_get_score_trend(ctx, course_id: int = 0, student_id: int = 0, **_) -> dic
                         )
                     ).first()
                     if ctd is not None:
-                        score = round(float(ctd[0]), 1)
+                        score = round(float(ctd), 1)
             trend.append({
                 "assessment": b.batch_name,
                 "score": score,

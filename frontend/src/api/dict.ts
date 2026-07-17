@@ -109,10 +109,12 @@ export async function fetchClasses(params?: {
   courseId?: number
   teacherId?: number
   semesterCode?: string
+  major?: string
 }): Promise<ClassInfo[]> {
   const q: any = {}
-  // 后端按 college 名称筛选，暂不支持 deptId/majorId 映射
-  if (params?.courseId) q.course_id = params.courseId   // 暂不支持，后端无此参数
+  if (params?.courseId) q.course_id = params.courseId
+  if (params?.grade) q.grade = params.grade
+  if (params?.major) q.major = params.major
   const res = await request.get('/v1/classes', { params: q })
   return (res.data as any[]).map(mapClass)
 }

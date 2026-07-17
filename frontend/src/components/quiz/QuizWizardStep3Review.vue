@@ -160,12 +160,16 @@ async function handleAddAllToBank() {
     ElMessage.warning('AI 仍在生成题目，请等待生成完成后再加入题库')
     return
   }
-  if (!props.courseId || !acceptedQuestions.value.length) return
+  if (!props.courseId) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  if (!acceptedQuestions.value.length) return
   addingToBank.value = true
   try {
     const questions = acceptedQuestions.value.map((q) => ({ ...q, courseId: props.courseId! }))
     const result = await addQuestionsToBank(questions, { source: 'ai' })
-    ElMessage.success(`已加入题库 ${result.added} 道`)
+    ElMessage.success(`题库已更新：新增 ${result.added} 道，跳过重复 ${result.skipped} 道`)
   } finally {
     addingToBank.value = false
   }
@@ -210,6 +214,7 @@ async function handleAddAllToBank() {
           <QuizPublishSummary
             :questions="reviewedItems"
             :generation-pending="props.generationPending"
+            :bank-loading="addingToBank"
             v-model:deadline="deadline"
             v-model:allow-review="allowReview"
             @save-draft="handleSaveDraft"

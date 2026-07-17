@@ -1241,6 +1241,54 @@ def _distribute_question_types(total: int, types: list[str]) -> dict[str, int]:
     return type_map
 
 
+def _expand_type_queue(total: int, types: list[str]) -> list[str]:
+    """按 _distribute_question_types 相同顺序展开为题型队列。"""
+    if not types:
+        types = ["single_choice"]
+    type_map = _distribute_question_types(total, types)
+    queue: list[str] = []
+    remaining = dict(type_map)
+    for t in types:
+        if remaining.get(t, 0) > 0:
+            queue.append(t)
+            remaining[t] -= 1
+    idx = 0
+    while any(remaining.get(t, 0) > 0 for t in types):
+        t = types[idx % len(types)]
+        if remaining.get(t, 0) > 0:
+            queue.append(t)
+            remaining[t] -= 1
+        idx += 1
+    return queue
+
+
+def _count_types(items: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for t in items:
+        counts[t] = counts.get(t, 0) + 1
+    return counts
+
+
+def _plan_batches_with_types(
+    batches: list[tuple[str, int]],
+    types: list[str],
+) -> list[tuple[str, dict[str, int]]]:
+    """按全局题型配额切分各难度批次，确保所有已选题型在总量上均有分配。"""
+    total = sum(c for _, c in batches)
+    if total <= 0:
+        return []
+    queue = _expand_type_queue(total, types)
+    offset = 0
+    planned: list[tuple[str, dict[str, int]]] = []
+    for difficulty, count in batches:
+        if not count or count <= 0:
+            continue
+        slice_types = queue[offset : offset + count]
+        offset += count
+        planned.append((difficulty, _count_types(slice_types)))
+    return planned
+
+
 def _call_algo_generate(
     course_id: int,
     course_name: str,
@@ -1372,11 +1420,11 @@ def _generate_exercises(
     model_name = ""
 
     if req.difficultyDistribution:
-        # ===== 难度分布模式：按 easy/medium/hard 分别生成 =====
-        for difficulty, count in req.difficultyDistribution.items():
-            if not count or count <= 0:
-                continue
-            type_map = _distribute_question_types(count, types)
+        # ===== 难度分布模式：全局分配题型后再按 easy/medium/hard 分批生成 =====
+        batches = [
+            (d, c) for d, c in req.difficultyDistribution.items() if c and c > 0
+        ]
+        for difficulty, type_map in _plan_batches_with_types(batches, types):
             ref_qs, ref_metas = _retrieve_reference_questions(
                 session, req.courseId, req.knowledgePoints or [], difficulty
             )
@@ -1509,11 +1557,10 @@ def generate_exercises_stream(
 
             total_planned = sum(c for _, c in plan)
 
-            for difficulty, count in plan:
+            for difficulty, type_map in _plan_batches_with_types(plan, types):
                 # 推送阶段事件
                 yield _sse({"type": "stage", "stage": "generating", "difficulty": difficulty})
 
-                type_map = _distribute_question_types(count, types)
                 ref_qs, ref_metas = _retrieve_reference_questions(
                     session, req.courseId, req.knowledgePoints or [], difficulty
                 )

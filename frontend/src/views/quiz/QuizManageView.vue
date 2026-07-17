@@ -101,6 +101,8 @@ async function handleGenerate(
     visibleQuestions.value = []
     ragReferences.value = []
     genMeta.value = null
+    editingDraftId.value = null
+    reviewInitialStatus.value = 'pending'
   }
 
   applySavedConfig(config)
@@ -216,6 +218,7 @@ function handleBankPicked(picked: QuizQuestion[]) {
 // ===== 保存 / 发布 =====
 function buildSavePayload(questions: QuizQuestion[], status: 'draft') {
   return {
+    taskId: editingDraftId.value || undefined,
     title: savedConfig.value!.title,
     courseId: savedConfig.value!.courseId,
     courseName: savedConfig.value!.courseName,
@@ -234,11 +237,11 @@ function buildSavePayload(questions: QuizQuestion[], status: 'draft') {
 
 async function handleSaveDraft(questions: QuizQuestion[]) {
   if (!savedConfig.value) return
-  const saved = await saveQuizAssignment(buildSavePayload(questions, 'draft'))
-  editingDraftId.value = saved.id
-  reviewInitialStatus.value = 'accepted'
+  const title = savedConfig.value.title
+  await saveQuizAssignment(buildSavePayload(questions, 'draft'))
   assignmentRefreshTrigger.value++
-  ElMessage.success(`练习「${savedConfig.value.title}」已保存为草稿，可继续编辑`)
+  resetWizard()
+  ElMessage.success(`练习「${title}」已保存为草稿，可在下方练习列表继续编辑`)
 }
 
 async function handlePublish(questions: QuizQuestion[]) {
@@ -279,6 +282,8 @@ function resetWizard() {
   generating.value = false
   publishDeadline.value = ''
   publishAllowReview.value = false
+  editingDraftId.value = null
+  reviewInitialStatus.value = 'pending'
   savedConfig.value = null
   lastGenerateConfig.value = null
 }

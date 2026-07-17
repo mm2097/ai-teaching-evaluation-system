@@ -712,3 +712,39 @@ def test_error_book_excludes_pending_manual_short_answer(session):
         current_user=_user(session, 2),
     )
     assert not any(it["quizQuestion"]["id"] == 12 for it in items)
+
+
+def test_plan_batches_with_types_covers_all_selected_types():
+    """默认 2+2+1 难度分布下，判断题和填空题也应有全局配额。"""
+    types = ["single_choice", "multi_choice", "judge", "fill_blank"]
+    batches = [("easy", 2), ("medium", 2), ("hard", 1)]
+    planned = quiz._plan_batches_with_types(batches, types)
+
+    assert len(planned) == 3
+    merged: dict[str, int] = {}
+    for _, type_map in planned:
+        for t, n in type_map.items():
+            merged[t] = merged.get(t, 0) + n
+    assert merged["judge"] >= 1
+    assert merged["fill_blank"] >= 1
+    assert sum(merged.values()) == 5
+
+
+def test_plan_batches_with_types_respects_per_batch_totals():
+    types = ["single_choice", "multi_choice", "judge", "fill_blank"]
+    batches = [("easy", 2), ("medium", 2), ("hard", 1)]
+    planned = quiz._plan_batches_with_types(batches, types)
+
+    assert planned[0] == ("easy", {"single_choice": 1, "multi_choice": 1})
+    assert planned[1] == ("medium", {"judge": 1, "fill_blank": 1})
+    assert planned[2] == ("hard", {"single_choice": 1})
+
+
+def test_distribute_question_types_single_batch_unchanged():
+    types = ["single_choice", "multi_choice", "judge", "fill_blank"]
+    assert quiz._distribute_question_types(5, types) == {
+        "single_choice": 2,
+        "multi_choice": 1,
+        "judge": 1,
+        "fill_blank": 1,
+    }

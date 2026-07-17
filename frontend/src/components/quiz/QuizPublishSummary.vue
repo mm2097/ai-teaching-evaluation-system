@@ -16,6 +16,7 @@ const props = defineProps<{
   questions: ReviewedQuestion[]
   meta?: { model: string; elapsedMs: number } | null
   generationPending?: boolean
+  bankLoading?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -174,7 +175,7 @@ const difficultyColor: Record<DifficultyLevel, string> = {
 
     <el-alert
       v-if="props.generationPending"
-      title="AI is still generating questions. Save and publish will be available when generation finishes."
+      title="AI 仍在生成题目，生成完成后可保存、入库或发布。"
       type="info"
       :closable="false"
       show-icon
@@ -184,20 +185,21 @@ const difficultyColor: Record<DifficultyLevel, string> = {
     <!-- 操作按钮 -->
     <div class="summary-actions">
       <el-button
-        type="warning"
-        plain
-        :icon="FolderAdd"
-        :disabled="props.generationPending || !acceptedCount"
-        @click="emit('addAllToBank')"
-      >
-        全部加入题库
-      </el-button>
-      <el-button
         :icon="EditPen"
         :disabled="props.generationPending || !acceptedCount"
         @click="emit('saveDraft')"
       >
         保存草稿
+      </el-button>
+      <el-button
+        type="warning"
+        plain
+        :icon="FolderAdd"
+        :loading="props.bankLoading"
+        :disabled="props.generationPending || !acceptedCount"
+        @click="emit('addAllToBank')"
+      >
+        全部加入题库
       </el-button>
       <el-button
         type="success"

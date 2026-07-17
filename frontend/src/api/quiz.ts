@@ -416,7 +416,7 @@ export function buildSubmitDetails(
     const userAnswer = answers[q.id] ?? ''
     if (q.type === 'short_answer') {
       const manualRequired = manualQuestionSet.has(q.id)
-      const answered = typeof userAnswer === 'string' ? userAnswer.trim().length > 0 : userAnswer !== undefined && userAnswer !== ''
+      const answered = typeof userAnswer === 'string' ? userAnswer.trim().length > 0 : userAnswer === true || userAnswer === false
       return {
         question: q,
         correct: false,

@@ -246,6 +246,10 @@ async function handleSaveDraft(questions: QuizQuestion[]) {
 
 async function handlePublish(questions: QuizQuestion[]) {
   if (!savedConfig.value) return
+  if (!savedConfig.value.classId) {
+    ElMessage.warning('请选择发布班级')
+    return
+  }
   const saved = await saveQuizAssignment(buildSavePayload(questions, 'draft'))
   editingDraftId.value = saved.id
   await publishQuizAssignment(saved.id)

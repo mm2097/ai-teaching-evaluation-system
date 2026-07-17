@@ -43,6 +43,10 @@ onMounted(async () => {
 })
 
 function viewDetail(record: QuizAssignment): void {
+  if (record.allowReview === false && !isSelfPracticeTask(record.title)) {
+    ElMessage.info('教师已关闭本次练习的题目详情查看')
+    return
+  }
   if (record.mySubmissionId) {
     router.push(`/student/quiz-result?id=${record.mySubmissionId}`)
   } else {
@@ -88,12 +92,13 @@ function viewDetail(record: QuizAssignment): void {
         </div>
         <el-button
           v-if="record.mySubmissionId"
-          type="primary"
+          :type="record.allowReview === false && !isSelfPracticeTask(record.title) ? 'info' : 'primary'"
           :icon="View"
           plain
+          :disabled="record.allowReview === false && !isSelfPracticeTask(record.title)"
           @click="viewDetail(record)"
         >
-          查看详情
+          {{ record.allowReview === false && !isSelfPracticeTask(record.title) ? '详情不可查看' : '查看详情' }}
         </el-button>
       </div>
     </div>

@@ -58,6 +58,10 @@ function startQuiz(quiz: QuizAssignment): void {
 }
 
 function viewResult(quiz: QuizAssignment): void {
+  if (quiz.allowReview === false) {
+    ElMessage.info('教师已关闭本次练习的题目详情查看')
+    return
+  }
   if (quiz.mySubmissionId) {
     router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
   } else {
@@ -69,17 +73,24 @@ function viewResult(quiz: QuizAssignment): void {
 <template>
   <div class="page-container" v-loading="loading">
     <div class="content-card">
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="待完成" name="pending" />
-        <el-tab-pane label="已完成" name="completed" />
-      </el-tabs>
+      <div class="page-head">
+        <div class="content-card__title">答题任务</div>
+        <el-tabs v-model="activeTab" class="inline-tabs">
+          <el-tab-pane label="待完成" name="pending" />
+          <el-tab-pane label="已完成" name="completed" />
+        </el-tabs>
+      </div>
 
       <!-- 待完成 -->
       <div v-if="activeTab === 'pending'">
         <el-empty v-if="!pendingQuizzes.length" description="暂无待完成的练习" />
         <div v-for="quiz in pendingQuizzes" :key="quiz.id" class="quiz-card" :class="{ expired: isExpired(quiz) }">
           <div class="quiz-info">
-            <h3>{{ quiz.title }}</h3>
+            <h3>
+              {{ quiz.title }}
+              <el-tag v-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
+              <el-tag v-else type="warning" size="small" effect="plain">待完成</el-tag>
+            </h3>
             <p class="quiz-meta">{{ quiz.courseName }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
             <div class="quiz-tags">
               <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">
@@ -91,11 +102,9 @@ function viewResult(quiz: QuizAssignment): void {
             </p>
           </div>
           <template v-if="isExpired(quiz)">
-            <el-tag type="danger" size="small" effect="plain" style="margin-right: 12px">已截止</el-tag>
             <el-button type="info" :icon="Edit" disabled>已截止</el-button>
           </template>
           <template v-else>
-            <el-tag type="warning" size="small" effect="plain" style="margin-right: 12px">待完成</el-tag>
             <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
           </template>
         </div>
@@ -113,6 +122,7 @@ function viewResult(quiz: QuizAssignment): void {
           <div class="quiz-info">
             <h3>
               {{ quiz.title }}
+              <el-tag type="success" size="small" effect="plain">已完成</el-tag>
               <el-tag v-if="quiz.status === 'closed'" type="info" size="small" effect="plain">已关闭</el-tag>
               <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
             </h3>
@@ -129,14 +139,14 @@ function viewResult(quiz: QuizAssignment): void {
               截止：{{ quiz.deadline }}
             </p>
           </div>
-          <el-tag type="success" size="small" effect="plain" style="margin-right: 12px">已答题</el-tag>
           <el-button
-            type="primary"
+            :type="quiz.allowReview === false ? 'info' : 'primary'"
             :icon="View"
             plain
+            :disabled="quiz.allowReview === false"
             @click="viewResult(quiz)"
           >
-            查看结果
+            {{ quiz.allowReview === false ? '详情不可查看' : '查看结果' }}
           </el-button>
         </div>
       </div>
@@ -145,6 +155,28 @@ function viewResult(quiz: QuizAssignment): void {
 </template>
 
 <style scoped lang="scss">
+.page-head {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+
+  .content-card__title {
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .inline-tabs {
+    flex: 1;
+    min-width: 0;
+
+    :deep(.el-tabs__header) {
+      margin-bottom: 0;
+    }
+  }
+}
+
 .quiz-card {
   display: flex;
   align-items: center;
@@ -169,7 +201,14 @@ function viewResult(quiz: QuizAssignment): void {
     background: #f1f5f9;
   }
 
-  h3 { font-size: 16px; margin-bottom: 6px; }
+  h3 {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 16px;
+    margin-bottom: 6px;
+  }
 
   .quiz-meta {
     font-size: 13px;

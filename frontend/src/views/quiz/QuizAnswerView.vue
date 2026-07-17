@@ -168,6 +168,10 @@ function startQuiz(quiz: QuizAssignment): void {
 }
 
 function viewQuizResult(quiz: QuizAssignment): void {
+  if (quiz.allowReview === false) {
+    ElMessage.info('教师已关闭本次练习的题目详情查看')
+    return
+  }
   if (quiz.mySubmissionId) {
     router.push(`/student/quiz-result?id=${quiz.mySubmissionId}`)
   } else {
@@ -442,12 +446,13 @@ const resultSubtitle = computed(() => {
               <el-tag v-else type="warning" size="small" effect="plain">待完成</el-tag>
               <el-button
                 v-if="quiz.submitted"
-                type="primary"
+                :type="quiz.allowReview === false ? 'info' : 'primary'"
                 :icon="View"
                 plain
+                :disabled="quiz.allowReview === false"
                 @click="viewQuizResult(quiz)"
               >
-                查看结果
+                {{ quiz.allowReview === false ? '详情不可查看' : '查看结果' }}
               </el-button>
               <el-button
                 v-else-if="isExpired(quiz)"
@@ -637,6 +642,15 @@ const resultSubtitle = computed(() => {
             <el-button v-if="quizMode === 'self'" plain @click="backToList(); listTab = 'self'">
               继续自主练习
             </el-button>
+          </div>
+        </div>
+
+        <div v-else class="content-card review-panel no-detail-panel">
+          <div class="content-card__title">答题记录已保存</div>
+          <p class="no-detail-text">教师已关闭本次练习的题目详情查看，你仍可在练习列表和练习记录中查看本次得分。</p>
+          <div class="action-bar">
+            <el-button type="primary" @click="backToList()">返回练习列表</el-button>
+            <el-button plain @click="goPracticeRecords">查看练习记录</el-button>
           </div>
         </div>
       </template>
@@ -964,6 +978,12 @@ const resultSubtitle = computed(() => {
   font-size: 14px;
   color: #64748b;
   line-height: 1.6;
+}
+
+.no-detail-text {
+  margin: 0 0 16px;
+  color: #64748b;
+  line-height: 1.7;
 }
 
 .answer-sheet {

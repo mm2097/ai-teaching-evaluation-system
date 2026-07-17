@@ -336,7 +336,7 @@ export async function fetchStudentQuizzes(_studentId: number): Promise<QuizAssig
 export async function fetchStudentPracticeRecords(_studentId: number): Promise<QuizAssignment[]> {
   const tasks = await fetchQuizAssignments()
   return tasks
-    .filter((t) => t.submitted && t.allowReview !== false && (t.status === 'published' || t.status === 'closed'))
+    .filter((t) => t.submitted && (t.status === 'published' || t.status === 'closed'))
     .sort((a, b) => {
       const timeA = a.publishTime || a.deadline || ''
       const timeB = b.publishTime || b.deadline || ''

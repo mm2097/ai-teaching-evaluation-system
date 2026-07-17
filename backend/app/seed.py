@@ -216,10 +216,12 @@ def seed() -> None:
         print(f"  学生: {len(students)} 条")
 
         # 测试数据学生记录（47人，user_id 对应上一批测试用户 15~61）
-        # class_id: 6=软件1801班, 8=软件1803班
+        # 演示联调：201726010101（孔祥宁）与 teacher 同属计科2401（class_id=1）
+        # 其余 Excel 模板学生：6=软件1801班，7=软件1802班，8=软件1803班
         test_students = [
-            # ── 软件1801 班（25人，user_id 15~39）──
+            # ── 计科2401（演示账号，1人）──
             Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=1, user_id=15),
+            # ── 软件1801 班（24人，user_id 16~39）──
             Student(student_no="201803030311", real_name="杨伯昊", gender=1, class_id=6, user_id=16),
             Student(student_no="201826010102", real_name="徐颖",    gender=0, class_id=6, user_id=17),
             Student(student_no="201826010103", real_name="甘凌志",  gender=1, class_id=6, user_id=18),
@@ -325,7 +327,8 @@ def seed() -> None:
             CourseStudent(course_id=2, student_id=3),
             CourseStudent(course_id=2, student_id=4),
             CourseStudent(course_id=2, student_id=6),
-            # 数据结构：5人选
+            # 数据结构：6人选（含赵伟，便于看到 teacher2 发布的同班测验）
+            CourseStudent(course_id=3, student_id=1),
             CourseStudent(course_id=3, student_id=2),
             CourseStudent(course_id=3, student_id=5),
             CourseStudent(course_id=3, student_id=6),

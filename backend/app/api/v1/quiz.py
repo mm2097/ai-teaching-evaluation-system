@@ -112,6 +112,16 @@ def _task_class_id(task_id: int, session: Session) -> int | None:
     return link.class_id if link else None
 
 
+def _require_assignment_class(task: AnswerTask, session: Session) -> int:
+    """教师布置练习发布前必须绑定目标班级。"""
+    if _is_self_practice(task):
+        raise HTTPException(status_code=409, detail="自主练习无需指定班级")
+    class_id = _task_class_id(task.task_id, session)
+    if not class_id:
+        raise HTTPException(status_code=422, detail="发布练习必须选择目标班级")
+    return class_id
+
+
 def _is_self_practice(task: AnswerTask) -> bool:
     return task.task_type == TASK_TYPE_SELF_PRACTICE
 
@@ -233,21 +243,18 @@ def list_answer_tasks(
             if t.status == 0:
                 continue  # 草稿不可见
             if t.status == 2:
-                # 已关闭的任务仅当学生已提交且教师允许查看详情时可见
+                # 已关闭的任务仅当学生已提交时可见；allow_review 只控制详情页。
                 sub = student_submissions.get(t.task_id)
-                if not sub or not t.allow_review:
-                    continue
-            elif student_submissions.get(t.task_id) and not t.allow_review:
-                # 已提交但教师禁止查看详情：对学生不可见
-                continue
-            # status=1: 正常显示（含已截止）
+                if not sub:
+                    continue            # status=1: 正常显示（含已截止）
             if _is_self_practice(t) and t.create_by != current_user.user_id:
                 continue
-            target_class_id = _task_class_id(t.task_id, session)
-            if target_class_id and (
-                not current_student or current_student.class_id != target_class_id
-            ):
-                continue
+            if not _is_self_practice(t):
+                target_class_id = _task_class_id(t.task_id, session)
+                if not target_class_id:
+                    continue
+                if not current_student or current_student.class_id != target_class_id:
+                    continue
         course = session.get(Course, t.course_id)
         teacher = session.get(Teacher, course.teacher_id) if course else None
 
@@ -346,8 +353,6 @@ def list_answer_records(
         if role_code != "student" and _is_self_practice(task):
             continue
         if role_code == "student" and (not current_student or sid != current_student.student_id):
-            continue
-        if role_code == "student" and not task.allow_review:
             continue
 
         # 该任务的题目数（用于算总分）
@@ -956,6 +961,8 @@ def create_answer_task(
         raise HTTPException(status_code=404, detail="班级不存在")
 
     status_int = 1 if req.status == "published" else 0
+    if status_int == 1 and not target_class_id:
+        raise HTTPException(status_code=422, detail="发布练习必须选择目标班级")
     # 解析截止时间，为空则默认7天后
     if req.deadline:
         try:
@@ -1062,6 +1069,8 @@ def publish_answer_task(
     if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权发布答题任务")
     _require_course_access(current_user, task.course_id, session)
+    if not _is_self_practice(task):
+        _require_assignment_class(task, session)
     task.status = 1
     task.publish_time = datetime.now()
     session.add(task)

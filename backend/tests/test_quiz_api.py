@@ -434,6 +434,55 @@ def test_teacher_assignment_persists_target_class(session):
     assert link.class_id == 1
 
 
+def test_publish_assignment_requires_target_class(session):
+    request = quiz.SaveAnswerTaskRequest(
+        title="Missing class",
+        courseId=1,
+        status="published",
+        questions=[
+            quiz.QuestionItem(
+                id=1,
+                stem="红黑树的性质不包括以下哪项？",
+                answer="C",
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.create_answer_task(
+            request,
+            session=session,
+            current_user=_user(session, 1),
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_publish_saved_task_without_class_is_rejected(session):
+    task = _create_task(session, [1])
+
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.publish_answer_task(
+            task.task_id,
+            session=session,
+            current_user=_user(session, 1),
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_student_cannot_see_assignment_without_target_class(session):
+    task = _create_task(session, [1])
+
+    tasks = quiz.list_answer_tasks(
+        course_id=1,
+        teacher_id=None,
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assert task.task_id not in {item["id"] for item in tasks}
+
+
 def test_student_cannot_see_or_submit_another_class_task(session):
     session.add(
         ClassInfo(

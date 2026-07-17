@@ -16,12 +16,14 @@ from urllib.parse import quote
 
 import openpyxl
 from typing import Any
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import Response
 from sqlmodel import Session, select
 from sqlalchemy import or_
 
-from app.core.database import get_session
+import logging
+
+from app.core.database import get_session, engine
 from app.core.operation_log import get_current_user
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
@@ -78,7 +80,7 @@ def query_teaching_data(
     data_type: str | None = Query(default=None, description="数据类型: score / attendance"),
     batch_id: int | None = Query(default=None, description="考核批次 ID（仅 dataType=score 时生效）"),
     page: int = Query(default=1, ge=1, description="页码"),
-    page_size: int = Query(default=50, ge=1, le=200, description="每页条数"),
+    page_size: int = Query(default=50, ge=1, le=10000, description="每页条数"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -691,8 +693,24 @@ def export_teaching_data(
 # ============================================================================
 
 
+def _refresh_analysis_in_background(course_id: int) -> None:
+    """后台任务：为指定课程刷新全部分析数据。
+
+    在独立线程中执行，使用自己的数据库会话，避免阻塞上传接口响应。
+    """
+    from sqlmodel import Session as BgSession
+    with BgSession(engine) as bg_session:
+        try:
+            refresh_course_analysis(bg_session, course_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Background analysis refresh failed for course_id=%s", course_id
+            )
+
+
 @router.post("/teaching-data/upload", tags=["教学数据"])
 def upload_teaching_data(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     course_id: int = Query(..., description="课程 ID"),
     session: Session = Depends(get_session),
@@ -768,12 +786,13 @@ def upload_teaching_data(
 
         # 导入成功后自动刷新课程分析数据
         # （学情画像、知识点掌握度、学习质量评价、学情预警）
+        # 使用 BackgroundTasks 后台异步执行，避免长时间阻塞上传响应
         analysis_refresh: dict = {}
         if result.success_count > 0:
-            try:
-                analysis_refresh = refresh_course_analysis(session, course_id)
-            except Exception as e:
-                analysis_refresh = {"error": str(e)}
+            background_tasks.add_task(
+                _refresh_analysis_in_background, course_id
+            )
+            analysis_refresh = {"scheduled": True}
 
     finally:
         # 清理临时文件

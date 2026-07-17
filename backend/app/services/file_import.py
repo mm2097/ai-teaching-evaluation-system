@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import io as _io
 import json
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -593,8 +594,11 @@ def _import_exam_deduction(
         result.sheets_processed.append(sheet_name)
         all_rows.extend(rows)
 
-    # 提取学期
+    # 提取学期（优先取文件中的"学期"列，若为空则回退到课程默认学期）
     semester = _extract_semester(all_rows)
+    if not semester:
+        course = session.get(Course, course_id)
+        semester = course.semester if course else ""
 
     # 第一遍：预先收集并创建所有知识点
     _collect_and_ensure_knowledge_points(session, course_id, all_rows)
@@ -690,8 +694,10 @@ def _import_exam_deduction(
                     source_data=source_json,
                     create_by=create_by,
                 ))
-            session.commit()
             result.success_count += 1
+
+        # 每个 Sheet 处理完毕后统一提交，减少数据库事务次数
+        session.commit()
 
     return result
 
@@ -720,7 +726,11 @@ def _import_simple_score(
         result.sheets_processed.append(sheet_name)
         all_rows.extend(rows)
 
+    # 优先取文件中的"学期"列，若为空则回退到课程默认学期
     semester = _extract_semester(all_rows)
+    if not semester:
+        course = session.get(Course, course_id)
+        semester = course.semester if course else ""
 
     for sheet_name, rows in sheet_data.items():
         for row_data in rows:
@@ -787,8 +797,10 @@ def _import_simple_score(
                     source_data=source_json,
                     create_by=create_by,
                 ))
-            session.commit()
             result.success_count += 1
+
+        # 每个 Sheet 处理完毕后统一提交，减少数据库事务次数
+        session.commit()
 
     return result
 
@@ -820,6 +832,8 @@ def _import_attendance(
 
     # 考勤批次名称
     course = session.get(Course, course_id)
+    if not semester:
+        semester = course.semester if course else ""
     batch_name = f"考勤情况" if not course else f"{course.course_name}-考勤情况"
 
     batch = _get_or_create_exam_batch(
@@ -881,8 +895,10 @@ def _import_attendance(
                 _update_attendance_sheet(sheet, att_values, row_data, source_json)
                 session.add(sheet)
 
-            session.commit()
             result.success_count += 1
+
+        # 每个 Sheet 处理完毕后统一提交，减少数据库事务次数
+        session.commit()
 
     return result
 

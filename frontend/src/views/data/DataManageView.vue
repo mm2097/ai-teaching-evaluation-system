@@ -40,7 +40,7 @@ async function loadTeachingData(): Promise<void> {
         dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance'
           ? query.value.dataType
           : undefined,
-        pageSize: 200,
+        pageSize: 10000,  // 一次性加载全部数据，确保客户端学期筛选覆盖所有记录
       },
       courseName,
     )

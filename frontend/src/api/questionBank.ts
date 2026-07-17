@@ -23,6 +23,7 @@ export interface QuestionRecord {
   answer?: string
   explanation?: string
   difficulty: string
+  source?: string
   createdTime: string
 }
 
@@ -69,7 +70,7 @@ function mapRecordToQuizQuestion(q: QuestionRecord): QuizQuestion {
     difficulty: q.difficulty as DifficultyLevel,
     score: type === 'short_answer' ? 10 : 5,
     status: 'published',
-    source: 'manual',
+    source: (q.source as QuizQuestion['source']) || 'manual',
   }
 }
 

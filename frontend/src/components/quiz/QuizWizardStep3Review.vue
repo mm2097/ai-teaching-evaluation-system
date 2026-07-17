@@ -18,6 +18,7 @@ const props = defineProps<{
   questions: QuizQuestion[]
   ragReferences: RagReference[]
   courseId?: number
+  generationPending?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -129,6 +130,10 @@ const knowledgePointOptions = computed(() => {
 })
 
 function handleSaveDraft() {
+  if (props.generationPending) {
+    ElMessage.warning('AI 仍在生成题目，请等待生成完成后再保存')
+    return
+  }
   if (!acceptedQuestions.value.length) {
     ElMessage.warning('请至少接受一道题')
     return
@@ -137,6 +142,10 @@ function handleSaveDraft() {
 }
 
 function handlePublish() {
+  if (props.generationPending) {
+    ElMessage.warning('AI 仍在生成题目，请等待生成完成后再发布')
+    return
+  }
   if (!acceptedQuestions.value.length) {
     ElMessage.warning('请至少接受一道题')
     return
@@ -146,6 +155,10 @@ function handlePublish() {
 
 const addingToBank = ref(false)
 async function handleAddAllToBank() {
+  if (props.generationPending) {
+    ElMessage.warning('AI 仍在生成题目，请等待生成完成后再加入题库')
+    return
+  }
   if (!props.courseId || !acceptedQuestions.value.length) return
   addingToBank.value = true
   try {
@@ -195,6 +208,7 @@ async function handleAddAllToBank() {
         <div class="summary-sticky">
           <QuizPublishSummary
             :questions="reviewedItems"
+            :generation-pending="props.generationPending"
             v-model:deadline="deadline"
             v-model:allow-review="allowReview"
             @save-draft="handleSaveDraft"

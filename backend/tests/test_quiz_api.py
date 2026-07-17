@@ -215,6 +215,21 @@ def test_short_answer_manual_fallback_is_not_reported_as_wrong(session, monkeypa
     assert detail["questionResults"][0]["manualRequired"] is True
 
 
+def test_student_cannot_use_teacher_stream_generate(session):
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.generate_exercises_stream(
+            quiz.GenerateExercisesRequest(
+                courseId=1,
+                knowledgePoints=["红黑树"],
+                questionTypes=["single_choice"],
+                questionCount=1,
+            ),
+            session=session,
+            current_user=_user(session, 2),
+        )
+
+    assert exc_info.value.status_code == 403
+
 def test_student_cannot_create_teacher_assignment(session):
     request = quiz.SaveAnswerTaskRequest(
         title="Teacher assignment",
@@ -511,3 +526,54 @@ def test_self_practice_rolls_back_task_when_grading_fails(session, monkeypatch):
             StudentAnswerRecord.student_id == 1,
         )
     ).all()
+
+
+def test_error_book_returns_only_own_wrong_answers(session):
+    """错题本从答题记录 is_correct=0 聚合，只返回学生本人错题。"""
+    # 学生1（张三，user_id=2）做错 question_id=2
+    task = _create_task(session, [2])
+    session.add(StudentAnswerRecord(
+        task_id=task.task_id, question_id=2, student_id=1,
+        user_answer="A", score=0, is_correct=0,
+    ))
+    session.commit()
+
+    items = quiz.get_error_book(
+        course_id=None,
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assert any(it["quizQuestion"]["id"] == 2 for it in items)
+    # 每条都带标准答案，供订正
+    wrong = next(it for it in items if it["quizQuestion"]["id"] == 2)
+    assert wrong["correctAnswer"]  # 有正确答案
+    assert wrong["userAnswer"] == "A"
+
+
+def test_error_book_teacher_forbidden(session):
+    """教师访问错题本应被拒绝（仅学生本人可见）。"""
+    with pytest.raises(HTTPException) as exc:
+        quiz.get_error_book(
+            course_id=None,
+            session=session,
+            current_user=_user(session, 1),  # 教师
+        )
+    assert exc.value.status_code == 403
+
+
+def test_error_book_excludes_pending_manual_short_answer(session):
+    """待人工批改的简答题（ai_score 为空）不计入错题本。"""
+    # question_id=12 是简答题（type=5）
+    task = _create_task(session, [12])
+    session.add(StudentAnswerRecord(
+        task_id=task.task_id, question_id=12, student_id=1,
+        user_answer="随便写的", score=0, is_correct=0, ai_score=None,
+    ))
+    session.commit()
+
+    items = quiz.get_error_book(
+        course_id=None,
+        session=session,
+        current_user=_user(session, 2),
+    )
+    assert not any(it["quizQuestion"]["id"] == 12 for it in items)

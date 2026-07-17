@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.core.database import get_session
+from app.core.operation_log import get_current_user
+from app.models import SysUser
 from app.services.agent.base import run_agent, run_agent_stream
 from app.services.agent.registry import get_registry
 from app.services.agent.tools import register_all_tools
@@ -53,6 +55,7 @@ def _session_factory():
 def agent_chat(
     req: AgentChatRequest,
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> AgentChatResponse:
     """同步版 Agent 对话（阻塞等待完整结果）。
 
@@ -60,8 +63,7 @@ def agent_chat(
     生产环境应从 JWT 解析。
     """
     _ensure_registered()
-    # 演示阶段：user_id 固定 1（admin）
-    user_id = 1
+    user_id = current_user.user_id
 
     try:
         result = run_agent(
@@ -88,10 +90,13 @@ def agent_chat(
 
 
 @router.post("/agent/chat/stream", tags=["Agent"])
-def agent_chat_stream(req: AgentChatRequest) -> StreamingResponse:
+def agent_chat_stream(
+    req: AgentChatRequest,
+    current_user: SysUser = Depends(get_current_user),
+) -> StreamingResponse:
     """SSE 流式版：实时推送工具调用过程，最后推送最终答案。"""
     _ensure_registered()
-    user_id = 1
+    user_id = current_user.user_id
 
     def event_stream():
         try:
@@ -122,7 +127,9 @@ def agent_chat_stream(req: AgentChatRequest) -> StreamingResponse:
 
 
 @router.get("/agent/tools", tags=["Agent"])
-def list_tools() -> dict:
+def list_tools(
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
     """列出已注册的 Agent 工具（调试用）。"""
     _ensure_registered()
     registry = get_registry()
@@ -142,7 +149,10 @@ def list_tools() -> dict:
 
 
 @router.delete("/agent/session/{session_id}", tags=["Agent"])
-def clear_session(session_id: str) -> dict:
+def clear_session(
+    session_id: str,
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
     """清空会话记忆。"""
     from app.services.agent.memory import clear_session as _clear
     _clear(session_id)

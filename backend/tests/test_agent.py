@@ -243,6 +243,60 @@ class TestFCLoop:
         assert "不可用" in result.answer or "困难" in result.answer
 
 
+# ===== L3 学生助学 Agent（Tutor）测试 =====
+
+class TestTutorAgent:
+    def test_tutor_setup_has_no_tools(self):
+        """tutor 不挂载任何工具，从机制上杜绝越权查班级数据。"""
+        from app.services.agent.base import _resolve_agent_setup
+        from app.services.agent.prompts import TUTOR_SYSTEM_PROMPT
+
+        registry = get_registry()
+        prompt, schemas = _resolve_agent_setup("tutor", registry, allow_mutation=False)
+        assert prompt == TUTOR_SYSTEM_PROMPT
+        assert schemas == []
+
+    def test_qa_and_exam_still_have_tools(self):
+        """qa / exam 仍然挂载全部查询工具。"""
+        from app.services.agent.base import _resolve_agent_setup
+        registry = get_registry()
+        _, qa_schemas = _resolve_agent_setup("qa", registry, allow_mutation=False)
+        _, exam_schemas = _resolve_agent_setup("exam", registry, allow_mutation=False)
+        assert len(qa_schemas) >= 10
+        assert len(exam_schemas) >= 10
+
+    def test_tutor_never_calls_tools_in_loop(self, session, engine):
+        """即使 LLM 想调工具，tutor 没有工具可用，只走纯文本回答。"""
+        from app.services.agent.base import run_agent
+        from app.services.agent.llm_proxy import set_llm_proxy
+
+        # tutor 场景 LLM 直接给启发式回答（不含最终答案）
+        mock = MockLLMProxy([
+            FCResult(
+                content="先想想：红黑树插入后如果父节点是红色，你需要看叔叔节点的颜色。你觉得下一步该判断什么？",
+                tool_calls=[],
+                finish_reason="stop",
+            ),
+        ])
+        set_llm_proxy(mock)
+
+        def sf():
+            return Session(engine)
+
+        result = run_agent(
+            session_factory=sf,
+            user_message="红黑树插入这道题答案是什么",
+            user_id=1,
+            course_id=1,
+            agent_type="tutor",
+            max_steps=3,
+        )
+        # 无工具调用步骤
+        assert all(len(s.tool_calls) == 0 for s in result.steps)
+        assert result.error is None
+        assert result.answer  # 有回答
+
+
 # ===== L4 安全测试 =====
 
 class TestSafety:

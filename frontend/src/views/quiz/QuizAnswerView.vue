@@ -255,14 +255,16 @@ function applySubmissionResult(submission: {
     details,
   }
   // 更新本地 quizList 中的答题状态，避免列表页仍显示为"未答题"
-  if (activeQuiz.value) {
-    const idx = quizList.value.findIndex((q) => q.id === activeQuiz.value!.id)
-    if (idx !== -1) {
+  const currentQuiz = activeQuiz.value
+  if (currentQuiz) {
+    const idx = quizList.value.findIndex((q) => q.id === currentQuiz.id)
+    const listItem = quizList.value[idx]
+    if (listItem) {
       quizList.value[idx] = {
-        ...quizList.value[idx],
+        ...listItem,
         submitted: true,
         myScore: submission.score,
-        mySubmissionId: submission.submissionId ?? quizList.value[idx].mySubmissionId,
+        mySubmissionId: submission.submissionId ?? listItem.mySubmissionId,
       }
     }
   }

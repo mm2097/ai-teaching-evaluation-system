@@ -5,8 +5,8 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Promotion, Tools, DataAnalysis } from '@element-plus/icons-vue'
-import { streamAgentChat } from '@/api/agent'
+import { Promotion, Tools, DataAnalysis, Delete } from '@element-plus/icons-vue'
+import { streamAgentChat, clearAgentSession } from '@/api/agent'
 import type { AgentMessage, AgentToolCall, AgentType } from '@/types'
 
 const props = defineProps<{
@@ -20,6 +20,11 @@ const inputText = ref('')
 const sending = ref(false)
 const chatBodyRef = ref<HTMLElement>()
 const expandedTools = ref<Set<string>>(new Set())
+
+/** 会话 ID：按 (agentType, courseId) 稳定，供后端保持/清空多轮记忆 */
+const sessionId = computed(() => `${props.agentType}_c${props.courseId}`)
+
+const isStudent = computed(() => props.agentType === 'tutor')
 
 const agentTitle = computed(() => {
   const map: Record<AgentType, string> = {
@@ -51,10 +56,23 @@ const quickPrompts = computed(() => {
 
 watch(
   () => props.courseId,
-  () => {
+  (_next, prev) => {
+    // 切课时清空当前会话（本地 + 后端记忆）
+    if (prev !== undefined) {
+      clearAgentSession(`${props.agentType}_c${prev}`)
+    }
     messages.value = []
   },
 )
+
+/** 清空对话：重置消息并清除后端会话记忆 */
+async function handleClear(): Promise<void> {
+  if (sending.value) return
+  messages.value = []
+  expandedTools.value.clear()
+  await clearAgentSession(sessionId.value)
+  ElMessage.success('已清空对话')
+}
 
 function scrollToBottom(): void {
   nextTick(() => {
@@ -72,8 +90,17 @@ function toggleToolExpand(id: string): void {
   }
 }
 
-function formatContent(text: string): string {
+function escapeHtml(text: string): string {
   return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function formatContent(text: string): string {
+  return escapeHtml(text)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br/>')
 }
@@ -114,6 +141,7 @@ async function handleSend(text?: string): Promise<void> {
       courseId: props.courseId,
       courseName: props.courseName,
       message: content,
+      sessionId: sessionId.value,
     })
 
     for await (const event of stream) {
@@ -173,7 +201,7 @@ function renderToolResult(call: AgentToolCall): string {
         <el-icon :size="48" color="#2563eb"><DataAnalysis /></el-icon>
         <h3>{{ agentTitle }}</h3>
         <p>当前课程：{{ courseName || '未选择' }}</p>
-        <p class="hint">我会调用数据库查询工具，给出有数据支撑的回答</p>
+        <p class="hint">{{ isStudent ? '我只给思路提示，不直接给答案，帮你自己想明白' : '我会调用数据库查询工具，给出有数据支撑的回答' }}</p>
         <div class="quick-prompts">
           <el-tag
             v-for="prompt in quickPrompts"
@@ -193,7 +221,7 @@ function renderToolResult(call: AgentToolCall): string {
         class="message"
         :class="msg.role"
       >
-        <div class="message__avatar">{{ msg.role === 'user' ? '师' : 'AI' }}</div>
+        <div class="message__avatar">{{ msg.role === 'user' ? (isStudent ? '我' : '师') : 'AI' }}</div>
         <div class="message__bubble">
           <!-- 工具调用过程 -->
           <div v-if="msg.toolCalls?.length" class="tool-calls">
@@ -246,6 +274,14 @@ function renderToolResult(call: AgentToolCall): string {
         @click="handleSend()"
       >
         发送
+      </el-button>
+      <el-button
+        :icon="Delete"
+        :disabled="sending || !messages.length"
+        @click="handleClear"
+        title="清空对话"
+      >
+        清空
       </el-button>
     </div>
   </div>

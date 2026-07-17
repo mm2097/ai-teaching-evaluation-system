@@ -30,6 +30,7 @@ const genStageHint = ref('')
 
 const visibleQuestions = ref<QuizQuestion[]>([])
 const ragReferences = ref<RagReference[]>([])
+const genMeta = ref<{ model: string; elapsedMs: number } | null>(null)
 
 // 发布参数（截止时间 / 学生查看权限），由 Step2 右侧发布区设置
 const publishDeadline = ref('')
@@ -67,6 +68,7 @@ async function handleGenerate(config: {
   genStageHint.value = 'AI 正在准备出题…'
   visibleQuestions.value = []
   ragReferences.value = []
+  genMeta.value = null
 
   const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === config.courseId)
   const classOpt = step1Ref.value?.classOptions.find((c) => c.value === config.classId)
@@ -96,12 +98,12 @@ async function handleGenerate(config: {
             : stage
         },
         onQuestion: (q) => {
-          // 首题到达即视为进入可审核状态，题目逐条追加
+          // 首题到达即可审核，但生成状态保持到 done/error，避免半张卷被保存或发布
           visibleQuestions.value = [...visibleQuestions.value, q]
-          generating.value = false
         },
-        onDone: (refs) => {
+        onDone: (refs, _total, meta) => {
           ragReferences.value = refs || []
+          if (meta) genMeta.value = meta
           generating.value = false
         },
         onError: (msg) => {
@@ -198,6 +200,7 @@ function resetWizard() {
   currentStep.value = 1
   visibleQuestions.value = []
   ragReferences.value = []
+  genMeta.value = null
   genError.value = ''
   generating.value = false
   publishDeadline.value = ''
@@ -250,6 +253,7 @@ function resetWizard() {
         :questions="visibleQuestions"
         :rag-references="ragReferences"
         :course-id="savedConfig?.courseId"
+        :generation-pending="generating"
         v-model:deadline="publishDeadline"
         v-model:allow-review="publishAllowReview"
         @save-draft="handleSaveDraft"

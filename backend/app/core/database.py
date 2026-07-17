@@ -20,6 +20,21 @@ def init_db() -> None:
     from app import models  # noqa: F401  触发模型注册
     SQLModel.metadata.create_all(engine)
     _migrate_answer_task()
+    _migrate_ai_question()
+
+
+def _migrate_ai_question() -> None:
+    """为旧 ai_question 表补齐 source 字段（create_all 不改已存在表）。"""
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "ai_question" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("ai_question")}
+        if "source" not in columns:
+            connection.execute(text(
+                "ALTER TABLE ai_question ADD COLUMN source "
+                "VARCHAR(10) NOT NULL DEFAULT 'manual'"
+            ))
 
 
 
@@ -53,6 +68,12 @@ def _migrate_answer_task() -> None:
             {"prefix": "【自主练习】%"},
         )
 
+
+
+
+def _migrate_answer_task_type() -> None:
+    """Backward-compatible alias for older tests/imports."""
+    _migrate_answer_task()
 
 def get_session() -> Generator[Session, None, None]:
     """FastAPI 依赖:注入数据库会话。"""

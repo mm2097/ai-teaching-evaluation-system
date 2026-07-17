@@ -23,6 +23,7 @@ class AiQuestion(SQLModel, table=True):
     correct_answer: str = Field(sa_type=Text)
     analysis: Optional[str] = Field(default=None, sa_type=Text)
     difficulty: str = Field(default="medium", max_length=10)  # easy/medium/hard
+    source: str = Field(default="manual", max_length=10)  # ai/manual/import
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)
 

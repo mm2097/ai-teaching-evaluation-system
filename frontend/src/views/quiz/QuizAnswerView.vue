@@ -535,14 +535,16 @@ const resultSubtitle = computed(() => {
     </template>
 
     <!-- 作答页 -->
-    <div v-else>
+    <div v-else class="quiz-answer-page">
       <div class="content-card quiz-header">
         <el-button link @click="backToList">← 返回</el-button>
-        <h2>
-          {{ activeQuiz.title }}
-          <el-tag v-if="quizMode === 'self'" size="small" type="warning" effect="plain">自主练习</el-tag>
-        </h2>
-        <span v-if="!result" class="progress">已答 {{ answeredCount }} / {{ activeQuiz.questions.length }}</span>
+        <div class="quiz-header__main">
+          <h2>
+            {{ activeQuiz.title }}
+            <el-tag v-if="quizMode === 'self'" size="small" type="warning" effect="plain">自主练习</el-tag>
+          </h2>
+          <span v-if="!result" class="progress">已答 {{ answeredCount }} / {{ activeQuiz.questions.length }}</span>
+        </div>
       </div>
 
       <div v-if="!result" class="content-card progress-card">
@@ -569,17 +571,17 @@ const resultSubtitle = computed(() => {
             :class="{ wrong: !item.correct && !item.manualRequired, partial: isDetailPartial(item) }"
           >
             <div class="review-header">
-              <span class="q-num">{{ idx + 1 }}.</span>
-              <el-tag size="small">{{ exerciseTypeLabels[item.question.type] }}</el-tag>
+              <span class="question-card__index">{{ idx + 1 }}</span>
+              <el-tag size="small" type="info">{{ exerciseTypeLabels[item.question.type] }}</el-tag>
               <el-tag
                 :type="item.manualRequired ? 'warning' : isDetailPartial(item) ? 'warning' : item.correct ? 'success' : 'danger'"
                 size="small"
               >
                 {{ item.manualRequired ? '待批改' : isDetailPartial(item) ? '部分得分' : item.correct ? '正确' : '错误' }}
               </el-tag>
-              <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
+              <el-tag size="small" effect="plain">{{ item.question.knowledgePoint }}</el-tag>
             </div>
-            <p class="q-stem">{{ item.question.stem }}</p>
+            <p class="question-card__stem">{{ item.question.stem }}</p>
             <p class="answer-line">
               你的答案：<strong>{{ formatAnswer(item.question, item.userAnswer) }}</strong>
             </p>
@@ -621,49 +623,76 @@ const resultSubtitle = computed(() => {
           <el-tag size="small">生成耗时：{{ generateMeta.elapsedMs }} ms</el-tag>
         </div>
 
-        <div v-for="(q, idx) in activeQuiz.questions" :key="q.id" class="content-card question-block">
-          <div class="q-title">
-            <span class="q-num">{{ idx + 1 }}.</span>
-            <el-tag size="small">{{ exerciseTypeLabels[q.type] }}</el-tag>
-            <span>{{ q.stem }}</span>
-            <span class="q-score">（{{ q.score }} 分）</span>
+        <div class="answer-sheet">
+          <div v-for="(q, idx) in activeQuiz.questions" :key="q.id" class="content-card question-card">
+            <div class="question-card__head">
+              <span class="question-card__index">{{ idx + 1 }}</span>
+              <el-tag size="small" type="info">{{ exerciseTypeLabels[q.type] }}</el-tag>
+              <span class="question-card__score">{{ q.score }} 分</span>
+            </div>
+            <p class="question-card__stem">{{ q.stem }}</p>
+
+            <el-radio-group
+              v-if="q.type === 'single_choice'"
+              v-model="answers[q.id]"
+              class="option-list"
+            >
+              <el-radio
+                v-for="opt in q.options"
+                :key="opt.key"
+                :value="opt.key"
+                class="option-item"
+                border
+              >
+                <span class="option-key">{{ opt.key }}</span>
+                <span class="option-text">{{ opt.text }}</span>
+              </el-radio>
+            </el-radio-group>
+
+            <el-checkbox-group
+              v-else-if="q.type === 'multi_choice'"
+              v-model="multiAnswers[q.id]"
+              class="option-list"
+              @change="syncMultiAnswer(q.id)"
+            >
+              <el-checkbox
+                v-for="opt in q.options"
+                :key="opt.key"
+                :value="opt.key"
+                class="option-item"
+                border
+              >
+                <span class="option-key">{{ opt.key }}</span>
+                <span class="option-text">{{ opt.text }}</span>
+              </el-checkbox>
+            </el-checkbox-group>
+
+            <el-radio-group
+              v-else-if="q.type === 'judge'"
+              v-model="answers[q.id]"
+              class="option-list option-list--inline"
+            >
+              <el-radio :value="true" class="option-item option-item--judge" border>正确</el-radio>
+              <el-radio :value="false" class="option-item option-item--judge" border>错误</el-radio>
+            </el-radio-group>
+
+            <el-input
+              v-else-if="q.type === 'fill_blank'"
+              v-model="(answers[q.id] as string)"
+              class="answer-input"
+              placeholder="请输入答案"
+              size="large"
+            />
+
+            <el-input
+              v-else-if="q.type === 'short_answer'"
+              v-model="(answers[q.id] as string)"
+              class="answer-input"
+              type="textarea"
+              :rows="4"
+              placeholder="请输入你的解答"
+            />
           </div>
-
-          <el-radio-group v-if="q.type === 'single_choice'" v-model="answers[q.id]" class="option-group">
-            <el-radio v-for="opt in q.options" :key="opt.key" :value="opt.key">
-              {{ opt.key }}. {{ opt.text }}
-            </el-radio>
-          </el-radio-group>
-
-          <el-checkbox-group
-            v-else-if="q.type === 'multi_choice'"
-            v-model="multiAnswers[q.id]"
-            class="option-group"
-            @change="syncMultiAnswer(q.id)"
-          >
-            <el-checkbox v-for="opt in q.options" :key="opt.key" :value="opt.key">
-              {{ opt.key }}. {{ opt.text }}
-            </el-checkbox>
-          </el-checkbox-group>
-
-          <el-radio-group v-else-if="q.type === 'judge'" v-model="answers[q.id]" class="option-group">
-            <el-radio :value="true">正确</el-radio>
-            <el-radio :value="false">错误</el-radio>
-          </el-radio-group>
-
-          <el-input
-            v-else-if="q.type === 'fill_blank'"
-            v-model="(answers[q.id] as string)"
-            placeholder="请输入答案"
-          />
-
-          <el-input
-            v-else-if="q.type === 'short_answer'"
-            v-model="(answers[q.id] as string)"
-            type="textarea"
-            :rows="4"
-            placeholder="请输入你的解答"
-          />
         </div>
 
         <div class="submit-bar content-card sticky-submit">
@@ -731,10 +760,25 @@ const resultSubtitle = computed(() => {
   }
 }
 
+.quiz-answer-page {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
 .quiz-header {
   display: flex;
-  align-items: center;
-  gap: 16px;
+  align-items: flex-start;
+  gap: 12px;
+
+  &__main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
 
   h2 {
     flex: 1;
@@ -743,8 +787,144 @@ const resultSubtitle = computed(() => {
     display: flex;
     align-items: center;
     gap: 8px;
+    line-height: 1.4;
   }
-  .progress { color: #64748b; font-size: 14px; }
+
+  .progress {
+    color: #64748b;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+}
+
+.answer-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.question-card {
+  padding: 20px 24px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  &__index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #2563eb;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  &__score {
+    margin-left: auto;
+    font-size: 13px;
+    color: #64748b;
+    white-space: nowrap;
+  }
+
+  &__stem {
+    margin: 0 0 16px;
+    font-size: 15px;
+    line-height: 1.75;
+    color: #1e293b;
+    word-break: break-word;
+  }
+}
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+
+  &--inline {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  :deep(.el-radio),
+  :deep(.el-checkbox) {
+    width: 100%;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    white-space: normal;
+  }
+
+  :deep(.el-radio__label),
+  :deep(.el-checkbox__label) {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 14px;
+    line-height: 1.6;
+    white-space: normal;
+  }
+
+  :deep(.el-radio__input),
+  :deep(.el-checkbox__input) {
+    margin-top: 3px;
+  }
+
+  :deep(.el-radio.is-bordered),
+  :deep(.el-checkbox.is-bordered) {
+    border-radius: 10px;
+    border-color: #e2e8f0;
+    transition: border-color 0.2s, background 0.2s;
+
+    &:hover {
+      border-color: #93c5fd;
+      background: #f8fbff;
+    }
+
+    &.is-checked {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+  }
+}
+
+.option-item--judge {
+  :deep(.el-radio) {
+    width: auto;
+    min-width: 120px;
+  }
+}
+
+.option-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 600;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.option-text {
+  flex: 1;
+  color: #334155;
+}
+
+.answer-input {
+  width: 100%;
 }
 
 .meta-bar {
@@ -794,14 +974,11 @@ const resultSubtitle = computed(() => {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
-
-    .q-num { font-weight: 600; }
   }
 
-  .q-stem { font-size: 14px; margin-bottom: 8px; }
-  .answer-line { font-size: 13px; color: #475569; margin-bottom: 4px; }
+  .answer-line { font-size: 13px; color: #475569; margin-bottom: 4px; padding-left: 2px; }
   .answer-line.correct { color: #10b981; }
   .explanation { font-size: 12px; color: #64748b; margin-top: 6px; }
 

@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { MagicStick } from '@element-plus/icons-vue'
+import { MagicStick, Collection } from '@element-plus/icons-vue'
 import { fetchCourses, fetchClasses } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { exerciseTypeLabels } from '@/utils/exerciseJudge'
@@ -22,17 +22,20 @@ export interface DifficultyDistribution {
   hard: number
 }
 
+export type GenerateConfig = {
+  courseId: number
+  classId: number
+  knowledgePoints: string[]
+  questionTypes: ExerciseType[]
+  questionCount: number
+  difficultyDistribution: DifficultyDistribution
+  extraRequirements: string
+  title: string
+}
+
 const emit = defineEmits<{
-  generate: [config: {
-    courseId: number
-    classId: number
-    knowledgePoints: string[]
-    questionTypes: ExerciseType[]
-    questionCount: number
-    difficultyDistribution: DifficultyDistribution
-    extraRequirements: string
-    title: string
-  }]
+  generate: [config: GenerateConfig, options?: { append?: boolean }]
+  pickFromBank: []
 }>()
 
 const userStore = useUserStore()
@@ -46,7 +49,7 @@ const form = ref({
   classId: undefined as number | undefined,
   title: '',
   knowledgePoints: [] as string[],
-  questionTypes: ['single_choice', 'multi_choice'] as ExerciseType[],
+  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank'] as ExerciseType[],
   difficultyDistribution: { easy: 2, medium: 2, hard: 1 } as DifficultyDistribution,
   extraRequirements: '',
 })
@@ -87,20 +90,20 @@ async function loadClassOptions(): Promise<void> {
   }
 }
 
-function handleGenerate(): void {
+function validateAndGetConfig(): GenerateConfig | null {
   if (!form.value.courseId || !form.value.classId) {
     ElMessage.warning('请选择课程和班级')
-    return
+    return null
   }
   if (!form.value.questionTypes.length) {
     ElMessage.warning('请至少选择一种题型')
-    return
+    return null
   }
   if (totalCount.value === 0) {
     ElMessage.warning('请至少分配 1 道题')
-    return
+    return null
   }
-  emit('generate', {
+  return {
     courseId: form.value.courseId,
     classId: form.value.classId,
     knowledgePoints: form.value.knowledgePoints,
@@ -109,7 +112,21 @@ function handleGenerate(): void {
     difficultyDistribution: { ...form.value.difficultyDistribution },
     extraRequirements: form.value.extraRequirements,
     title: form.value.title,
-  })
+  }
+}
+
+function handleGenerate(append = false): void {
+  const config = validateAndGetConfig()
+  if (!config) return
+  emit('generate', config, { append })
+}
+
+function handlePickFromBank(): void {
+  if (!form.value.courseId) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  emit('pickFromBank')
 }
 
 watch(() => form.value.courseId, async () => {
@@ -128,6 +145,7 @@ defineExpose({
   form,
   courseOptions,
   classOptions,
+  validateAndGetConfig,
 })
 </script>
 
@@ -135,8 +153,8 @@ defineExpose({
   <div class="step1-config">
     <div class="config-form">
       <div class="form-header">
-        <h3>配置出题需求</h3>
-        <p class="form-desc">填写课程信息与题目要求，AI 将从题库检索参考题并生成新题</p>
+        <h3>组卷配置</h3>
+        <p class="form-desc">支持混合组卷：可先选题再 AI 补题，或先生成再选题</p>
       </div>
 
       <el-form label-width="100px" label-position="right">
@@ -231,16 +249,21 @@ defineExpose({
           />
         </el-form-item>
 
-        <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            :loading="props.loading"
-            :icon="MagicStick"
-            @click="handleGenerate"
-          >
-            开始 AI 出题（{{ totalCount }} 题）
-          </el-button>
+        <el-form-item label=" ">
+          <div class="compose-actions">
+            <el-button
+              type="primary"
+              size="large"
+              :loading="props.loading"
+              :icon="MagicStick"
+              @click="handleGenerate(false)"
+            >
+              AI 生成题目（{{ totalCount }} 题）
+            </el-button>
+            <el-button size="large" :icon="Collection" :disabled="props.loading" @click="handlePickFromBank">
+              从题库选题
+            </el-button>
+          </div>
         </el-form-item>
       </el-form>
     </div>
@@ -292,6 +315,12 @@ defineExpose({
       color: #64748b;
       margin-left: 8px;
     }
+  }
+
+  .compose-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
   }
 }
 </style>

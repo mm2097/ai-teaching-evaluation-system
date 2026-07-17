@@ -1164,13 +1164,22 @@ class GenerateExercisesRequest(BaseModel):
 
 
 def _distribute_question_types(total: int, types: list[str]) -> dict[str, int]:
-    """将 total 道题均匀分配到各题型。"""
-    type_map: dict[str, int] = {}
+    """将 total 道题分配到各题型，保证每种已选题型至少 1 道（题量足够时）。"""
     if not types:
         types = ["single_choice"]
-    for i in range(total):
-        t = types[i % len(types)]
-        type_map[t] = type_map.get(t, 0) + 1
+    type_map: dict[str, int] = {t: 0 for t in types}
+    remaining = total
+    for t in types:
+        if remaining <= 0:
+            break
+        type_map[t] = 1
+        remaining -= 1
+    idx = 0
+    while remaining > 0:
+        t = types[idx % len(types)]
+        type_map[t] += 1
+        remaining -= 1
+        idx += 1
     return type_map
 
 

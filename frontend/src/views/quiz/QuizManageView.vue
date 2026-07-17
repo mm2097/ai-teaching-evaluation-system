@@ -1,14 +1,18 @@
 <!--
   AI 出题页面 - 两步向导式
-  Step1 需求配置（AI 出题 + 从题库挑题弹窗）→ Step2 逐题审核发布（SSE 流式逐题展示）
+  Step1 组卷配置（AI 生成 + 从题库选题并列）→ Step2 审核发布（支持 AI 补题 + 继续选题）
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Back, Loading, Collection, Plus } from '@element-plus/icons-vue'
-import QuizWizardStep1Config, { type DifficultyDistribution } from '@/components/quiz/QuizWizardStep1Config.vue'
+import { Back, Loading, Collection, Plus, MagicStick } from '@element-plus/icons-vue'
+import QuizWizardStep1Config, {
+  type DifficultyDistribution,
+  type GenerateConfig,
+} from '@/components/quiz/QuizWizardStep1Config.vue'
 import QuizWizardStep3Review from '@/components/quiz/QuizWizardStep3Review.vue'
 import QuestionBankPickerDialog from '@/components/quiz/QuestionBankPickerDialog.vue'
+import AiSupplementDialog from '@/components/quiz/AiSupplementDialog.vue'
 import AssignmentListPanel from '@/components/quiz/AssignmentListPanel.vue'
 import {
   generateQuizStream,
@@ -32,13 +36,12 @@ const visibleQuestions = ref<QuizQuestion[]>([])
 const ragReferences = ref<RagReference[]>([])
 const genMeta = ref<{ model: string; elapsedMs: number } | null>(null)
 
-// 发布参数（截止时间 / 学生查看权限），由 Step2 右侧发布区设置
 const publishDeadline = ref('')
 const publishAllowReview = ref(false)
 
-// 题库挑题弹窗
 const bankPickerVisible = ref(false)
-// 课程优先取已保存配置（Step 2 时 step1Ref 已被 v-if 卸载为 null），Step 1 回退到子组件表单
+const supplementVisible = ref(false)
+
 const pickerCourseId = computed(() => savedConfig.value?.courseId ?? step1Ref.value?.form?.courseId)
 const existingIds = computed(() => visibleQuestions.value.map((q) => q.id))
 
@@ -51,34 +54,54 @@ const savedConfig = ref<{
   title: string
 } | null>(null)
 
-// ===== AI 生成（SSE 流式逐题展示） =====
-async function handleGenerate(config: {
-  courseId: number
-  classId: number
-  knowledgePoints: string[]
-  questionTypes: ExerciseType[]
-  questionCount: number
-  difficultyDistribution: DifficultyDistribution
-  extraRequirements: string
-  title: string
-}) {
-  currentStep.value = 2
-  generating.value = true
-  genError.value = ''
-  genStageHint.value = 'AI 正在准备出题…'
-  visibleQuestions.value = []
-  ragReferences.value = []
-  genMeta.value = null
+const lastGenerateConfig = ref<Omit<GenerateConfig, 'courseId' | 'classId' | 'title'> | null>(null)
 
-  const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === config.courseId)
-  const classOpt = step1Ref.value?.classOptions.find((c) => c.value === config.classId)
+function resolveCourseClassLabels(courseId: number, classId: number) {
+  const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === courseId)
+  const classOpt = step1Ref.value?.classOptions.find((c) => c.value === classId)
+  return {
+    courseName: courseOpt?.label || savedConfig.value?.courseName || '',
+    className: classOpt?.label || savedConfig.value?.className || '',
+  }
+}
+
+function applySavedConfig(config: GenerateConfig) {
+  const { courseName, className } = resolveCourseClassLabels(config.courseId, config.classId)
   savedConfig.value = {
     courseId: config.courseId,
     classId: config.classId,
-    courseName: courseOpt?.label || '',
-    className: classOpt?.label || '',
-    title: config.title || `${courseOpt?.label || ''} - 专项练习`,
+    courseName,
+    className,
+    title: config.title || `${courseName} - 专项练习`,
   }
+  lastGenerateConfig.value = {
+    knowledgePoints: config.knowledgePoints,
+    questionTypes: config.questionTypes,
+    questionCount: config.questionCount,
+    difficultyDistribution: config.difficultyDistribution,
+    extraRequirements: config.extraRequirements,
+  }
+}
+
+// ===== AI 生成（SSE 流式，支持追加到已有组卷） =====
+async function handleGenerate(
+  config: GenerateConfig,
+  options: { append?: boolean } = {},
+) {
+  const append = options.append ?? visibleQuestions.value.length > 0
+
+  currentStep.value = 2
+  generating.value = true
+  genError.value = ''
+  genStageHint.value = append ? 'AI 正在补题…' : 'AI 正在准备出题…'
+
+  if (!append) {
+    visibleQuestions.value = []
+    ragReferences.value = []
+    genMeta.value = null
+  }
+
+  applySavedConfig(config)
 
   try {
     await generateQuizStream(
@@ -98,13 +121,17 @@ async function handleGenerate(config: {
             : stage
         },
         onQuestion: (q) => {
-          // 首题到达即可审核，但生成状态保持到 done/error，避免半张卷被保存或发布
           visibleQuestions.value = [...visibleQuestions.value, q]
         },
         onDone: (refs, _total, meta) => {
-          ragReferences.value = refs || []
+          if (append && refs?.length) {
+            ragReferences.value = [...ragReferences.value, ...refs]
+          } else {
+            ragReferences.value = refs || []
+          }
           if (meta) genMeta.value = meta
           generating.value = false
+          supplementVisible.value = false
         },
         onError: (msg) => {
           genError.value = msg || 'AI 服务暂不可用'
@@ -115,22 +142,47 @@ async function handleGenerate(config: {
   } catch (e) {
     genError.value = e instanceof Error ? e.message : 'AI 服务暂不可用'
   } finally {
-    // 流结束兜底：无论成功/异常都关闭加载态
     generating.value = false
   }
 }
 
-// ===== 从题库挑题（弹窗式，追加到审核列表） =====
-/** 确保有 savedConfig（题库题优先时用当前表单信息构造） */
+function openSupplementDialog() {
+  if (!savedConfig.value) {
+    ElMessage.warning('请先完成组卷配置（选择课程与班级）')
+    return
+  }
+  supplementVisible.value = true
+}
+
+function handleSupplementConfirm(partial: {
+  knowledgePoints: string[]
+  questionTypes: ExerciseType[]
+  questionCount: number
+  difficultyDistribution: DifficultyDistribution
+  extraRequirements: string
+}) {
+  if (!savedConfig.value) return
+  handleGenerate(
+    {
+      courseId: savedConfig.value.courseId,
+      classId: savedConfig.value.classId,
+      title: savedConfig.value.title,
+      ...partial,
+    },
+    { append: true },
+  )
+}
+
+// ===== 从题库挑题（追加到审核列表） =====
 function ensureSavedConfig(fallbackTitleSuffix: string) {
   if (savedConfig.value) return
   const form = step1Ref.value?.form
-  if (!form) return
+  if (!form?.courseId || !form?.classId) return
   const courseOpt = step1Ref.value?.courseOptions.find((c) => c.value === form.courseId)
   const classOpt = step1Ref.value?.classOptions.find((c) => c.value === form.classId)
   savedConfig.value = {
-    courseId: form.courseId!,
-    classId: form.classId!,
+    courseId: form.courseId,
+    classId: form.classId,
     courseName: courseOpt?.label || '',
     className: classOpt?.label || '',
     title: form.title || `${courseOpt?.label || ''} - ${fallbackTitleSuffix}`,
@@ -146,7 +198,6 @@ function openBankPicker() {
 }
 
 function handleBankPicked(picked: QuizQuestion[]) {
-  // 按 id 去重后追加（不替换已有题目）
   const existing = new Set(existingIds.value)
   const fresh = picked.filter((q) => !existing.has(q.id))
   if (!fresh.length) {
@@ -156,7 +207,6 @@ function handleBankPicked(picked: QuizQuestion[]) {
   ensureSavedConfig('题库组卷')
   visibleQuestions.value = [...visibleQuestions.value, ...fresh]
   genError.value = ''
-  generating.value = false
   currentStep.value = 2
   ElMessage.success(`已添加 ${fresh.length} 道题`)
 }
@@ -205,6 +255,8 @@ function resetWizard() {
   generating.value = false
   publishDeadline.value = ''
   publishAllowReview.value = false
+  savedConfig.value = null
+  lastGenerateConfig.value = null
 }
 </script>
 
@@ -212,42 +264,53 @@ function resetWizard() {
   <div class="page-container">
     <div class="wizard-steps">
       <el-steps :active="currentStep - 1" align-center>
-        <el-step title="需求配置" description="填写出题要求" />
-        <el-step title="逐题审核" description="生成 + 审核 + 发布" />
+        <el-step title="组卷配置" description="AI 生成 / 题库选题" />
+        <el-step title="审核发布" description="混合组卷 + 发布" />
       </el-steps>
     </div>
 
     <!-- Step 1 -->
     <div v-if="currentStep === 1" class="wizard-content">
-      <QuizWizardStep1Config ref="step1Ref" :loading="false" @generate="handleGenerate" />
-
-      <!-- 题库挑题入口 -->
-      <div class="bank-entry">
-        <span class="bank-entry-hint">已有合适的题？</span>
-        <el-button :icon="Collection" plain @click="openBankPicker">从题库挑题加入</el-button>
-      </div>
+      <QuizWizardStep1Config
+        ref="step1Ref"
+        :loading="generating"
+        @generate="handleGenerate"
+        @pick-from-bank="openBankPicker"
+      />
+      <p v-if="visibleQuestions.length" class="draft-hint">
+        当前已选 {{ visibleQuestions.length }} 题，继续 AI 生成将追加到组卷中。
+        <el-button link type="primary" @click="currentStep = 2">前往审核</el-button>
+      </p>
     </div>
 
     <!-- Step 2: 审核 -->
     <div v-else-if="currentStep === 2" class="wizard-content">
       <div class="step2-toolbar">
         <el-button :icon="Back" :disabled="generating" @click="currentStep = 1">返回配置</el-button>
+        <el-button
+          type="primary"
+          :icon="MagicStick"
+          :loading="generating"
+          :disabled="generating"
+          @click="openSupplementDialog"
+        >
+          AI 补题
+        </el-button>
         <el-button :icon="Plus" :disabled="generating" @click="openBankPicker">从题库添加</el-button>
+        <span v-if="visibleQuestions.length" class="compose-count">共 {{ visibleQuestions.length }} 题</span>
+        <span v-if="generating" class="gen-hint">{{ genStageHint }}</span>
       </div>
 
-      <!-- 错误 -->
-      <div v-if="genError" class="error-block">
+      <div v-if="genError && !visibleQuestions.length" class="error-block">
         <p>{{ genError }}</p>
         <el-button type="primary" :icon="Back" @click="currentStep = 1">返回配置</el-button>
       </div>
 
-      <!-- 加载中（尚无题目到达） -->
       <div v-else-if="generating && !visibleQuestions.length" class="loading-block">
         <el-icon class="loading-spin is-loading"><Loading /></el-icon>
         <p>{{ genStageHint || 'AI 正在生成题目，预计 10-30 秒…' }}</p>
       </div>
 
-      <!-- 审核列表（流式追加：有题即渲染，生成中继续追加） -->
       <QuizWizardStep3Review
         v-else-if="visibleQuestions.length"
         :questions="visibleQuestions"
@@ -260,7 +323,16 @@ function resetWizard() {
         @publish="handlePublish"
       />
 
-      <el-empty v-else description="未生成有效题目，请返回重试" />
+      <el-empty v-else description="组卷为空，请返回配置页 AI 生成或从题库选题" />
+
+      <el-alert
+        v-if="genError && visibleQuestions.length"
+        type="warning"
+        :title="genError"
+        show-icon
+        :closable="false"
+        class="gen-error-alert"
+      />
     </div>
 
     <QuestionBankPickerDialog
@@ -268,6 +340,13 @@ function resetWizard() {
       :course-id="pickerCourseId"
       :exclude-ids="existingIds"
       @confirm="handleBankPicked"
+    />
+
+    <AiSupplementDialog
+      v-model:visible="supplementVisible"
+      :loading="generating"
+      :initial-config="lastGenerateConfig"
+      @confirm="handleSupplementConfirm"
     />
 
     <AssignmentListPanel :refresh-trigger="assignmentRefreshTrigger" />
@@ -293,25 +372,31 @@ function resetWizard() {
     min-height: 400px;
   }
 
-  .bank-entry {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
+  .draft-hint {
+    text-align: center;
+    font-size: 13px;
+    color: #64748b;
     margin-top: 8px;
-    padding-top: 20px;
-    border-top: 1px dashed #e2e8f0;
-
-    .bank-entry-hint {
-      font-size: 13px;
-      color: #94a3b8;
-    }
   }
 
   .step2-toolbar {
     display: flex;
+    align-items: center;
     gap: 8px;
     margin-bottom: 16px;
+    flex-wrap: wrap;
+
+    .compose-count {
+      font-size: 13px;
+      color: #475569;
+      margin-left: 4px;
+    }
+
+    .gen-hint {
+      font-size: 13px;
+      color: #409eff;
+      margin-left: auto;
+    }
   }
 
   .loading-block {
@@ -331,6 +416,10 @@ function resetWizard() {
     text-align: center;
     padding: 32px;
     p { color: #ef4444; font-size: 14px; margin-bottom: 16px; }
+  }
+
+  .gen-error-alert {
+    margin-top: 16px;
   }
 }
 </style>

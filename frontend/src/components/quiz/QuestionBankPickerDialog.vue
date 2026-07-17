@@ -9,7 +9,7 @@ import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Plus } from '@element-plus/icons-vue'
 import { fetchQuestionBank } from '@/api/questionBank'
-import { exerciseTypeLabels, difficultyLabels } from '@/utils/exerciseJudge'
+import { exerciseTypeLabels, difficultyLabels, formatJudgeAnswer, getQuestionOptions } from '@/utils/exerciseJudge'
 import type { QuizQuestion, ExerciseType, DifficultyLevel } from '@/types'
 
 const props = defineProps<{
@@ -129,6 +129,7 @@ function handleCancel() {
 }
 
 function answerText(row: QuizQuestion): string {
+  if (row.type === 'judge') return formatJudgeAnswer(row.answer)
   if (row.answerList?.length) return row.answerList.join('、')
   return row.answer || '—'
 }
@@ -206,8 +207,8 @@ function answerText(row: QuizQuestion): string {
         <template #default="{ row }">
           <div class="q-detail">
             <p class="q-stem">{{ row.stem }}</p>
-            <ul v-if="row.options?.length" class="q-options">
-              <li v-for="opt in row.options" :key="opt.key">
+            <ul v-if="getQuestionOptions(row).length" class="q-options">
+              <li v-for="opt in getQuestionOptions(row)" :key="opt.key">
                 <b>{{ opt.key }}.</b> {{ opt.text }}
               </li>
             </ul>

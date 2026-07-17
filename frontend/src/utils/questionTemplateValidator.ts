@@ -4,6 +4,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { DifficultyLevel, ExerciseType, ValidationError } from '@/types'
+import { JUDGE_OPTIONS } from '@/utils/exerciseJudge'
 
 export const questionTemplateHeaders = [
   '题型',
@@ -124,11 +125,12 @@ function parseRow(cells: string[], lineNum: number): { row?: ParsedQuestionRow; 
       errors.push({ row: lineNum, column: '参考答案', message: `第 ${lineNum} 行参考答案不能为空` })
     }
   } else if (type === 'judge') {
+    options = JUDGE_OPTIONS.map((o) => ({ ...o }))
     const lower = answer.toLowerCase()
-    if (!['true', 'false', '正确', '错误', '1', '0'].includes(lower)) {
-      errors.push({ row: lineNum, column: '参考答案', message: `第 ${lineNum} 行判断题答案须为 正确/错误 或 true/false` })
+    if (!['true', 'false', '正确', '错误', '对', '错', '1', '0'].includes(lower)) {
+      errors.push({ row: lineNum, column: '参考答案', message: `第 ${lineNum} 行判断题答案须为 对/错、正确/错误 或 true/false` })
     } else {
-      normalizedAnswer = ['true', '正确', '1'].includes(lower) ? 'true' : 'false'
+      normalizedAnswer = ['true', '正确', '对', '1'].includes(lower) ? 'true' : 'false'
     }
   } else if (type === 'fill_blank') {
     if (!answer) {

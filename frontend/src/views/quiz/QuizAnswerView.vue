@@ -16,7 +16,7 @@ import {
 import { fetchCourses } from '@/api/dict'
 import { fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { useUserStore } from '@/stores/user'
-import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels, formatJudgeAnswer, getQuestionOptions, judgeOptionAnswerValue } from '@/utils/exerciseJudge'
 import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
 
 const userStore = useUserStore()
@@ -249,12 +249,12 @@ const answeredCount = computed(() =>
 
 function formatAnswer(q: QuizQuestion, ans: string | boolean | undefined): string {
   if (ans === undefined) return '未作答'
-  if (q.type === 'judge') return ans === true || ans === 'true' ? '正确' : '错误'
+  if (q.type === 'judge') return formatJudgeAnswer(ans)
   return String(ans)
 }
 
 function formatCorrectAnswer(q: QuizQuestion): string {
-  if (q.type === 'judge') return q.answer === 'true' ? '正确' : '错误'
+  if (q.type === 'judge') return formatJudgeAnswer(q.answer)
   return q.answer
 }
 
@@ -697,8 +697,15 @@ const resultSubtitle = computed(() => {
               v-model="answers[q.id]"
               class="option-list option-list--inline"
             >
-              <el-radio :value="true" class="option-item option-item--judge" border>正确</el-radio>
-              <el-radio :value="false" class="option-item option-item--judge" border>错误</el-radio>
+              <el-radio
+                v-for="opt in getQuestionOptions(q)"
+                :key="opt.key"
+                :value="judgeOptionAnswerValue(opt)"
+                class="option-item option-item--judge"
+                border
+              >
+                {{ opt.text }}
+              </el-radio>
             </el-radio-group>
 
             <el-input

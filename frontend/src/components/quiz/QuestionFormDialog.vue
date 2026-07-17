@@ -4,7 +4,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import type { DifficultyLevel, QuizQuestion } from '@/types'
-import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels, JUDGE_OPTIONS } from '@/utils/exerciseJudge'
 
 const props = defineProps<{
   modelValue: boolean
@@ -77,7 +77,7 @@ watch(
       form.value.options = undefined
       form.value.answerList = undefined
     } else if (type === 'judge') {
-      form.value.options = undefined
+      form.value.options = JUDGE_OPTIONS.map((o) => ({ ...o }))
       form.value.answerList = undefined
       if (!form.value.answer) form.value.answer = 'true'
     } else if (type === 'fill_blank') {
@@ -139,10 +139,13 @@ function close(): void {
       </template>
 
       <template v-else-if="form.type === 'judge'">
+        <el-form-item v-for="opt in form.options" :key="opt.key" :label="`选项 ${opt.key}`">
+          <el-input :model-value="opt.text" disabled />
+        </el-form-item>
         <el-form-item label="参考答案">
           <el-radio-group v-model="form.answer">
-            <el-radio value="true">正确</el-radio>
-            <el-radio value="false">错误</el-radio>
+            <el-radio value="true">对</el-radio>
+            <el-radio value="false">错</el-radio>
           </el-radio-group>
         </el-form-item>
       </template>

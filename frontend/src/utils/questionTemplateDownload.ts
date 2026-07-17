@@ -38,7 +38,7 @@ const sampleRows: string[][] = [
     '',
     '',
     '',
-    '错误',
+    '错',
     'UDP 是无连接不可靠协议',
     'TCP/IP协议',
     '简单',

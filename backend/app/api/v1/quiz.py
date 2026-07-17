@@ -57,6 +57,7 @@ router = APIRouter()
 # status 映射：DB int → 前端 string
 _STATUS_MAP = {0: "draft", 1: "published", 2: "closed"}
 _TYPE_MAP = {1: "single_choice", 2: "multi_choice", 3: "judge", 4: "fill_blank", 5: "short_answer"}
+_JUDGE_OPTIONS = [{"key": "A", "text": "对"}, {"key": "B", "text": "错"}]
 _SELF_PRACTICE_PREFIX = "【自主练习】"
 
 
@@ -141,6 +142,13 @@ def _parse_question_options(raw: str | None) -> list[dict[str, str]]:
     return options
 
 
+def _question_options(question_type: int | str, raw: str | None) -> list[dict[str, str]]:
+    options = _parse_question_options(raw)
+    if question_type in (3, "judge") and not options:
+        return [item.copy() for item in _JUDGE_OPTIONS]
+    return options
+
+
 def _serialize_question(
     question: AiQuestion,
     session: Session,
@@ -155,7 +163,7 @@ def _serialize_question(
         "type": _TYPE_MAP.get(question.type, "single_choice"),
         "knowledgePoint": knowledge_point.point_name if knowledge_point else "",
         "score": round(score, 1),
-        "options": _parse_question_options(question.options),
+        "options": _question_options(question.type, question.options),
         "answer": answer if include_solution else "",
         "answerList": answer_list if include_solution else None,
         "explanation": question.analysis or "" if include_solution else "",
@@ -1458,21 +1466,9 @@ def _generate_exercises(
     questions = []
     total = max(len(raw_questions), 1)
     for idx, (target_difficulty, q) in enumerate(raw_questions):
-        questions.append({
-            "id": -(idx + 1),
-            "courseId": req.courseId,
-            "type": q.get("type", "single_choice"),
-            "stem": q.get("stem", ""),
-            "options": q.get("options"),
-            "answer": q.get("answer", ""),
-            "answerList": q.get("answer_list"),
-            "explanation": q.get("explanation", ""),
-            "difficulty": target_difficulty,  # 强制覆盖：用请求的难度，不信 LLM 返回
-            "knowledgePoint": q.get("knowledge_point", ""),
-            "score": round(100.0 / total, 1),
-            "status": "draft",
-            "source": "ai",
-        })
+        item = _raw_to_question(q, idx, req.courseId, target_difficulty, total)
+        item["difficulty"] = target_difficulty
+        questions.append(item)
 
     usage.success = 1
     session.add(usage)
@@ -1489,12 +1485,16 @@ def _generate_exercises(
 
 def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str, total: int) -> dict:
     """将算法服务返回的 raw question 转为前端格式。"""
+    question_type = q.get("type", "single_choice")
+    options = q.get("options")
+    if question_type == "judge" and not options:
+        options = [item.copy() for item in _JUDGE_OPTIONS]
     return {
         "id": -(idx + 1),
         "courseId": course_id,
-        "type": q.get("type", "single_choice"),
+        "type": question_type,
         "stem": q.get("stem", ""),
-        "options": q.get("options"),
+        "options": options,
         "answer": q.get("answer", ""),
         "answerList": q.get("answer_list"),
         "explanation": q.get("explanation", ""),

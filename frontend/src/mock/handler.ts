@@ -656,10 +656,10 @@ function generateOneQuestion(type: string, kp: string, difficulty: string, id: n
       type: 'judge',
       stem: `【AI 生成】判断题（难度：${difficulty}）：${kp}在最坏情况下的时间复杂度为 O(n²)。`,
       options: [
-        { key: 'A', text: '正确' },
-        { key: 'B', text: '错误' },
+        { key: 'A', text: '对' },
+        { key: 'B', text: '错' },
       ],
-      answer: 'A',
+      answer: 'true',
       knowledgePoint: kp,
       difficulty,
       score: 5,

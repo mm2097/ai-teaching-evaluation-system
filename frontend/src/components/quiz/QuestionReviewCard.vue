@@ -6,7 +6,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { Check, Close, Edit, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
-import { difficultyLabels, exerciseTypeLabels } from '@/utils/exerciseJudge'
+import { difficultyLabels, exerciseTypeLabels, formatJudgeAnswer, getQuestionOptions } from '@/utils/exerciseJudge'
 import type { DifficultyLevel, ExerciseType, QuizQuestion, ReviewStatus } from '@/types'
 
 const props = defineProps<{
@@ -64,6 +64,14 @@ const statusColor = computed(() => {
   }
   return map[props.status]
 })
+
+const displayOptions = computed(() => getQuestionOptions(props.question))
+
+const displayAnswer = computed(() =>
+  props.question.type === 'judge'
+    ? formatJudgeAnswer(props.question.answer)
+    : props.question.answer,
+)
 </script>
 
 <template>
@@ -85,8 +93,8 @@ const statusColor = computed(() => {
     <p class="q-stem">{{ question.stem }}</p>
 
     <!-- 选项 -->
-    <div v-if="question.options?.length" class="q-options">
-      <span v-for="opt in question.options" :key="opt.key" class="q-opt">
+    <div v-if="displayOptions.length" class="q-options">
+      <span v-for="opt in displayOptions" :key="opt.key" class="q-opt">
         <b>{{ opt.key }}.</b> {{ opt.text }}
       </span>
     </div>
@@ -98,7 +106,7 @@ const statusColor = computed(() => {
     </div>
     <transition name="expand">
       <div v-show="expanded" class="q-detail">
-        <p><b>答案：</b><span class="q-answer">{{ question.answer }}</span></p>
+        <p><b>答案：</b><span class="q-answer">{{ displayAnswer }}</span></p>
         <p v-if="question.explanation"><b>解析：</b>{{ question.explanation }}</p>
       </div>
     </transition>

@@ -2,7 +2,39 @@
  * 客观题判分工具（规则匹配，非 AI）
  * 对齐 AI算法_需求与开发文档 第 5 章
  */
-import type { ExerciseType, QuizQuestion } from '@/types'
+import type { ExerciseOption, ExerciseType, QuizQuestion } from '@/types'
+
+/** 判断题固定选项 */
+export const JUDGE_OPTIONS: ExerciseOption[] = [
+  { key: 'A', text: '对' },
+  { key: 'B', text: '错' },
+]
+
+/** 判断题答案展示文案 */
+export function formatJudgeAnswer(answer: string | boolean | undefined): string {
+  if (answer === true || answer === 'true' || answer === '1') return '对'
+  if (answer === false || answer === 'false' || answer === '0') return '错'
+  const normalized = String(answer ?? '').trim().toLowerCase()
+  if (['对', '正确', '是', 'yes'].includes(normalized)) return '对'
+  if (['错', '错误', '否', 'no'].includes(normalized)) return '错'
+  return String(answer ?? '')
+}
+
+/** 判断题选项对应的提交值 */
+export function judgeOptionAnswerValue(opt: ExerciseOption): string {
+  const text = opt.text.trim()
+  if (opt.key === 'true' || text === '对' || text === '正确') return 'true'
+  if (opt.key === 'false' || text === '错' || text === '错误') return 'false'
+  return opt.key === 'A' ? 'true' : 'false'
+}
+
+/** 获取题目展示用选项（判断题自动补全对/错） */
+export function getQuestionOptions(question: Pick<QuizQuestion, 'type' | 'options'>): ExerciseOption[] {
+  if (question.type === 'judge') {
+    return question.options?.length ? question.options : JUDGE_OPTIONS
+  }
+  return question.options ?? []
+}
 
 function normalizeText(value: string): string {
   return value.trim().toLowerCase()
@@ -28,7 +60,14 @@ export function judgeAnswer(question: QuizQuestion, studentAnswer: string | bool
 
     case 'judge': {
       const expected = question.answer === 'true' || question.answer === '1'
-      const actual = studentAnswer === true || studentAnswer === 'true'
+      const normalized = String(studentAnswer).trim().toLowerCase()
+      const actual = studentAnswer === true
+        || studentAnswer === 'true'
+        || ['对', '正确', '是', '1'].includes(normalized)
+      const actualFalse = studentAnswer === false
+        || studentAnswer === 'false'
+        || ['错', '错误', '否', '0'].includes(normalized)
+      if (actualFalse && !actual) return !expected
       return expected === actual
     }
 

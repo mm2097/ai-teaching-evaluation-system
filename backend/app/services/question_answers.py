@@ -52,6 +52,18 @@ def answer_for_response(question_type: int | str, stored_answer: str) -> tuple[s
     return stored_answer, None
 
 
+def is_answer_provided(question_type: int | str, user_answer: str | None) -> bool:
+    """判断学生是否已作答（空串、纯空白、无效判断题答案视为未答）。"""
+    if user_answer is None:
+        return False
+    text = str(user_answer).strip()
+    if not text:
+        return False
+    if question_type in (3, "judge"):
+        return _truth_value(text) is not None
+    return True
+
+
 def judge_objective_answer(question_type: int, correct_answer: str, user_answer: str) -> bool:
     """安全判定四类客观题，无法识别的判断题答案一律判错。"""
     correct = (correct_answer or "").strip()

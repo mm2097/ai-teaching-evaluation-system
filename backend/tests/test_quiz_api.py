@@ -12,6 +12,7 @@ from app.models import (
     AnswerTask,
     AnswerTaskClass,
     ClassInfo,
+    Student,
     StudentAnswerRecord,
     SysUser,
     TaskQuestion,
@@ -166,6 +167,96 @@ def test_student_cannot_open_detail_when_review_disabled(session):
             current_user=_user(session, 2),
         )
     assert exc.value.status_code == 404
+
+
+def test_submit_rejects_blank_short_answer(session):
+    question = AiQuestion(
+        course_id=1,
+        point_id=1,
+        type=5,
+        content="Explain the traversal strategy.",
+        correct_answer="Reference answer",
+        create_by=1,
+    )
+    session.add(question)
+    session.commit()
+    session.refresh(question)
+    task = _create_task(session, [question.question_id])
+
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.submit_answers(
+            quiz.SubmitAnswersRequest(
+                task_id=task.task_id,
+                student_id=1,
+                answers={str(question.question_id): "   "},
+            ),
+            session=session,
+            current_user=_user(session, 2),
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_submit_rejects_incomplete_answers(session):
+    task = _create_task(session, [1, 2])
+
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.submit_answers(
+            quiz.SubmitAnswersRequest(task_id=task.task_id, student_id=1, answers={"1": "C"}),
+            session=session,
+            current_user=_user(session, 2),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "未作答" in str(exc_info.value.detail)
+    assert not session.exec(
+        select(StudentAnswerRecord).where(StudentAnswerRecord.task_id == task.task_id)
+    ).all()
+
+
+def test_empty_short_answer_scores_zero_without_ai(session, monkeypatch):
+    question = AiQuestion(
+        course_id=1,
+        point_id=1,
+        type=5,
+        content="Explain the traversal strategy.",
+        correct_answer="Reference answer",
+        create_by=1,
+    )
+    session.add(question)
+    session.commit()
+    session.refresh(question)
+    task = _create_task(session, [question.question_id])
+    student = session.exec(select(Student).where(Student.student_id == 1)).first()
+
+    called = {"value": False}
+
+    def fail_if_called(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("AI judge should not be called for empty answers")
+
+    monkeypatch.setattr(quiz.httpx, "post", fail_if_called)
+    result = quiz._call_ai_judge(
+        session,
+        question,
+        "   ",
+        student.student_id,
+        task.task_id,
+        20.0,
+    )
+    session.flush()
+
+    assert called["value"] is False
+    assert result == {"score": 0.0, "manual_required": False}
+    record = session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.question_id == question.question_id,
+        )
+    ).first()
+    assert record.score == 0
+    assert record.is_correct == 0
+    assert record.judge_reason == "未作答"
 
 
 def test_short_answer_persists_scaled_score(session, monkeypatch):

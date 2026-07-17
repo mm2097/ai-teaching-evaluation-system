@@ -48,6 +48,7 @@ from app.services.mastery import refresh_student_mastery
 from app.services.question_answers import (
     answer_for_response,
     encode_correct_answer,
+    is_answer_provided,
     judge_objective_answer,
 )
 
@@ -563,6 +564,17 @@ def _grade_task_answers(
     if not tq_rows:
         raise HTTPException(status_code=404, detail="任务不存在或无题目")
 
+    missing_question_ids = [
+        str(question.question_id)
+        for _, question in tq_rows
+        if not is_answer_provided(question.type, answers.get(str(question.question_id)))
+    ]
+    if missing_question_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"还有 {len(missing_question_ids)} 题未作答，请完成全部题目后再提交",
+        )
+
     # 覆盖同一学生的旧记录，避免重复提交留下多份逐题记录。
     previous_records = session.exec(
         select(StudentAnswerRecord).where(
@@ -678,6 +690,20 @@ def _call_ai_judge(
     question_max_score: float,
 ) -> dict:
     """调算法服务 AI 判分并存储记录。"""
+    if not is_answer_provided(question.type, student_answer):
+        record = StudentAnswerRecord(
+            task_id=task_id,
+            question_id=question.question_id,
+            student_id=student_id,
+            user_answer=student_answer or "",
+            score=0,
+            is_correct=0,
+            ai_score=0.0,
+            judge_reason="未作答",
+        )
+        session.add(record)
+        return {"score": 0.0, "manual_required": False}
+
     payload = {
         "question_stem": question.content,
         "reference_answer": question.correct_answer,
@@ -766,6 +792,7 @@ class SelfPracticeSubmitRequest(BaseModel):
 
 class SaveAnswerTaskRequest(BaseModel):
     """创建/保存答题任务。"""
+    taskId: int | None = None
     title: str
     courseId: int
     courseName: str = ""
@@ -933,19 +960,50 @@ def create_answer_task(
     else:
         deadline = datetime.now() + timedelta(days=7)
 
-    task = AnswerTask(
-        course_id=req.courseId,
-        task_name=req.title,
-        task_type=TASK_TYPE_ASSIGNMENT,
-        deadline=deadline,
-        status=status_int,
-        allow_review=1 if req.allowReview else 0,
-        create_by=current_user.user_id,
-    )
-    if status_int == 1:
-        task.publish_time = datetime.now()
-    session.add(task)
-    session.flush()
+    if req.taskId:
+        task = session.get(AnswerTask, req.taskId)
+        if not task:
+            raise HTTPException(status_code=404, detail="草稿不存在")
+        if task.status != 0:
+            raise HTTPException(status_code=409, detail="仅草稿可继续编辑保存")
+        _require_course_access(current_user, task.course_id, session)
+        if task.create_by != current_user.user_id:
+            raise HTTPException(status_code=403, detail="无权编辑该草稿")
+        task.course_id = req.courseId
+        task.task_name = req.title
+        task.deadline = deadline
+        task.status = status_int
+        task.allow_review = 1 if req.allowReview else 0
+        if status_int == 1:
+            task.publish_time = datetime.now()
+        session.add(task)
+
+        old_links = session.exec(
+            select(TaskQuestion).where(TaskQuestion.task_id == task.task_id)
+        ).all()
+        for link in old_links:
+            session.delete(link)
+        old_class_links = session.exec(
+            select(AnswerTaskClass).where(AnswerTaskClass.task_id == task.task_id)
+        ).all()
+        for link in old_class_links:
+            session.delete(link)
+        session.flush()
+    else:
+        task = AnswerTask(
+            course_id=req.courseId,
+            task_name=req.title,
+            task_type=TASK_TYPE_ASSIGNMENT,
+            deadline=deadline,
+            status=status_int,
+            allow_review=1 if req.allowReview else 0,
+            create_by=current_user.user_id,
+        )
+        if status_int == 1:
+            task.publish_time = datetime.now()
+        session.add(task)
+        session.flush()
+
     if target_class_id:
         session.add(
             AnswerTaskClass(task_id=task.task_id, class_id=target_class_id)

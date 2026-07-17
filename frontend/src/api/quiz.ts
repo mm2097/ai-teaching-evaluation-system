@@ -143,6 +143,7 @@ export interface StartSelfPracticeResult {
 
 /** 保存练习任务参数 */
 export interface SaveQuizAssignmentParams {
+  taskId?: number
   title: string
   courseId: number
   courseName: string
@@ -285,7 +286,7 @@ export async function generateQuizStream(params: GenerateQuizParams, callbacks: 
   }
 }
 
-/** 保存练习任务（草稿或已发布） */
+/** 保存练习任务（新建或更新草稿/发布任务） */
 export async function saveQuizAssignment(params: SaveQuizAssignmentParams): Promise<QuizAssignmentRecord> {
   const res = await request.post('/v1/answer-tasks', params)
   return res.data
@@ -393,7 +394,7 @@ function normalizeAnswers(answers: Record<number, string | string[] | boolean>):
 export function buildSubmitDetails(
   questions: QuizQuestion[],
   answers: Record<number, string | boolean>,
-  backendCorrectCount?: number,
+  _backendCorrectCount?: number,
   manualQuestionIds: number[] = [],
   backendQuestionResults: QuizQuestionResult[] = [],
 ): QuizSubmitResult['details'] {
@@ -411,34 +412,25 @@ export function buildSubmitDetails(
   }
 
   const manualQuestionSet = new Set(manualQuestionIds)
-  const details = questions.map((q) => {
+  return questions.map((q) => {
     const userAnswer = answers[q.id] ?? ''
     if (q.type === 'short_answer') {
       const manualRequired = manualQuestionSet.has(q.id)
+      const answered = typeof userAnswer === 'string' ? userAnswer.trim().length > 0 : userAnswer !== undefined && userAnswer !== ''
       return {
         question: q,
         correct: false,
         userAnswer,
         manualRequired,
-        aiReason: manualRequired ? 'AI 判分暂不可用，等待人工批改' : '简答题已由 AI 判分',
+        aiReason: !answered
+          ? '未作答'
+          : manualRequired
+            ? 'AI 判分暂不可用，等待人工批改'
+            : '简答题已由 AI 判分',
       }
     }
     return { question: q, correct: judgeAnswer(q, userAnswer), userAnswer }
   })
-
-  // 若后端返回了 correctCount，尝试将简答题对错补齐（按得分差额推断）
-  if (backendCorrectCount !== undefined) {
-    const objectiveCorrect = details.filter((d) => d.question.type !== 'short_answer' && d.correct).length
-    const shortItems = details.filter(
-      (d) => d.question.type === 'short_answer' && !d.manualRequired,
-    )
-    let remaining = backendCorrectCount - objectiveCorrect
-    shortItems.forEach((d) => {
-      d.correct = remaining > 0
-      if (d.correct) remaining -= 1
-    })
-  }
-  return details
 }
 
 /** 提交答题答案（教师布置练习） */

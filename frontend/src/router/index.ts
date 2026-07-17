@@ -80,12 +80,6 @@ const router = createRouter({
         },
         // ---- AI 智能辅助教学 ----
         {
-          path: 'agent/chat',
-          name: 'AgentChat',
-          component: () => import('@/views/agent/AgentChatView.vue'),
-          meta: { title: 'AI 智能助手', roles: ['teacher'] },
-        },
-        {
           path: 'quiz/bank',
           name: 'QuestionBank',
           component: () => import('@/views/quiz/QuestionBankView.vue'),

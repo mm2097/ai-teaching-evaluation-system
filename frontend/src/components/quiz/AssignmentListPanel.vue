@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { View, CircleClose, RefreshRight } from '@element-plus/icons-vue'
+import { View, CircleClose, RefreshRight, Edit } from '@element-plus/icons-vue'
 import {
   fetchQuizAssignments,
   closeQuizAssignment,
@@ -16,6 +16,10 @@ import {
 
 const props = defineProps<{
   refreshTrigger?: number  // 外部变更时递增以触发刷新
+}>()
+
+const emit = defineEmits<{
+  editDraft: [assignment: AssignmentItem]
 }>()
 
 // 后端返回的数据实际含 QuizAssignment 所有字段，用宽松类型避免 vue-tsc 报错

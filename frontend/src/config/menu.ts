@@ -71,7 +71,6 @@ export const menuList: MenuItem[] = [
       { path: '/quiz/answer', title: '在线答题', icon: 'Edit', roles: ['student'] },
       { path: '/student/quiz-list', title: '答题任务', icon: 'Tickets', roles: ['student'] },
       { path: '/student/practice-records', title: '练习记录', icon: 'List', roles: ['student'] },
-      { path: '/agent/chat', title: 'AI 智能助手', icon: 'ChatDotRound', roles: ['teacher'] },
     ],
   },
   {
@@ -145,7 +144,6 @@ export const routeTitleMap: Record<string, string> = {
   '/analysis/trend': '成绩趋势预测',
   '/analysis/knowledge': '知识点掌握度',
   '/analysis/warning': '异常学情预警',
-  '/agent/chat': 'AI 智能助手',
   '/quiz/bank': '题库管理',
   '/quiz/manage': 'AI 出题',
   '/quiz/records': '答题记录',
@@ -179,7 +177,6 @@ export const routeParentMap: Record<string, { path: string; title: string }> = {
   '/quiz/manage': { path: '/quiz', title: 'AI 智能辅助教学' },
   '/quiz/records': { path: '/quiz', title: 'AI 智能辅助教学' },
   '/quiz/answer': { path: '/quiz', title: 'AI 智能辅助教学' },
-  '/agent/chat': { path: '/quiz', title: 'AI 智能辅助教学' },
   '/evaluation/config': { path: '/evaluation', title: '学习质量评价' },
   '/evaluation/student': { path: '/evaluation', title: '学习质量评价' },
   '/report/center': { path: '/report', title: '报告中心' },

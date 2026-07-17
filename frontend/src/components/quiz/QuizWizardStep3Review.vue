@@ -19,6 +19,7 @@ const props = defineProps<{
   ragReferences: RagReference[]
   courseId?: number
   generationPending?: boolean
+  initialStatus?: ReviewStatus
 }>()
 
 const emit = defineEmits<{
@@ -46,7 +47,7 @@ function buildReviewedItem(q: QuizQuestion): ReviewedItem {
   )
   return {
     question: { ...q },
-    status: 'pending' as ReviewStatus,
+    status: (props.initialStatus || 'pending') as ReviewStatus,
     ragSimilarity: ref?.similarity ?? 0,
     ragSource: ref ? `题库#${ref.questionId}` : '',
   }

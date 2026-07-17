@@ -91,14 +91,20 @@ def get_stats(
 
     teacher_count = len(session.exec(select(Teacher)).all())
 
-    # 成绩统计
-    all_scores: list[float] = []
+    # 成绩统计（按学生维度：每人取平均分，再统计及格/优秀人数）
+    from collections import defaultdict
+
+    stu_score_list: dict[int, list[float]] = defaultdict(list)
+
+    def _add_score(student_id_val: int, score_val: float) -> None:
+        if not cls_ids or student_id_val in cls_ids:
+            stu_score_list[student_id_val].append(score_val)
+
     score_q = select(ScoreRecord)
     if course_id:
         score_q = score_q.where(ScoreRecord.course_id == course_id)
     for s in session.exec(score_q).all():
-        if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
-            all_scores.append(s.score)
+        _add_score(s.student_id, s.score)
 
     if course_id:
         batch_ids = session.exec(
@@ -106,53 +112,60 @@ def get_stats(
         ).all()
         if batch_ids:
             for s in session.exec(select(IndividualScore).where(IndividualScore.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
-                if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
-                    all_scores.append(s.score)
+                _add_score(s.student_id, s.score)
             for s in session.exec(select(CourseTestDetail).where(CourseTestDetail.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
-                if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
-                    all_scores.append(s.total_score)
+                _add_score(s.student_id, s.total_score)
     else:
         for s in session.exec(select(IndividualScore)).all():
-            if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
-                all_scores.append(s.score)
+            _add_score(s.student_id, s.score)
         for s in session.exec(select(CourseTestDetail)).all():
-            if not cls_ids or getattr(s, 'student_id', None) in cls_ids:
-                all_scores.append(s.total_score)
+            _add_score(s.student_id, s.total_score)
 
-    total = len(all_scores) or 1
-    pass_count = sum(1 for s in all_scores if s >= 60)
-    excellent = sum(1 for s in all_scores if s >= 90)
-    pass_rate = round(pass_count / total * 100, 1)
-    excellent_rate = round(excellent / total * 100, 1)
+    stu_avgs = [sum(scores) / len(scores) for scores in stu_score_list.values()]
+    total_stu = len(stu_avgs) or 1
+    pass_count = sum(1 for a in stu_avgs if a >= 60)
+    excellent = sum(1 for a in stu_avgs if a >= 90)
+    pass_rate = round(pass_count / total_stu * 100, 1)
+    excellent_rate = round(excellent / total_stu * 100, 1)
 
-    # 考勤率
-    att_normal = 0
-    att_total = 0
+    # 考勤率（按学生维度：每人算出勤率，再取平均）
+    stu_att_normal: dict[int, int] = defaultdict(int)
+    stu_att_total: dict[int, int] = defaultdict(int)
+
     att_q = select(AttendanceRecord)
     if course_id:
         att_q = att_q.where(AttendanceRecord.course_id == course_id)
     for a in session.exec(att_q).all():
-        if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
-            att_total += 1
+        sid = getattr(a, 'student_id', None)
+        if sid and (not cls_ids or sid in cls_ids):
+            stu_att_total[sid] += 1
             if a.status == 0:
-                att_normal += 1
+                stu_att_normal[sid] += 1
+
     if course_id:
         batch_ids = session.exec(
             select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
         ).all()
         if batch_ids:
             for a in session.exec(select(AttendanceSheet).where(AttendanceSheet.exam_batch_id.in_(batch_ids))).all():  # type: ignore[arg-type]
-                if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
+                sid = getattr(a, 'student_id', None)
+                if sid and (not cls_ids or sid in cls_ids):
                     if a.total_count and a.present_count:
-                        att_total += a.total_count
-                        att_normal += a.present_count
+                        stu_att_total[sid] += a.total_count
+                        stu_att_normal[sid] += a.present_count
     else:
         for a in session.exec(select(AttendanceSheet)).all():
-            if not cls_ids or getattr(a, 'student_id', None) in cls_ids:
+            sid = getattr(a, 'student_id', None)
+            if sid and (not cls_ids or sid in cls_ids):
                 if a.total_count and a.present_count:
-                    att_total += a.total_count
-                    att_normal += a.present_count
-    attendance_rate = round(att_normal / (att_total or 1) * 100, 1)
+                    stu_att_total[sid] += a.total_count
+                    stu_att_normal[sid] += a.present_count
+
+    att_rates = [
+        stu_att_normal[sid] / (stu_att_total[sid] or 1)
+        for sid in set(list(stu_att_normal.keys()) + list(stu_att_total.keys()))
+    ]
+    attendance_rate = round(sum(att_rates) / (len(att_rates) or 1) * 100, 1)
 
     # 预警数
     warn_q = select(StudyWarning)

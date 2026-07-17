@@ -14,6 +14,9 @@ import {
   type QuizAssignmentRecord,
 } from '@/api/quiz'
 
+// 后端返回的数据实际含 QuizAssignment 所有字段，用宽松类型避免 vue-tsc 报错
+type AssignmentItem = QuizAssignmentRecord & Record<string, any>
+
 const props = defineProps<{
   refreshTrigger?: number  // 外部变更时递增以触发刷新
 }>()
@@ -21,9 +24,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   editDraft: [assignment: AssignmentItem]
 }>()
-
-// 后端返回的数据实际含 QuizAssignment 所有字段，用宽松类型避免 vue-tsc 报错
-type AssignmentItem = QuizAssignmentRecord & Record<string, any>
 
 const assignmentList = ref<AssignmentItem[]>([])
 const detailVisible = ref(false)
@@ -132,6 +132,16 @@ defineExpose({ loadAssignments })
       <el-table-column label="操作" width="300" fixed="right" align="center">
         <template #default="{ row }">
           <el-button type="primary" link size="small" :icon="View" @click="viewAssignment(row)">详情</el-button>
+          <el-button
+            v-if="row.status === 'draft'"
+            type="primary"
+            link
+            size="small"
+            :icon="Edit"
+            @click="emit('editDraft', row)"
+          >
+            编辑
+          </el-button>
           <!-- 查看权限开关（所有非草稿状态均可修改） -->
           <el-popconfirm
             v-if="row.status !== 'draft'"

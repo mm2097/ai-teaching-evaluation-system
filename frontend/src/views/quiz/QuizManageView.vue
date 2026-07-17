@@ -38,6 +38,8 @@ const genMeta = ref<{ model: string; elapsedMs: number } | null>(null)
 
 const publishDeadline = ref('')
 const publishAllowReview = ref(false)
+const editingDraftId = ref<number | null>(null)
+const reviewInitialStatus = ref<'pending' | 'accepted'>('pending')
 
 const bankPickerVisible = ref(false)
 const supplementVisible = ref(false)
@@ -232,20 +234,42 @@ function buildSavePayload(questions: QuizQuestion[], status: 'draft') {
 
 async function handleSaveDraft(questions: QuizQuestion[]) {
   if (!savedConfig.value) return
-  await saveQuizAssignment(buildSavePayload(questions, 'draft'))
+  const saved = await saveQuizAssignment(buildSavePayload(questions, 'draft'))
+  editingDraftId.value = saved.id
+  reviewInitialStatus.value = 'accepted'
   assignmentRefreshTrigger.value++
-  ElMessage.success(`练习「${savedConfig.value.title}」已保存为草稿`)
+  ElMessage.success(`练习「${savedConfig.value.title}」已保存为草稿，可继续编辑`)
 }
 
 async function handlePublish(questions: QuizQuestion[]) {
   if (!savedConfig.value) return
   const saved = await saveQuizAssignment(buildSavePayload(questions, 'draft'))
+  editingDraftId.value = saved.id
   await publishQuizAssignment(saved.id)
   assignmentRefreshTrigger.value++
   resetWizard()
-  ElMessage.success('练习已发布，学生可在「在线答题」中作答')
+  ElMessage.success('练习已发布给所选班级，学生可在「在线答题」中作答')
 }
 
+function handleEditDraft(assignment: any) {
+  savedConfig.value = {
+    courseId: assignment.courseId,
+    classId: assignment.classId || 0,
+    courseName: assignment.courseName || '',
+    className: assignment.className || '',
+    title: assignment.title,
+  }
+  editingDraftId.value = assignment.id
+  reviewInitialStatus.value = 'accepted'
+  publishDeadline.value = assignment.deadline || ''
+  publishAllowReview.value = Boolean(assignment.allowReview)
+  visibleQuestions.value = (assignment.questions || []).map((q: QuizQuestion) => ({ ...q }))
+  ragReferences.value = []
+  genMeta.value = null
+  genError.value = ''
+  currentStep.value = 2
+  ElMessage.success('已载入草稿，可继续编辑')
+}
 function resetWizard() {
   currentStep.value = 1
   visibleQuestions.value = []
@@ -349,7 +373,7 @@ function resetWizard() {
       @confirm="handleSupplementConfirm"
     />
 
-    <AssignmentListPanel :refresh-trigger="assignmentRefreshTrigger" />
+    <AssignmentListPanel :refresh-trigger="assignmentRefreshTrigger" @edit-draft="handleEditDraft" />
   </div>
 </template>
 

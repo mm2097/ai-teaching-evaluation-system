@@ -395,18 +395,20 @@ const resultSubtitle = computed(() => {
 </script>
 
 <template>
-  <div class="page-container">
+  <div class="page-container quiz-page">
     <!-- 列表页：双入口 -->
     <template v-if="!activeQuiz">
-      <div class="content-card">
+      <div class="content-card list-card">
         <div class="content-card__title">在线答题</div>
-        <el-tabs v-model="listTab">
+        <p class="page-desc">完成教师布置的练习，或通过 AI 自主出题进行自学训练。</p>
+
+        <el-tabs v-model="listTab" class="list-tabs">
           <el-tab-pane label="教师布置练习" name="assigned" />
           <el-tab-pane label="自主出题练习" name="self" />
         </el-tabs>
 
         <!-- 教师布置 -->
-        <div v-if="listTab === 'assigned'">
+        <div v-if="listTab === 'assigned'" class="list-panel">
           <el-empty v-if="!quizList.length" description="暂无已发布的练习" />
           <div
             v-for="quiz in quizList"
@@ -419,26 +421,27 @@ const resultSubtitle = computed(() => {
             }"
           >
             <div class="quiz-info">
-              <h3>
-                {{ quiz.title }}
-                <el-tag v-if="quiz.status === 'closed'" type="info" size="small" effect="plain">已关闭</el-tag>
-                <el-tag v-else-if="quiz.submitted" type="success" size="small" effect="plain">已答题</el-tag>
-                <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
-              </h3>
-              <p>{{ quiz.courseName }} · {{ quiz.className }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分</p>
-              <p v-if="quiz.submitted" class="quiz-score">
-                得分：<span class="completed-score">{{ quiz.myScore ?? 0 }} / {{ quiz.totalScore }}</span>
+              <h3>{{ quiz.title }}</h3>
+              <p class="quiz-meta">
+                {{ quiz.courseName }} · {{ quiz.className }} · {{ quiz.questionCount }} 题 · 满分 {{ quiz.totalScore }} 分
               </p>
-              <div class="quiz-tags">
+              <p v-if="quiz.submitted" class="quiz-score">
+                得分：<span class="highlight-score">{{ quiz.myScore ?? 0 }} / {{ quiz.totalScore }}</span>
+              </p>
+              <div v-if="quiz.knowledgePoints.length" class="quiz-tags">
                 <el-tag v-for="kp in quiz.knowledgePoints" :key="kp" size="small" effect="plain">{{ kp }}</el-tag>
               </div>
               <p v-if="quiz.deadline" class="deadline" :class="{ 'deadline--expired': !quiz.submitted && isExpired(quiz) }">
                 截止时间：{{ quiz.deadline }}
               </p>
             </div>
-            <!-- 已提交：查看结果 -->
-            <template v-if="quiz.submitted">
+            <div class="quiz-actions">
+              <el-tag v-if="quiz.status === 'closed'" type="info" size="small" effect="plain">已关闭</el-tag>
+              <el-tag v-else-if="quiz.submitted" type="success" size="small" effect="plain">已答题</el-tag>
+              <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
+              <el-tag v-else type="warning" size="small" effect="plain">待完成</el-tag>
               <el-button
+                v-if="quiz.submitted"
                 type="primary"
                 :icon="View"
                 plain
@@ -446,31 +449,39 @@ const resultSubtitle = computed(() => {
               >
                 查看结果
               </el-button>
-            </template>
-            <!-- 已截止未提交：不可答题 -->
-            <template v-else-if="isExpired(quiz)">
-              <el-button type="info" :icon="Edit" disabled>已截止</el-button>
-            </template>
-            <!-- 正常答题 -->
-            <template v-else>
-              <el-button type="primary" :icon="Edit" @click="startQuiz(quiz)">开始答题</el-button>
-            </template>
+              <el-button
+                v-else-if="isExpired(quiz)"
+                type="info"
+                :icon="Edit"
+                disabled
+              >
+                已截止
+              </el-button>
+              <el-button
+                v-else
+                type="primary"
+                :icon="Edit"
+                @click="startQuiz(quiz)"
+              >
+                开始答题
+              </el-button>
+            </div>
           </div>
         </div>
 
         <!-- 自主练习配置 -->
-        <div v-else class="self-quiz-form">
+        <div v-else class="list-panel self-quiz-form">
           <el-alert
             title="自主出题仅供个人自学，不会发布给其他同学；作答记录会保存到「练习记录」，并计入个人知识点掌握度，错题自动加入错题本。"
             type="info"
             :closable="false"
             show-icon
-            style="margin-bottom: 20px"
+            class="self-alert"
           />
 
-          <el-form label-width="100px">
+          <el-form label-width="88px" class="self-form">
             <el-form-item label="课程" required>
-              <el-select v-model="selfForm.courseId" placeholder="选择课程" style="width: 100%">
+              <el-select v-model="selfForm.courseId" placeholder="选择课程" class="full-width">
                 <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
               </el-select>
             </el-form-item>
@@ -483,14 +494,14 @@ const resultSubtitle = computed(() => {
                 allow-create
                 default-first-option
                 placeholder="选择知识点（可留空，默认综合）"
-                style="width: 100%"
+                class="full-width"
               >
                 <el-option v-for="kp in knowledgePointOptions" :key="kp" :label="kp" :value="kp" />
               </el-select>
             </el-form-item>
 
             <el-form-item label="题型" required>
-              <el-checkbox-group v-model="selfForm.questionTypes">
+              <el-checkbox-group v-model="selfForm.questionTypes" class="type-grid">
                 <el-checkbox v-for="opt in questionTypeOptions" :key="opt.value" :value="opt.value">
                   {{ opt.label }}
                 </el-checkbox>
@@ -498,8 +509,10 @@ const resultSubtitle = computed(() => {
             </el-form-item>
 
             <el-form-item label="题量">
-              <el-input-number v-model="selfForm.questionCount" :min="1" :max="10" />
-              <el-text type="info" size="small">单次最多 10 题，每日最多生成 5 次</el-text>
+              <div class="inline-field">
+                <el-input-number v-model="selfForm.questionCount" :min="1" :max="10" />
+                <span class="form-tip">单次最多 10 题，每日最多生成 5 次</span>
+              </div>
             </el-form-item>
 
             <el-form-item label="难度">
@@ -519,7 +532,7 @@ const resultSubtitle = computed(() => {
               />
             </el-form-item>
 
-            <el-form-item>
+            <el-form-item class="form-actions">
               <el-button
                 type="primary"
                 :icon="MagicStick"
@@ -536,33 +549,39 @@ const resultSubtitle = computed(() => {
 
     <!-- 作答页 -->
     <div v-else class="quiz-answer-page">
-      <div class="content-card quiz-header">
-        <el-button link @click="backToList">← 返回</el-button>
-        <div class="quiz-header__main">
-          <h2>
-            {{ activeQuiz.title }}
-            <el-tag v-if="quizMode === 'self'" size="small" type="warning" effect="plain">自主练习</el-tag>
-          </h2>
-          <span v-if="!result" class="progress">已答 {{ answeredCount }} / {{ activeQuiz.questions.length }}</span>
+      <div class="content-card answer-top">
+        <el-button link class="back-link" @click="backToList">← 返回列表</el-button>
+        <div class="answer-top__body">
+          <div class="answer-top__info">
+            <h2>
+              {{ activeQuiz.title }}
+              <el-tag v-if="quizMode === 'self'" size="small" type="warning" effect="plain">自主练习</el-tag>
+            </h2>
+            <p class="answer-top__meta">
+              {{ activeQuiz.courseName }} · {{ activeQuiz.questions.length }} 题 · 满分 {{ activeQuiz.totalScore }} 分
+            </p>
+          </div>
+          <div v-if="!result" class="answer-top__progress">
+            <div class="progress-row">
+              <span>答题进度</span>
+              <span>{{ answeredCount }} / {{ activeQuiz.questions.length }} · {{ progressPercent }}%</span>
+            </div>
+            <el-progress :percentage="progressPercent" :stroke-width="8" :show-text="false" />
+          </div>
         </div>
-      </div>
-
-      <div v-if="!result" class="content-card progress-card">
-        <div class="progress-row">
-          <span>答题进度</span>
-          <span>{{ progressPercent }}%</span>
-        </div>
-        <el-progress :percentage="progressPercent" :stroke-width="10" :show-text="false" />
       </div>
 
       <template v-if="result">
-        <el-result
-          icon="success"
-          :title="`得分：${result.score} / ${result.totalScore}`"
-          :sub-title="resultSubtitle"
-        />
+        <div class="content-card result-summary">
+          <div class="result-score">
+            <span class="score-num">{{ result.score }}</span>
+            <span class="score-div">/</span>
+            <span class="score-total">{{ result.totalScore }}</span>
+          </div>
+          <p class="result-subtitle">{{ resultSubtitle }}</p>
+        </div>
 
-        <div v-if="result.details.length" class="content-card">
+        <div v-if="result.details.length" class="content-card review-panel">
           <div class="content-card__title">答题解析</div>
           <div
             v-for="(item, idx) in result.details"
@@ -582,15 +601,20 @@ const resultSubtitle = computed(() => {
               <el-tag size="small" effect="plain">{{ item.question.knowledgePoint }}</el-tag>
             </div>
             <p class="question-card__stem">{{ item.question.stem }}</p>
-            <p class="answer-line">
-              你的答案：<strong>{{ formatAnswer(item.question, item.userAnswer) }}</strong>
-            </p>
-            <p v-if="!item.correct && !item.manualRequired && item.question.type !== 'short_answer'" class="answer-line correct">
-              正确答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
-            </p>
-            <p v-else-if="item.question.type === 'short_answer' && item.question.answer && !item.manualRequired" class="answer-line correct">
-              参考答案：<strong>{{ formatCorrectAnswer(item.question) }}</strong>
-            </p>
+            <div class="answer-block">
+              <p class="answer-line">
+                <span class="answer-label">你的答案</span>
+                <strong>{{ formatAnswer(item.question, item.userAnswer) }}</strong>
+              </p>
+              <p v-if="!item.correct && !item.manualRequired && item.question.type !== 'short_answer'" class="answer-line correct">
+                <span class="answer-label">正确答案</span>
+                <strong>{{ formatCorrectAnswer(item.question) }}</strong>
+              </p>
+              <p v-else-if="item.question.type === 'short_answer' && item.question.answer && !item.manualRequired" class="answer-line correct">
+                <span class="answer-label">参考答案</span>
+                <strong>{{ formatCorrectAnswer(item.question) }}</strong>
+              </p>
+            </div>
             <div v-if="item.question.type === 'short_answer' && item.aiReason" class="ai-judge">
               <div class="ai-judge__header">
                 <el-tag size="small" type="warning">{{ item.manualRequired ? '待人工批改' : 'AI 判分' }}</el-tag>
@@ -602,7 +626,7 @@ const resultSubtitle = computed(() => {
             </div>
             <p v-if="item.question.explanation" class="explanation">解析：{{ item.question.explanation }}</p>
           </div>
-          <div class="submit-bar">
+          <div class="action-bar">
             <el-button v-if="lastSubmissionId && (quizMode === 'self' || activeQuiz?.allowReview !== false)" type="success" plain :icon="View" @click="viewLastSubmission">
               查看完整结果页
             </el-button>
@@ -628,6 +652,7 @@ const resultSubtitle = computed(() => {
             <div class="question-card__head">
               <span class="question-card__index">{{ idx + 1 }}</span>
               <el-tag size="small" type="info">{{ exerciseTypeLabels[q.type] }}</el-tag>
+              <el-tag v-if="q.knowledgePoint" size="small" effect="plain">{{ q.knowledgePoint }}</el-tag>
               <span class="question-card__score">{{ q.score }} 分</span>
             </div>
             <p class="question-card__stem">{{ q.stem }}</p>
@@ -695,7 +720,7 @@ const resultSubtitle = computed(() => {
           </div>
         </div>
 
-        <div class="submit-bar content-card sticky-submit">
+        <div class="content-card sticky-submit">
           <p class="submit-hint">请完成全部题目后提交，提交后可在「练习记录」页面查看历史</p>
           <el-button type="primary" size="large" :loading="submitting" :icon="Check" @click="handleSubmit">
             提交答卷
@@ -707,14 +732,36 @@ const resultSubtitle = computed(() => {
 </template>
 
 <style scoped lang="scss">
+.page-desc {
+  margin: -8px 0 4px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.list-tabs {
+  :deep(.el-tabs__header) {
+    margin-bottom: 0;
+  }
+}
+
+.list-panel {
+  padding-top: 16px;
+}
+
 .quiz-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 20px;
   padding: 20px;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
   margin-bottom: 12px;
+  transition: box-shadow 0.2s;
+
+  &:hover {
+    box-shadow: 0 2px 12px rgba(37, 99, 235, 0.08);
+  }
 
   &.completed {
     background: #f8fafc;
@@ -728,35 +775,94 @@ const resultSubtitle = computed(() => {
     background: #f1f5f9;
   }
 
+  .quiz-info {
+    flex: 1;
+    min-width: 0;
+  }
+
   h3 {
     font-size: 16px;
     margin-bottom: 6px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    line-height: 1.4;
   }
-  p { font-size: 13px; color: #64748b; margin-bottom: 8px; }
-  .quiz-score { font-size: 14px; }
-  .completed-score { font-weight: 700; color: #2563eb; }
-  .quiz-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
-  .deadline { font-size: 12px; color: #ef4444; }
-  .deadline--expired { font-weight: 700; }
+
+  .quiz-meta {
+    font-size: 13px;
+    color: #64748b;
+    margin-bottom: 8px;
+  }
+
+  .quiz-score {
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+
+  .highlight-score {
+    font-weight: 700;
+    color: #2563eb;
+  }
+
+  .quiz-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .deadline {
+    font-size: 12px;
+    color: #ef4444;
+    margin-bottom: 0;
+
+    &--expired {
+      font-weight: 600;
+    }
+  }
+}
+
+.quiz-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .self-quiz-form {
-  max-width: 640px;
-  padding-top: 8px;
+  max-width: 720px;
 }
 
-.progress-card {
-  padding: 16px 20px;
+.self-alert {
+  margin-bottom: 20px;
+}
 
-  .progress-row {
+.self-form {
+  .full-width {
+    width: 100%;
+  }
+
+  .type-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px 16px;
+    width: 100%;
+  }
+
+  .inline-field {
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 8px;
-    font-size: 13px;
-    color: #64748b;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .form-tip {
+    font-size: 12px;
+    color: #94a3b8;
+  }
+
+  .form-actions {
+    margin-bottom: 0;
+    padding-top: 4px;
   }
 }
 
@@ -765,36 +871,92 @@ const resultSubtitle = computed(() => {
   margin: 0 auto;
 }
 
-.quiz-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
+.answer-top {
+  .back-link {
+    padding: 0;
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
 
-  &__main {
-    flex: 1;
-    min-width: 0;
+  &__body {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 16px;
+    gap: 24px;
     flex-wrap: wrap;
   }
 
-  h2 {
+  &__info {
     flex: 1;
+    min-width: 240px;
+  }
+
+  h2 {
     font-size: 18px;
-    margin: 0;
+    margin: 0 0 6px;
     display: flex;
     align-items: center;
     gap: 8px;
     line-height: 1.4;
   }
 
-  .progress {
+  &__meta {
+    font-size: 13px;
     color: #64748b;
-    font-size: 14px;
-    white-space: nowrap;
+    margin: 0;
   }
+
+  &__progress {
+    width: 240px;
+    flex-shrink: 0;
+  }
+}
+
+.progress-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.result-summary {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.result-score {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  color: #2563eb;
+
+  .score-num {
+    font-size: 40px;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .score-div {
+    font-size: 20px;
+    opacity: 0.5;
+  }
+
+  .score-total {
+    font-size: 22px;
+    opacity: 0.7;
+  }
+}
+
+.result-subtitle {
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  font-size: 14px;
+  color: #64748b;
+  line-height: 1.6;
 }
 
 .answer-sheet {
@@ -804,13 +966,12 @@ const resultSubtitle = computed(() => {
 }
 
 .question-card {
-  padding: 20px 24px;
-
   &__head {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
     margin-bottom: 12px;
+    flex-wrap: wrap;
   }
 
   &__index {
@@ -930,34 +1091,14 @@ const resultSubtitle = computed(() => {
 .meta-bar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
   padding: 12px 20px;
 }
 
-.question-block {
-  .q-title {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    font-size: 15px;
-    margin-bottom: 16px;
-    line-height: 1.6;
-
-    .q-num { font-weight: 600; flex-shrink: 0; }
-    .q-score { color: #64748b; font-size: 13px; flex-shrink: 0; }
-  }
-
-  .option-group {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding-left: 24px;
-  }
-}
-
 .review-card {
-  padding: 14px;
+  padding: 16px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
   margin-bottom: 12px;
 
   &.wrong {
@@ -978,16 +1119,46 @@ const resultSubtitle = computed(() => {
     flex-wrap: wrap;
   }
 
-  .answer-line { font-size: 13px; color: #475569; margin-bottom: 4px; padding-left: 2px; }
-  .answer-line.correct { color: #10b981; }
-  .explanation { font-size: 12px; color: #64748b; margin-top: 6px; }
+  .answer-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+
+  .answer-line {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    font-size: 13px;
+    color: #475569;
+    margin: 0;
+
+    .answer-label {
+      flex-shrink: 0;
+      width: 64px;
+      color: #94a3b8;
+    }
+
+    &.correct strong {
+      color: #10b981;
+    }
+  }
+
+  .explanation {
+    font-size: 12px;
+    color: #64748b;
+    margin: 10px 0 0;
+    padding-top: 10px;
+    border-top: 1px dashed #e2e8f0;
+  }
 
   .ai-judge {
-    margin-top: 8px;
+    margin-top: 10px;
     padding: 10px 12px;
     background: #fffbeb;
     border: 1px solid #fde68a;
-    border-radius: 6px;
+    border-radius: 8px;
 
     .ai-judge__header {
       display: flex;
@@ -1011,21 +1182,55 @@ const resultSubtitle = computed(() => {
   }
 }
 
-.submit-bar {
-  text-align: center;
-  padding: 24px;
-
-  .submit-hint {
-    margin: 0 0 12px;
-    font-size: 13px;
-    color: #64748b;
-  }
+.action-bar,
+.sticky-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 8px;
 }
 
 .sticky-submit {
   position: sticky;
   bottom: 16px;
   z-index: 10;
+  justify-content: space-between;
+  padding: 16px 24px;
   box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+
+  .submit-hint {
+    margin: 0;
+    font-size: 13px;
+    color: #64748b;
+    text-align: left;
+  }
+}
+
+@media (max-width: 768px) {
+  .quiz-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .quiz-actions {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .answer-top__progress {
+    width: 100%;
+  }
+
+  .sticky-submit {
+    flex-direction: column;
+    align-items: stretch;
+
+    .submit-hint {
+      text-align: center;
+    }
+  }
 }
 </style>

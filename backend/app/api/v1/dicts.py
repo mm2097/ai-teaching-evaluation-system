@@ -11,12 +11,18 @@ router = APIRouter()
 @router.get("/classes", tags=["字典"])
 def list_classes(
     college: str | None = Query(default=None),
+    grade: str | None = Query(default=None),
+    major: str | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> list[dict]:
-    """列出班级。"""
+    """列出班级。可选按学院、年级、专业筛选。"""
     stmt = select(ClassInfo)
     if college:
         stmt = stmt.where(ClassInfo.college == college)
+    if grade:
+        stmt = stmt.where(ClassInfo.grade == grade)
+    if major:
+        stmt = stmt.where(ClassInfo.major == major)
     classes = session.exec(stmt).all()
     return [
         {"class_id": c.class_id, "class_name": c.class_name, "college": c.college, "major": c.major, "grade": c.grade}

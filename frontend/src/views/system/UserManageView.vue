@@ -1,9 +1,7 @@
 <!--
   用户与权限管理页面
   支持用户 CRUD、角色分配与账号启停
-  数据走本地 mock（演示环境）
-  数据走本地 mock（演示环境）
-  数据走本地 mock（演示环境）
+  用户角色与组织信息均由后端返回
 -->
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
@@ -27,7 +25,6 @@ const form = ref({
   username: '',
   name: '',
   role: 'teacher' as UserRole,
-  department: '',
   status: true,
 })
 
@@ -46,7 +43,7 @@ async function loadUsers(): Promise<void> {
 /** 新增用户 */
 function handleAdd(): void {
   isEdit.value = false
-  form.value = { id: 0, username: '', name: '', role: 'teacher', department: '', status: true }
+  form.value = { id: 0, username: '', name: '', role: 'teacher', status: true }
   dialogVisible.value = true
 }
 
@@ -58,7 +55,6 @@ function handleEdit(row: SystemUser): void {
     username: row.username,
     name: row.name,
     role: row.role,
-    department: row.department,
     status: row.status,
   }
   dialogVisible.value = true
@@ -66,6 +62,11 @@ function handleEdit(row: SystemUser): void {
 
 /** 删除用户 */
 async function handleDelete(row: SystemUser): Promise<void> {
+  // 系统管理员账号不允许删除（包括自己），防止管理员账号被清除
+  if (row.role === 'admin') {
+    ElMessage.warning('不允许删除系统管理员账号')
+    return
+  }
   await ElMessageBox.confirm(`确定删除用户 "${row.name}" 吗？`, '删除确认', { type: 'warning' })
   try {
     await userApi.remove(row.id)
@@ -100,7 +101,6 @@ async function saveUser(): Promise<void> {
       await userApi.update(form.value.id, {
         name: form.value.name,
         role: form.value.role,
-        department: form.value.department,
         status: form.value.status,
       })
     } else {
@@ -108,7 +108,6 @@ async function saveUser(): Promise<void> {
         username: form.value.username,
         name: form.value.name,
         role: form.value.role,
-        department: form.value.department,
         status: form.value.status,
       })
     }
@@ -160,10 +159,9 @@ onMounted(loadUsers)
         <el-table-column prop="department" label="所属院系" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tooltip v-if="row.role === 'admin'" content="不允许启用/禁用系统管理员账号" placement="top">
-              <span><el-switch :model-value="row.status" :disabled="true" /></span>
+            <el-tooltip :disabled="row.role !== 'admin'" content="不允许启用/禁用系统管理员账号" placement="top">
+              <el-switch :model-value="row.status" :disabled="row.role === 'admin'" @change="toggleStatus(row)" />
             </el-tooltip>
-            <el-switch v-else :model-value="row.status" @change="toggleStatus(row)" />
           </template>
         </el-table-column>
         <el-table-column prop="createTime" label="创建时间" width="120" />
@@ -171,7 +169,9 @@ onMounted(loadUsers)
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleEdit(row)">编辑</el-button>
             <el-button type="warning" link size="small" @click="resetPassword(row)">重置密码</el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+            <el-tooltip :disabled="row.role !== 'admin'" content="不允许删除系统管理员账号" placement="top">
+              <el-button type="danger" link size="small" :disabled="row.role === 'admin'" @click="handleDelete(row)">删除</el-button>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -186,7 +186,6 @@ onMounted(loadUsers)
             <el-option v-for="(label, key) in RoleLabels" :key="key" :label="label" :value="key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="院系"><el-input v-model="form.department" /></el-form-item>
         <el-form-item label="状态"><el-switch v-model="form.status" :disabled="form.role === 'admin'" /></el-form-item>
       </el-form>
       <template #footer>

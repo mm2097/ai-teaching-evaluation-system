@@ -80,8 +80,6 @@ def _teacher_for_user(current_user: SysUser, session: Session) -> Teacher | None
 
 def _can_access_course(current_user: SysUser, course_id: int, session: Session) -> bool:
     role_code = _role_code(current_user, session)
-    if role_code == "admin":
-        return True
     if role_code == "teacher":
         teacher = _teacher_for_user(current_user, session)
         course = session.get(Course, course_id)
@@ -173,6 +171,8 @@ def list_answer_tasks(
 ) -> list[dict]:
     """答题任务列表（含题目数、总分、课程/班级名称）。"""
     role_code = _role_code(current_user, session)
+    if role_code not in {"teacher", "student"}:
+        raise HTTPException(status_code=403, detail="当前角色无权查看答题任务")
     if role_code == "teacher":
         teacher = _teacher_for_user(current_user, session)
         if not teacher:
@@ -322,6 +322,8 @@ def list_answer_records(
         grouped.setdefault((r.task_id, r.student_id), []).append(r)
 
     role_code = _role_code(current_user, session)
+    if role_code not in {"teacher", "student"}:
+        raise HTTPException(status_code=403, detail="当前角色无权查看答题记录")
     current_student = _student_for_user(current_user, session) if role_code == "student" else None
     result = []
     for (tid, sid), records in grouped.items():
@@ -902,7 +904,7 @@ def create_answer_task(
     _require_course_access(current_user, req.courseId, session)
 
     role_code = _role_code(current_user, session)
-    if role_code not in {"admin", "teacher"}:
+    if role_code != "teacher":
         raise HTTPException(status_code=403, detail="无权创建答题任务")
     if req.title.startswith(_SELF_PRACTICE_PREFIX):
         raise HTTPException(status_code=422, detail="自主练习标题为系统保留格式")
@@ -984,7 +986,7 @@ def publish_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权发布答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.status = 1
@@ -1004,7 +1006,7 @@ def close_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权关闭答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.status = 2
@@ -1029,7 +1031,7 @@ def update_review_policy(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权操作答题任务")
     _require_course_access(current_user, task.course_id, session)
     task.allow_review = 1 if req.allowReview else 0
@@ -1058,7 +1060,7 @@ def reopen_answer_task(
     task = session.get(AnswerTask, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="无权操作答题任务")
     _require_course_access(current_user, task.course_id, session)
     if task.status not in (1, 2):
@@ -1250,8 +1252,8 @@ def generate_exercises_proxy(
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """教师/管理员代理调用算法服务 8001 的 /generate_exercises。"""
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
+    """教师代理调用算法服务 8001 的 /generate_exercises。"""
+    if _role_code(current_user, session) != "teacher":
         raise HTTPException(status_code=403, detail="学生请使用自主练习接口")
     return _generate_exercises(
         req,
@@ -1396,14 +1398,18 @@ def generate_exercises_stream(
       {"type": "done", "ragReferences": [...], "totalCount": N}
       {"type": "error", "message": "..."}
     """
-    if _role_code(current_user, session) not in {"admin", "teacher"}:
-        raise HTTPException(status_code=403, detail="学生请使用自主练习接口")
+    if _role_code(current_user, session) != "teacher":
+        raise HTTPException(status_code=403, detail="仅任课教师可使用流式 AI 出题")
     course = session.get(Course, req.courseId)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
     _require_course_access(current_user, req.courseId, session)
-    usage = _consume_ai_quota(req, session, current_user, "teacher_generate_stream")
-
+    usage = _consume_ai_quota(
+        req,
+        session,
+        current_user,
+        operation="teacher_generate_stream",
+    )
     course_name = course.course_name
     knowledge_points = req.knowledgePoints or ["综合"]
     types = req.questionTypes or ["single_choice"]
@@ -1474,6 +1480,9 @@ def generate_exercises_stream(
                     "elapsedMs": total_elapsed_ms,
                 },
             })
+            usage.success = 1
+            session.add(usage)
+            session.commit()
 
         except HTTPException as e:
             yield _sse({"type": "error", "message": e.detail})

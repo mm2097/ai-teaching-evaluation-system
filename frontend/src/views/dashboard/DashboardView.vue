@@ -26,8 +26,11 @@ const heatmap = ref<KnowledgeHeatmapResult>({ knowledgePoints: [], students: [],
 
 async function loadDashboardData(courseId?: number, classId?: number) {
   try {
+    const params: Record<string, number> = {}
+    if (courseId) params.course_id = courseId
+    if (classId) params.class_id = classId
     const [statsRes, warnRes] = await Promise.all([
-      request.get('/v1/dashboard/stats', { params: courseId ? { course_id: courseId } : {} }),
+      request.get('/v1/dashboard/stats', { params }),
       request.get('/v1/analysis/warnings', { params: { class_id: classId } }),
     ])
     dashboardStats.value = statsRes.data
@@ -182,10 +185,12 @@ const knowledgeBarOption = computed<EChartsOption>(() => {
 /** 趋势图数据（从后端获取） */
 const trendData = ref({ months: [] as string[], passRate: [] as number[], excellentRate: [] as number[] })
 
-async function loadTrendData(courseId?: number) {
+async function loadTrendData(courseId?: number, classId?: number) {
   if (!courseId) return
   try {
-    const res = await request.get('/v1/dashboard/grade-trend', { params: { course_id: courseId } })
+    const params: Record<string, number> = { course_id: courseId }
+    if (classId) params.class_id = classId
+    const res = await request.get('/v1/dashboard/grade-trend', { params })
     const d = res.data
     trendData.value = { months: d.months || [], passRate: d.passRate || [], excellentRate: d.passRate ? d.passRate.map(() => 0) : [] }
   } catch { /* ignore */ }
@@ -221,13 +226,21 @@ function handleStatClick(item: { link?: string }): void {
   if (item.link) router.push(item.link)
 }
 
+// 查询计数器，避免 showDashboard 不变时跳过刷新
+const queryCount = ref(0)
+
+function applyFiltersWrapper() {
+  applyFilters()
+  queryCount.value++
+}
+
 // 查询时加载真实数据
-watch(showDashboard, async (show) => {
-  if (show) {
+watch(queryCount, async () => {
+  if (showDashboard.value) {
     await Promise.all([
       loadDashboardData(applied.value.courseId, applied.value.classId),
       loadHeatmap(applied.value.courseId, applied.value.classId),
-      loadTrendData(applied.value.courseId),
+      loadTrendData(applied.value.courseId, applied.value.classId),
     ])
   }
 })
@@ -322,7 +335,7 @@ watch(showDashboard, async (show) => {
         <el-button
           type="primary"
           :icon="Search"
-          @click="applyFilters"
+          @click="applyFiltersWrapper"
         >
           查询
         </el-button>

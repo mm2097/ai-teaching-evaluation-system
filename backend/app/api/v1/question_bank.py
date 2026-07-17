@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, func, or_, select
 
 from app.core.database import get_session
+from app.core.permissions import require_teacher
 from app.models import (
     AiQuestion,
     Course,
@@ -29,7 +30,7 @@ from app.models import (
 )
 from app.services.question_answers import answer_for_response, encode_correct_answer
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teacher)])
 
 # type 映射（与 models/question.py、quiz.py 一致：5=简答）
 _TYPE_STR_TO_INT = {

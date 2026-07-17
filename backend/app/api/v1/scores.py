@@ -3,12 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
+from app.core.permissions import require_teaching_user
 from app.models import (
     ScoreRecord, ExamBatch, Student, Course,
     IndividualScore, CourseTestDetail,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teaching_user)])
 
 
 @router.get("/score-records", tags=["成绩管理"])

@@ -1,175 +1,112 @@
 <!--
-  基础参数配置页面
-  维护学期、院系、预警阈值等业务参数
+  基础数据概览
+  管理员核对系统公共目录，不在此配置教学预警或评价规则
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
-import { fetchSemesters, fetchDepartments } from '@/api/dict'
+import { onMounted, ref } from 'vue'
+import { fetchDepartments, fetchSemesters } from '@/api/dict'
 
-/** 当前配置 Tab */
-const activeTab = ref('basic')
-
-/** 基础数据 */
-const semesterOptions = ref<{ label: string; value: string }[]>([])
-const departmentOptions = ref<{ label: string; value: number }[]>([])
-
-const basicData = ref({
-  semesters: [] as { label: string; value: string }[],
-  departments: [] as { label: string; value: number }[],
-})
+const loading = ref(false)
+const semesters = ref<{ label: string; value: string; current: boolean }[]>([])
+const departments = ref<{ label: string; value: number }[]>([])
 
 onMounted(async () => {
-  const [sems, depts] = await Promise.all([fetchSemesters(), fetchDepartments()])
-  semesterOptions.value = sems.map(s => ({ label: s.semesterName, value: s.semesterCode }))
-  departmentOptions.value = depts.map(d => ({ label: d.deptName, value: d.id }))
-  basicData.value.semesters = [...semesterOptions.value]
-  basicData.value.departments = [...departmentOptions.value]
-})
-
-/** 预警阈值配置 */
-const warningConfig = ref({
-  scoreDropThreshold: 15,
-  scoreDropCount: 3,
-  absenceRateThreshold: 20,
-  homeworkMissCount: 4,
-})
-
-/** 评价参数 */
-const evalConfig = ref({
-  excellentScore: 90,
-  goodScore: 80,
-  passScore: 60,
-  autoEvalEnabled: true,
-  evalCycle: 'semester',
-})
-
-/** 新增院系对话框 */
-const deptDialogVisible = ref(false)
-const newDeptName = ref('')
-
-/**
- * 保存预警配置
- */
-function saveWarningConfig(): void {
-  ElMessage.success('预警阈值配置已保存')
-}
-
-/**
- * 保存评价配置
- */
-function saveEvalConfig(): void {
-  ElMessage.success('评价参数配置已保存')
-}
-
-/**
- * 新增院系
- */
-function addDepartment(): void {
-  if (!newDeptName.value) {
-    ElMessage.warning('请输入院系名称')
-    return
+  loading.value = true
+  try {
+    const [semesterRows, departmentRows] = await Promise.all([
+      fetchSemesters(),
+      fetchDepartments(),
+    ])
+    semesters.value = semesterRows.map((item) => ({
+      label: item.semesterName,
+      value: item.semesterCode,
+      current: item.isCurrent,
+    }))
+    departments.value = departmentRows.map((item) => ({
+      label: item.deptName,
+      value: item.id,
+    }))
+  } finally {
+    loading.value = false
   }
-  basicData.value.departments.push({
-    label: newDeptName.value,
-    value: Date.now(),
-  })
-  deptDialogVisible.value = false
-  newDeptName.value = ''
-  ElMessage.success('院系添加成功')
-}
+})
 </script>
 
 <template>
-  <div class="page-container">
-    <el-tabs v-model="activeTab" type="border-card">
-      <!-- 基础数据维护 -->
-      <el-tab-pane label="基础数据" name="basic">
-        <el-row :gutter="24">
-          <el-col :span="12">
-            <h4 class="section-title">学期管理</h4>
-            <el-table :data="basicData.semesters" stripe border size="small">
-              <el-table-column prop="label" label="学期名称" />
-              <el-table-column prop="value" label="编码" width="100" />
-            </el-table>
-          </el-col>
-          <el-col :span="12">
-            <div style="display: flex; justify-content: space-between; align-items: center">
-              <h4 class="section-title">院系管理</h4>
-              <el-button type="primary" size="small" @click="deptDialogVisible = true">新增院系</el-button>
-            </div>
-            <el-table :data="basicData.departments" stripe border size="small">
-              <el-table-column prop="label" label="院系名称" />
-              <el-table-column prop="value" label="编码" width="100" />
-            </el-table>
-          </el-col>
-        </el-row>
-      </el-tab-pane>
+  <div v-loading="loading" class="page-container base-data-page">
+    <el-row :gutter="16">
+      <el-col :xs="24" :lg="12">
+        <div class="content-card directory-card">
+          <div class="content-card__title">学期目录</div>
+          <div class="directory-summary">
+            <span>系统学期数量</span>
+            <strong>{{ semesters.length }}</strong>
+          </div>
+          <el-table :data="semesters" stripe border>
+            <el-table-column prop="label" label="学期名称" min-width="150" />
+            <el-table-column prop="value" label="编码" min-width="130" />
+            <el-table-column label="状态" width="90" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.current" type="success" size="small">当前</el-tag>
+                <span v-else class="muted">历史</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-col>
 
-      <!-- 预警阈值 -->
-      <el-tab-pane label="预警阈值" name="warning">
-        <el-form :model="warningConfig" label-width="200px" style="max-width: 600px">
-          <el-form-item label="成绩连续下滑阈值 (分)">
-            <el-input-number v-model="warningConfig.scoreDropThreshold" :min="5" :max="30" />
-          </el-form-item>
-          <el-form-item label="连续下滑次数">
-            <el-input-number v-model="warningConfig.scoreDropCount" :min="2" :max="5" />
-          </el-form-item>
-          <el-form-item label="缺勤率预警阈值 (%)">
-            <el-input-number v-model="warningConfig.absenceRateThreshold" :min="10" :max="50" />
-          </el-form-item>
-          <el-form-item label="连续未交作业次数">
-            <el-input-number v-model="warningConfig.homeworkMissCount" :min="2" :max="10" />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="saveWarningConfig">保存配置</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-
-      <!-- 评价参数 -->
-      <el-tab-pane label="评价参数" name="eval">
-        <el-form :model="evalConfig" label-width="160px" style="max-width: 600px">
-          <el-form-item label="优秀分数线">
-            <el-input-number v-model="evalConfig.excellentScore" :min="80" :max="100" />
-          </el-form-item>
-          <el-form-item label="良好分数线">
-            <el-input-number v-model="evalConfig.goodScore" :min="70" :max="90" />
-          </el-form-item>
-          <el-form-item label="合格分数线">
-            <el-input-number v-model="evalConfig.passScore" :min="50" :max="70" />
-          </el-form-item>
-          <el-form-item label="自动评价">
-            <el-switch v-model="evalConfig.autoEvalEnabled" />
-          </el-form-item>
-          <el-form-item label="评价周期">
-            <el-radio-group v-model="evalConfig.evalCycle">
-              <el-radio value="monthly">每月</el-radio>
-              <el-radio value="semester">每学期</el-radio>
-            </el-radio-group>
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" @click="saveEvalConfig">保存配置</el-button>
-          </el-form-item>
-        </el-form>
-      </el-tab-pane>
-    </el-tabs>
-
-    <el-dialog v-model="deptDialogVisible" title="新增院系" width="400px">
-      <el-input v-model="newDeptName" placeholder="请输入院系名称" />
-      <template #footer>
-        <el-button @click="deptDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="addDepartment">确定</el-button>
-      </template>
-    </el-dialog>
+      <el-col :xs="24" :lg="12">
+        <div class="content-card directory-card">
+          <div class="content-card__title">院系目录</div>
+          <div class="directory-summary">
+            <span>系统院系数量</span>
+            <strong>{{ departments.length }}</strong>
+          </div>
+          <el-table :data="departments" stripe border>
+            <el-table-column prop="label" label="院系名称" min-width="180" />
+            <el-table-column prop="value" label="目录序号" width="110" align="center" />
+          </el-table>
+        </div>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <style scoped lang="scss">
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  color: #1e293b;
+.base-data-page {
+  .el-col {
+    margin-bottom: 16px;
+  }
+}
+
+.directory-card {
+  min-height: 420px;
+}
+
+.directory-summary {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #64748b;
+  border-radius: 8px;
+  background: #f8fafc;
+
+  strong {
+    color: #2563eb;
+    font-size: 24px;
+  }
+}
+
+.muted {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+@media (max-width: 1200px) {
+  .directory-card {
+    min-height: auto;
+  }
 }
 </style>

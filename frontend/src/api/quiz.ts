@@ -155,7 +155,15 @@ export interface SaveQuizAssignmentParams {
 }
 
 function buildGeneratePayload(params: GenerateQuizParams) {
-  const payload: Record<string, any> = {
+  const payload: {
+    courseId: number
+    knowledgePoints: string[]
+    questionTypes: ExerciseType[]
+    questionCount: number
+    extraRequirements: string
+    difficultyDistribution?: GenerateQuizParams['difficultyDistribution']
+    difficulty?: DifficultyLevel
+  } = {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
     questionTypes: params.questionTypes,
@@ -334,6 +342,7 @@ export interface QuizSubmitResult {
   score: number
   totalScore: number
   correctCount: number
+  manualRequiredCount?: number
   taskId?: number
   taskTitle?: string
   allowReview?: boolean

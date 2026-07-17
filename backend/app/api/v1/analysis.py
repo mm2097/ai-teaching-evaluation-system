@@ -13,7 +13,7 @@ from app.models import (
     IndividualScore, CourseTestDetail, ExamBatch,
 )
 from app.services.predict import predict_student_scores
-from app.services.mastery import compute_assignment_accuracy_index
+from app.services.mastery import compute_assignment_accuracy_index, compute_mastery_index_with_fallback
 from app.services.warning import scan_course_warnings, persist_warnings
 
 router = APIRouter()
@@ -31,18 +31,14 @@ def _check_profile_access(
 ) -> None:
     """校验学情画像查看权限（Analysis.Profile.UserValid）。
 
-    - 管理员（admin）：可查看所有学生画像
     - 任课教师（teacher）：仅可查看自己授课课程内的学生画像
     - 学生（student）：仅可查看自己的画像
+    - 管理员（admin）：不参与教学分析
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
 
-    # 管理员：全部放行
-    if role_code == "admin":
-        return
-
-    # 校验学生是否存在（admin 跳过，可查看不存在的 student_id 统一返回 null）
+    # 校验学生是否存在
     target_student = session.get(Student, student_id)
     if not target_student:
         raise HTTPException(status_code=404, detail=f"学生不存在（student_id={student_id}）")
@@ -111,15 +107,12 @@ def _check_course_access(
 ) -> None:
     """校验课程级数据查看权限（Analysis.ScoreTrend.UserValid）。
 
-    - 管理员（admin）：可查看所有课程数据
     - 任课教师（teacher）：仅可查看自己授课课程的数据
     - 学生（student）：无权查看班级/课程级分析数据
+    - 管理员（admin）：不参与课程分析
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-
-    if role_code == "admin":
-        return
 
     course = session.get(Course, course_id)
     if not course:
@@ -151,7 +144,6 @@ def get_student_profile(
     """获取学情画像。
 
     权限（Analysis.Profile.UserValid）：
-    - 管理员可查看所有学生画像
     - 任课教师仅可查看自己授课课程内的学生画像
     - 学生仅可查看自己的画像
     """
@@ -220,10 +212,10 @@ def get_knowledge_heatmap(
     返回每知识点掌握分数、等级、模块归属、薄弱清单。
 
     权限（Analysis.Knowledge.UserValid）：
-    - 管理员和对应课程授课教师可查看班級数据
+    - 对应课程授课教师可查看班级数据
     - 学生仅可查看自己的热力图
     """
-    # 按角色分流权限：学生走自助查询，教师/管理员走课程校验
+    # 按角色分流权限：学生走自助查询，教师走课程校验
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
 
@@ -289,7 +281,7 @@ def get_knowledge_heatmap(
             for mastery in all_masteries
         }
     else:
-        mastery_index = compute_assignment_accuracy_index(session, course_id, student_ids)
+        mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
 
     student_names = []
     for sid in student_ids:
@@ -324,7 +316,7 @@ def get_knowledge_heatmap(
         avg_stmt = avg_stmt.where(CourseStudent.student_id.in_(avg_in_class))  # type: ignore
     avg_student_ids = session.exec(avg_stmt).all()
 
-    avg_index = compute_assignment_accuracy_index(session, course_id, avg_student_ids)
+    avg_index = compute_mastery_index_with_fallback(session, course_id, avg_student_ids)
 
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):
@@ -474,9 +466,9 @@ def get_warnings(
     """获取预警记录列表（Analysis.Warning.List）。
 
     权限（Analysis.Warning.UserValid）：
-    - 管理员可查看全部预警
     - 任课教师仅可查看自己授课课程的预警
     - 学生无权查看
+    - 管理员不参与教学预警
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
@@ -501,8 +493,6 @@ def get_warnings(
             # 未指定课程时自动限定为教师授课课程
             if not taught_ids:
                 return []
-    elif role_code == "admin":
-        pass  # 管理员：全部放行
     else:
         raise HTTPException(status_code=403, detail="无权查看预警数据")
 
@@ -547,7 +537,7 @@ def refresh_warnings(
     重新扫描课程内所有学生的成绩、考勤、作业、知识点数据，
     匹配 W1-W5 五条预警规则，覆盖更新预警记录。
 
-    权限（Analysis.Warning.UserValid）：仅管理员和课程授课教师可操作。
+    权限（Analysis.Warning.UserValid）：仅课程授课教师可操作。
     """
     _check_course_access(session, current_user, course_id)
 
@@ -578,7 +568,7 @@ def get_grade_predictions(
     - 预测下一次考试成绩区间（95% 置信区间）
     - R² 反映拟合质量，数据点 ≥ 3 时回归有效，否则降级
 
-    权限（Analysis.ScoreTrend.UserValid）：仅管理员和该课程授课教师可查看。
+    权限（Analysis.ScoreTrend.UserValid）：仅该课程授课教师可查看。
     """
     _check_course_access(session, current_user, course_id)
 
@@ -636,7 +626,7 @@ def get_grade_distribution(
     - statistics: 均值/中位数/标准差/极值/及格率/优秀率/不及格率
     - characteristic: 偏态描述 + 离散度描述（班级成绩形态特征）
 
-    权限（Analysis.ScoreTrend.UserValid）：仅管理员和该课程授课教师可查看。
+    权限（Analysis.ScoreTrend.UserValid）：仅该课程授课教师可查看。
     """
     _check_course_access(session, current_user, course_id)
 

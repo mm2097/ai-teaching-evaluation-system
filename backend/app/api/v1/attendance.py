@@ -3,9 +3,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
+from app.core.permissions import require_teaching_user
 from app.models import AttendanceRecord, Student, Course
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_teaching_user)])
 
 
 @router.get("/attendance-records", tags=["考勤管理"])

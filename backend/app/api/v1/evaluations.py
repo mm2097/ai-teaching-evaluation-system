@@ -31,15 +31,12 @@ def _check_eval_self_or_course(
 ) -> None:
     """评价查看权限（Eval.Student.UserValid）。
 
-    - admin：全部放行
     - teacher：course_id 有值时校验是否为授课教师
     - student：student_id 有值时校验是否为本人；否则拒绝
+    - admin：不参与教学评价
     """
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-
-    if role_code == "admin":
-        return
 
     if role_code == "teacher":
         if course_id is not None:
@@ -75,7 +72,6 @@ def list_evaluations(
     """列出学生评价结果（Eval.Student）。
 
     权限（Eval.Student.UserValid）：
-    - 管理员：全部
     - 任课教师：自己授课课程的学生
     - 学生：仅可查自己的评价
     """
@@ -225,7 +221,7 @@ def get_evaluation_distribution(
     返回等级分布（优/良/中/差）、分数统计（均值/中位数/标准差/极值），
     支持按班级筛选。
 
-    权限（Eval.Student.UserValid）：仅管理员和课程授课教师可查看。
+    权限（Eval.Student.UserValid）：仅课程授课教师可查看。
     """
     _check_course_access(session, current_user, course_id)
 

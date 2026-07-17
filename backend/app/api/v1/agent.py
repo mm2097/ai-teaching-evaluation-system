@@ -17,6 +17,7 @@ from sqlmodel import Session
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
+from app.core.permissions import ensure_roles, require_teacher, require_teaching_user
 from app.models import SysUser
 from app.services.agent.base import run_agent, run_agent_stream
 from app.services.agent.registry import get_registry
@@ -59,8 +60,7 @@ def agent_chat(
 ) -> AgentChatResponse:
     """同步版 Agent 对话（阻塞等待完整结果）。
 
-    user_id 暂从 session 上下文取（演示阶段用固定 1）。
-    生产环境应从 JWT 解析。
+    user_id 从当前 JWT 登录用户解析。
     """
     _ensure_registered()
     user_id = current_user.user_id
@@ -128,7 +128,7 @@ def agent_chat_stream(
 
 @router.get("/agent/tools", tags=["Agent"])
 def list_tools(
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_teacher),
 ) -> dict:
     """列出已注册的 Agent 工具（调试用）。"""
     _ensure_registered()
@@ -151,7 +151,7 @@ def list_tools(
 @router.delete("/agent/session/{session_id}", tags=["Agent"])
 def clear_session(
     session_id: str,
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_teaching_user),
 ) -> dict:
     """清空会话记忆。"""
     from app.services.agent.memory import clear_session as _clear

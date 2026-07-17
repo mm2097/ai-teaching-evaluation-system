@@ -6,6 +6,12 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { getToken } from '@/utils/auth'
 import { useUserStore } from '@/stores/user'
 
+function defaultPathForRole(role?: string): string {
+  if (role === 'admin') return '/admin/dashboard'
+  if (role === 'student') return '/student/dashboard'
+  return '/dashboard'
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -20,75 +26,82 @@ const router = createRouter({
       component: () => import('@/components/layout/AppLayout.vue'),
       redirect: '/dashboard',
       children: [
+        // ---- 管理员工作台 ----
+        {
+          path: 'admin/dashboard',
+          name: 'AdminDashboard',
+          component: () => import('@/views/system/AdminDashboardView.vue'),
+          meta: { title: '管理工作台', roles: ['admin'] },
+        },
         // ---- 看板 ----
         {
           path: 'dashboard',
           name: 'Dashboard',
           component: () => import('@/views/dashboard/DashboardView.vue'),
-          meta: { title: '综合看板' },
+          meta: { title: '综合看板', roles: ['teacher'] },
         },
         // ---- 数据管理 ----
         {
           path: 'data/import',
           name: 'DataImport',
           component: () => import('@/views/data/DataImportView.vue'),
-          meta: { title: '数据上传', roles: ['admin', 'teacher'] },
+          meta: { title: '数据上传', roles: ['teacher'] },
         },
         {
           path: 'data/manage',
           name: 'DataManage',
           component: () => import('@/views/data/DataManageView.vue'),
-          meta: { title: '数据管理', roles: ['admin', 'teacher'] },
+          meta: { title: '数据管理', roles: ['teacher'] },
         },
         // ---- AI 分析 ----
         {
           path: 'analysis/profile',
           name: 'StudentProfile',
           component: () => import('@/views/analysis/StudentProfileView.vue'),
-          meta: { title: '学情画像', roles: ['admin', 'teacher'] },
+          meta: { title: '学情画像', roles: ['teacher'] },
         },
         {
           path: 'analysis/trend',
           name: 'GradeTrend',
           component: () => import('@/views/analysis/GradeTrendView.vue'),
-          meta: { title: '成绩趋势预测', roles: ['admin', 'teacher'] },
+          meta: { title: '成绩趋势预测', roles: ['teacher'] },
         },
         {
           path: 'analysis/knowledge',
           name: 'Knowledge',
           component: () => import('@/views/analysis/KnowledgeView.vue'),
-          meta: { title: '知识点掌握度', roles: ['admin', 'teacher'] },
+          meta: { title: '知识点掌握度', roles: ['teacher'] },
         },
         {
           path: 'analysis/warning',
           name: 'Warning',
           component: () => import('@/views/analysis/WarningView.vue'),
-          meta: { title: '异常学情预警', roles: ['admin', 'teacher'] },
+          meta: { title: '异常学情预警', roles: ['teacher'] },
         },
         // ---- AI 智能辅助教学 ----
         {
           path: 'agent/chat',
           name: 'AgentChat',
           component: () => import('@/views/agent/AgentChatView.vue'),
-          meta: { title: 'AI 智能助手' },
+          meta: { title: 'AI 智能助手', roles: ['teacher'] },
         },
         {
           path: 'quiz/bank',
           name: 'QuestionBank',
           component: () => import('@/views/quiz/QuestionBankView.vue'),
-          meta: { title: '题库管理', roles: ['admin', 'teacher'] },
+          meta: { title: '题库管理', roles: ['teacher'] },
         },
         {
           path: 'quiz/manage',
           name: 'QuizManage',
           component: () => import('@/views/quiz/QuizManageView.vue'),
-          meta: { title: 'AI 出题', roles: ['admin', 'teacher'] },
+          meta: { title: 'AI 出题', roles: ['teacher'] },
         },
         {
           path: 'quiz/records',
           name: 'QuizRecords',
           component: () => import('@/views/quiz/QuizRecordsView.vue'),
-          meta: { title: '答题记录', roles: ['admin', 'teacher'] },
+          meta: { title: '答题记录', roles: ['teacher'] },
         },
         {
           path: 'quiz/answer',
@@ -101,20 +114,20 @@ const router = createRouter({
           path: 'evaluation/config',
           name: 'EvalConfig',
           component: () => import('@/views/evaluation/EvalConfigView.vue'),
-          meta: { title: '评价体系配置', roles: ['admin'] },
+          meta: { title: '评价体系配置', roles: ['teacher'] },
         },
         {
           path: 'evaluation/student',
           name: 'StudentEval',
           component: () => import('@/views/evaluation/StudentEvalView.vue'),
-          meta: { title: '学生学习质量', roles: ['admin', 'teacher'] },
+          meta: { title: '学生学习质量', roles: ['teacher'] },
         },
         // ---- 报告 ----
         {
           path: 'report/center',
           name: 'ReportCenter',
           component: () => import('@/views/report/ReportCenterView.vue'),
-          meta: { title: '报告生成导出' },
+          meta: { title: '报告生成导出', roles: ['teacher', 'student'] },
         },
         // ---- 系统管理 ----
         {
@@ -133,7 +146,7 @@ const router = createRouter({
           path: 'system/config',
           name: 'ParamConfig',
           component: () => import('@/views/system/ParamConfigView.vue'),
-          meta: { title: '基础参数配置', roles: ['admin'] },
+          meta: { title: '基础数据概览', roles: ['admin'] },
         },
         // ---- 学生端独立页面 ----
         {
@@ -212,9 +225,11 @@ router.beforeEach((to) => {
     if (!userStore.userInfo) {
       userStore.restoreSession()
     }
-    if (userStore.userInfo && !roles.includes(userStore.userInfo.role)) {
-      const defaultPath = userStore.userInfo.role === 'student' ? '/student/dashboard' : '/dashboard'
-      return defaultPath
+    if (!userStore.userInfo) {
+      return '/login'
+    }
+    if (!roles.includes(userStore.userInfo.role)) {
+      return defaultPathForRole(userStore.userInfo.role)
     }
   }
 

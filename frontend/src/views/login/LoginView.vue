@@ -44,7 +44,11 @@ async function handleLogin(): Promise<void> {
     if (success) {
       ElMessage.success('登录成功，欢迎回来！')
       const role = userStore.userInfo?.role
-      const defaultPath = role === 'student' ? '/student/dashboard' : '/dashboard'
+      const defaultPath = role === 'admin'
+        ? '/admin/dashboard'
+        : role === 'student'
+          ? '/student/dashboard'
+          : '/dashboard'
       const redirect = (route.query.redirect as string) || defaultPath
       router.push(redirect)
     }

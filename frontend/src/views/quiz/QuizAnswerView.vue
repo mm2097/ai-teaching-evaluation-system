@@ -234,6 +234,7 @@ function applySubmissionResult(submission: {
   score: number
   totalScore: number
   correctCount?: number
+  manualRequiredCount?: number
   submissionId?: number
   details?: {
     question: QuizQuestion
@@ -251,7 +252,7 @@ function applySubmissionResult(submission: {
     totalScore: submission.totalScore,
     correctCount: submission.correctCount ?? details.filter((d) => d.correct).length,
     totalCount,
-    manualRequiredCount: (submission as any).manualRequiredCount ?? details.filter((d) => d.manualRequired).length,
+    manualRequiredCount: submission.manualRequiredCount ?? details.filter((d) => d.manualRequired).length,
     details,
   }
   // 更新本地 quizList 中的答题状态，避免列表页仍显示为"未答题"
@@ -323,9 +324,6 @@ async function handleSubmit(): Promise<void> {
   }
 }
 
-const wrongCount = computed(
-  () => result.value?.details.filter((d) => !d.correct && !d.manualRequired).length ?? 0,
-)
 const manualCount = computed(() => {
   if (!result.value) return 0
   // 有逐题详情时从详情计算，否则用后端返回值

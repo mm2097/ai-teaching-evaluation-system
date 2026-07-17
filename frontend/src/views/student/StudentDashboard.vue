@@ -85,7 +85,11 @@ onMounted(async () => {
     const trendRes = await request.get('/v1/dashboard/grade-trend', {
       params: { student_id: studentId, dept_id: 1 },
     })
-    if (trendRes.data?.labels) {
+    if (trendRes.data?.months) {
+      trendMonths.value = trendRes.data.months
+      trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
+    } else if (trendRes.data?.labels) {
+      // 兼容 mock 数据格式
       trendMonths.value = trendRes.data.labels
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     }

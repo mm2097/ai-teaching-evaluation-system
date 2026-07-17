@@ -9,7 +9,7 @@ import type { AnalysisQuery, LinkedStudentOption, TargetType, UserRole } from '@
 
 /** 各角色允许的分析对象类型 */
 const roleTargetTypes: Record<UserRole, TargetType[]> = {
-  admin: ['student', 'class'],
+  admin: [],
   teacher: ['student', 'class'],
   student: ['student'],
 }
@@ -40,7 +40,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const targetType = ref<TargetType>(
     defaultTargetType && allowedTargetTypes.value.includes(defaultTargetType)
       ? defaultTargetType
-      : allowedTargetTypes.value[0]!,
+      : (allowedTargetTypes.value[0] ?? 'student'),
   )
   const semesterId = ref(1)
   const classId = ref<number | undefined>()
@@ -54,10 +54,12 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const courseOptions = ref<{ label: string; value: number }[]>([])
 
   const showDeptFilter = computed(() => false)
-  const showClassFilter = computed(() => ['admin', 'teacher'].includes(role.value))
-  const showCourseFilter = computed(() => true)
-  const showTargetTypeFilter = computed(() => role.value !== 'student')
-  const showStudentPicker = computed(() => targetType.value === 'student' && role.value !== 'student')
+  const showClassFilter = computed(() => role.value === 'teacher')
+  const showCourseFilter = computed(() => role.value !== 'admin')
+  const showTargetTypeFilter = computed(() => role.value === 'teacher')
+  const showStudentPicker = computed(
+    () => targetType.value === 'student' && role.value === 'teacher',
+  )
 
   /** 并发锁，防止 loadOptions 重入导致页面卡死 */
   let loadingPromise: Promise<void> | null = null
@@ -100,17 +102,6 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
           deptId: 1,
           courseId: courseId.value,
           teacherId,
-        })
-        classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-        classId.value = pickFirstOption(classOptions.value, classId.value)
-      } else if (role.value === 'admin') {
-        const courses = await fetchCourses({ deptId: 1, semesterId: semesterId.value })
-        courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
-        courseId.value = pickFirstOption(courseOptions.value, courseId.value)
-
-        const classes = await fetchClasses({
-          deptId: 1,
-          courseId: courseId.value,
         })
         classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
         classId.value = pickFirstOption(classOptions.value, classId.value)

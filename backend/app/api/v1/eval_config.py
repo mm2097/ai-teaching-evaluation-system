@@ -1,10 +1,10 @@
 """评价指标体系配置 API（Eval.Config）。
 
-系统管理员可自定义课程的评价维度、指标、权重与评分规则。
+任课教师可自定义本人课程的评价维度、指标、权重与评分规则。
 - 维度 CRUD（Eval.Config.Dimension）
 - 指标 CRUD + 权重校验（Eval.Config.Weight）
 - 评分规则配置（Eval.Config.Rule）
-- 仅管理员可操作（Eval.Config.UserValid）
+- 仅任课教师可操作（Eval.Config.UserValid）
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
+from app.api.v1.analysis import _check_course_access
 from app.models import (
     Course,
     EvalDimension,
@@ -50,14 +51,14 @@ def _unwrap(val: Any, default: Any = None) -> Any:
 # 权限校验
 # ============================================================================
 
-def _require_admin(current_user: SysUser, session: Session) -> None:
-    """仅系统管理员可操作评价体系配置（Eval.Config.UserValid）。"""
+def _require_teacher(current_user: SysUser, session: Session) -> None:
+    """仅任课教师可操作评价体系配置（Eval.Config.UserValid）。"""
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-    if role_code != "admin":
+    if role_code != "teacher":
         raise HTTPException(
             status_code=403,
-            detail="仅系统管理员可操作评价体系配置",
+            detail="仅任课教师可操作评价体系配置",
         )
 
 
@@ -143,9 +144,10 @@ def get_eval_config(
 
     返回课程下所有维度及其指标、权重、评分规则、权重校验状态。
 
-    权限（Eval.Config.UserValid）：仅系统管理员。
+    权限（Eval.Config.UserValid）：仅任课教师。
     """
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
+    _check_course_access(session, current_user, course_id)
 
     course = session.get(Course, course_id)
     if not course:
@@ -185,7 +187,8 @@ def create_dimension(
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
     """新增评价维度（Eval.Config.Dimension）。"""
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
+    _check_course_access(session, current_user, course_id)
 
     course = session.get(Course, course_id)
     if not course:
@@ -226,11 +229,12 @@ def update_dimension(
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
     """编辑评价维度（Eval.Config.Dimension）。"""
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
 
     dim = session.get(EvalDimension, dimension_id)
     if not dim:
         raise HTTPException(status_code=404, detail="维度不存在")
+    _check_course_access(session, current_user, dim.course_id)
 
     _dimension_name = _unwrap(dimension_name, None)
     _description = _unwrap(description, None)
@@ -265,11 +269,12 @@ def delete_dimension(
 
     会同步清理已存在的评价结果中该维度的得分记录。
     """
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
 
     dim = session.get(EvalDimension, dimension_id)
     if not dim:
         raise HTTPException(status_code=404, detail="维度不存在")
+    _check_course_access(session, current_user, dim.course_id)
 
     course_id = dim.course_id
 
@@ -317,11 +322,12 @@ def create_index(
 
     自动校验该维度下所有指标的权重总和是否超过 100%（Eval.Config.Weight）。
     """
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
 
     dim = session.get(EvalDimension, dimension_id)
     if not dim:
         raise HTTPException(status_code=404, detail="维度不存在")
+    _check_course_access(session, current_user, dim.course_id)
 
     # Unwrap Query params（直接 Python 调用时的兼容处理）
     _score_rule = _unwrap(score_rule, None)
@@ -383,11 +389,15 @@ def update_index(
 
     修改权重时自动校验该维度下权重总和是否超过 100%。
     """
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
 
     idx = session.get(EvalIndex, index_id)
     if not idx:
         raise HTTPException(status_code=404, detail="指标不存在")
+    dim = session.get(EvalDimension, idx.dimension_id)
+    if not dim:
+        raise HTTPException(status_code=404, detail="评价维度不存在")
+    _check_course_access(session, current_user, dim.course_id)
 
     # Unwrap Query params
     _weight = _unwrap(weight, None)
@@ -453,11 +463,15 @@ def delete_index(
 
     返回删除后该维度剩余指标的权重总和以供前端校验。
     """
-    _require_admin(current_user, session)
+    _require_teacher(current_user, session)
 
     idx = session.get(EvalIndex, index_id)
     if not idx:
         raise HTTPException(status_code=404, detail="指标不存在")
+    dim = session.get(EvalDimension, idx.dimension_id)
+    if not dim:
+        raise HTTPException(status_code=404, detail="评价维度不存在")
+    _check_course_access(session, current_user, dim.course_id)
 
     dimension_id = idx.dimension_id
     index_name = idx.index_name

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlmodel import Session, SQLModel, select
 
@@ -927,13 +927,610 @@ def seed() -> None:
     print("[seed] 全部演示数据已灌入")
 
 
+# ========== 智能分析模块预注入数据 ==========
+# 为所有测试学生注入学情画像、成绩趋势预测、知识点掌握度、异常学情预警数据
+# 用法: python -m app.seed --inject-analysis
+
+
+def _student_tier(student_id: int) -> int:
+    """根据 student_id 确定性分配档位（0=S优秀 ~ 4=D不及格）。"""
+    # 使用简单取模分配，均匀分布
+    tiers = [0, 1, 1, 2, 2, 3, 4]  # 7个一组: S, A, A, B, B, C, D
+    return tiers[(student_id - 11) % 7]
+
+
+def _tier_score_range(tier: int) -> tuple[int, int]:
+    """档位 → 成绩范围 (min, max)。"""
+    ranges = {
+        0: (86, 98),   # S: 优秀
+        1: (75, 88),   # A: 良好
+        2: (62, 78),   # B: 中等
+        3: (48, 66),   # C: 及格边缘
+        4: (28, 52),   # D: 不及格
+    }
+    return ranges.get(tier, (62, 78))
+
+
+def _tier_trend(tier: int, student_id: int) -> str:
+    """档位 → 成绩趋势（up/down/flat），结合 ID 增加变化。"""
+    if tier == 0:
+        # 优秀的：大部分稳定或上升
+        return "up" if student_id % 3 == 0 else "flat"
+    elif tier == 1:
+        return "flat" if student_id % 2 == 0 else "up"
+    elif tier == 2:
+        opts = ["flat", "up", "down"]
+        return opts[student_id % 3]
+    elif tier == 3:
+        return "down" if student_id % 2 == 0 else "flat"
+    else:
+        # D 级：大多下滑
+        return "down" if student_id % 3 != 0 else "flat"
+
+
+def _deterministic_scores(student_id: int, tier: int, trend: str) -> list[float]:
+    """生成 4 次考核成绩（平时作业/实验报告/期中/期末），确定性但差异化。"""
+    lo, hi = _tier_score_range(tier)
+    mid = (lo + hi) / 2
+    # 使用 student_id 的各位数字之和作为随机种子
+    seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
+
+    if trend == "up":
+        # 成绩逐步上升
+        base = lo + (seed_val % 8)
+        return [
+            round(base + (seed_val % 3), 1),
+            round(base + 4 + ((seed_val // 10) % 5), 1),
+            round(base + 8 + ((seed_val // 7) % 5), 1),
+            round(min(hi + 2, base + 14 + ((seed_val // 3) % 6)), 1),
+        ]
+    elif trend == "down":
+        # 成绩逐步下滑
+        base = hi - (seed_val % 8)
+        return [
+            round(base - ((seed_val // 7) % 5), 1),
+            round(base - 4 - ((seed_val // 3) % 5), 1),
+            round(base - 8 - (seed_val % 5), 1),
+            round(max(lo - 2, base - 14 - ((seed_val // 10) % 6)), 1),
+        ]
+    else:
+        # 稳定波动
+        return [
+            round(mid + ((seed_val + i * 3) % 7) - 3, 1)
+            for i in range(4)
+        ]
+
+
+def _deterministic_attendance(student_id: int, tier: int) -> list[dict]:
+    """生成 6 次考勤记录（确定性、差异化）。"""
+    events = []
+    seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
+    weeks = [date(2026, 3, 3) + timedelta(weeks=i) for i in range(6)]
+
+    # 不同档位缺勤/迟到概率不同
+    if tier == 0:  # S: 全勤
+        for w in weeks:
+            events.append({"date": w, "status": 0, "remark": None})
+    elif tier == 1:  # A: 偶尔迟到
+        for i, w in enumerate(weeks):
+            if (seed_val + i) % 7 == 0:
+                events.append({"date": w, "status": 1, "remark": "迟到5分钟"})
+            else:
+                events.append({"date": w, "status": 0, "remark": None})
+    elif tier == 2:  # B: 1-2次迟到或缺勤
+        for i, w in enumerate(weeks):
+            if (seed_val + i) % 5 == 0:
+                events.append({"date": w, "status": 3, "remark": "未到"})
+            elif (seed_val + i) % 7 == 0:
+                events.append({"date": w, "status": 1, "remark": "迟到"})
+            else:
+                events.append({"date": w, "status": 0, "remark": None})
+    elif tier == 3:  # C: 2-3次缺勤
+        for i, w in enumerate(weeks):
+            if (seed_val + i) % 4 == 0:
+                events.append({"date": w, "status": 3, "remark": "未到"})
+            elif (seed_val + i) % 6 == 0:
+                events.append({"date": w, "status": 1, "remark": "迟到"})
+            elif (seed_val + i) % 8 == 0:
+                events.append({"date": w, "status": 4, "remark": "病假"})
+            else:
+                events.append({"date": w, "status": 0, "remark": None})
+    else:  # D: 缺勤严重
+        for i, w in enumerate(weeks):
+            if (seed_val + i) % 3 == 0:
+                events.append({"date": w, "status": 3, "remark": "未到"})
+            elif (seed_val + i) % 5 == 0:
+                events.append({"date": w, "status": 1, "remark": "迟到"})
+            else:
+                events.append({"date": w, "status": 0, "remark": None})
+    return events
+
+
+def _knowledge_mastery_scores(student_id: int, tier: int, scores: list[float]) -> dict[int, float]:
+    """为 7 个知识点生成掌握度分数（point_id → score）。"""
+    seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
+    avg = sum(scores) / len(scores)
+    mastery: dict[int, float] = {}
+
+    # 知识点 1-2: 网络体系结构 (module 1)
+    # 知识点 3-4: 数据链路层 (module 2)
+    # 知识点 5-7: 传输层 (module 3)
+
+    point_base = {
+        1: avg + (seed_val % 5) - 2,       # OSI 七层模型
+        2: avg + ((seed_val // 3) % 5) - 2,  # TCP/IP 四层模型
+        3: avg + ((seed_val // 5) % 7) - 3,  # 以太网帧格式
+        4: avg + ((seed_val // 7) % 7) - 3,  # ARP 协议
+        5: avg + ((seed_val // 2) % 5) - 2,  # TCP 三次握手
+        6: avg + ((seed_val // 4) % 5) - 2,  # TCP 四次挥手
+        7: avg + ((seed_val // 6) % 7) - 3,  # UDP 协议特点
+    }
+
+    for pid, base in point_base.items():
+        score = max(0.0, min(100.0, base))
+        mastery[pid] = round(score, 1)
+
+    return mastery
+
+
+def _attendance_stats(events: list[dict]) -> tuple[float, int]:
+    """计算出勤率和缺勤次数。"""
+    if not events:
+        return 1.0, 0
+    weights = {0: 1.0, 1: 0.5, 2: 0.5, 3: 0.0, 4: 0.7}
+    total = sum(weights.get(e["status"], 0.0) for e in events)
+    absent = sum(1 for e in events if e["status"] == 3)
+    return total / len(events), absent
+
+
+def _gen_tags(tier: int, trend: str, attendance_events: list[dict],
+              mastery_scores: dict[int, float]) -> str:
+    """根据数据模式生成学情标签。"""
+    tags = []
+    if tier == 0:
+        tags.append("学习积极")
+        tags.append("各科均衡")
+    elif tier == 1:
+        if trend == "up":
+            tags.append("稳步提升")
+        else:
+            tags.append("稳定踏实")
+    elif tier == 2:
+        if trend == "up":
+            tags.append("进步明显")
+        elif trend == "down":
+            tags.append("成绩下滑")
+        else:
+            tags.append("中等水平")
+    elif tier == 3:
+        tags.append("需要关注")
+        if trend == "down":
+            tags.append("成绩下滑")
+    else:
+        tags.append("多门课程成绩不理想")
+        tags.append("需重点关注")
+
+    # 缺勤标签
+    _, absent = _attendance_stats(attendance_events)
+    if absent >= 3:
+        tags.append("出勤风险")
+    elif absent >= 1:
+        tags.append("偶尔缺勤")
+
+    return ", ".join(tags)
+
+
+def _gen_module_strengths(mastery_scores: dict[int, float]) -> tuple[str, str]:
+    """聚合知识点掌握度 → 模块优劣势。"""
+    # module 1: points 1-2, module 2: points 3-4, module 3: points 5-7
+    modules = {
+        "网络体系结构": [1, 2],
+        "数据链路层": [3, 4],
+        "传输层": [5, 6, 7],
+    }
+    good = []
+    weak = []
+    for name, pids in modules.items():
+        avg = sum(mastery_scores.get(p, 0) for p in pids) / len(pids)
+        if avg >= 80:
+            good.append(name)
+        elif avg < 60:
+            weak.append(name)
+    return ", ".join(good), ", ".join(weak)
+
+
+def _gen_warnings(student_id: int, course_id: int, tier: int, trend: str,
+                  scores: list[float], attendance_events: list[dict],
+                  mastery_scores: dict[int, float]) -> list[dict]:
+    """根据数据模式生成预警记录。"""
+    warnings: list[dict] = []
+    _, absent = _attendance_stats(attendance_events)
+
+    # W1 成绩下滑
+    if trend == "down" and len(scores) >= 2:
+        drop = scores[0] - scores[-1]
+        if drop >= 15:
+            level = 2 if drop >= 25 else 1
+            warnings.append({
+                "warning_type": "成绩下滑",
+                "warning_level": level,
+                "warning_reason": f"成绩从{scores[0]:.0f}分下滑至{scores[-1]:.0f}分，降幅{drop:.0f}分",
+            })
+
+    # W3 缺勤超标
+    if absent >= 3:
+        warnings.append({
+            "warning_type": "缺勤超标",
+            "warning_level": 3 if absent >= 4 else 2,
+            "warning_reason": f"本学期缺勤{absent}次，出勤率偏低",
+        })
+    elif absent >= 1:
+        warnings.append({
+            "warning_type": "缺勤超标",
+            "warning_level": 1,
+            "warning_reason": f"本学期有{absent}次缺勤，请注意考勤",
+        })
+
+    # W5 知识点薄弱
+    weak_count = sum(1 for s in mastery_scores.values() if s < 60)
+    if weak_count >= 3:
+        warnings.append({
+            "warning_type": "知识点薄弱堆积",
+            "warning_level": 2 if weak_count >= 5 else 1,
+            "warning_reason": f"薄弱知识点{weak_count}个，需重点加强",
+        })
+
+    return warnings
+
+
+def inject_analysis_data() -> None:
+    """为所有测试学生注入智能分析模块数据。
+
+    注入内容：
+      1. ScoreRecord（成绩记录 → 成绩趋势预测用）
+      2. AttendanceRecord（考勤记录 → 学情画像/预警用）
+      3. KnowledgeMastery（知识点掌握度 → 知识点热力图用）
+      4. StudentProfile（学情画像）
+      5. StudentEvaluationResult + EvalDimensionScore（学习质量评价）
+      6. StudyWarning（异常学情预警）
+    """
+    print("[inject-analysis] 开始为所有学生注入智能分析数据...")
+
+    with Session(engine) as session:
+        # 覆盖所有学生（1-78），包括基础种子学生和测试学生
+        all_student_ids = list(range(1, 79))
+
+        # 目标课程：计算机网络 (course_id=1)
+        course_id = 1
+
+        # 确认学生存在
+        existing_ids = session.exec(
+            select(Student.student_id).where(Student.student_id.in_(all_student_ids))
+        ).all()
+        if not existing_ids:
+            print("[inject-analysis] 未找到学生数据，请先运行 seed --reset")
+            return
+
+        print(f"  目标学生: {len(existing_ids)} 人")
+        print(f"  目标课程: 计算机网络 (course_id={course_id})")
+
+        # ========== 0. 确保所有学生选修了目标课程 ==========
+        enrolled_ids = set(session.exec(
+            select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+        ).all())
+        missing_enrollment = [sid for sid in existing_ids if sid not in enrolled_ids]
+        if missing_enrollment:
+            for sid in missing_enrollment:
+                session.add(CourseStudent(course_id=course_id, student_id=sid))
+            session.commit()
+            print(f"  补充选修关系: {len(missing_enrollment)} 人")
+
+        # ========== 1. 检查并清空已有学生分析数据 ==========
+        # ScoreRecord
+        old_scores = session.exec(
+            select(ScoreRecord).where(
+                ScoreRecord.student_id.in_(existing_ids),
+                ScoreRecord.course_id == course_id,
+            )
+        ).all()
+        for r in old_scores:
+            session.delete(r)
+        # AttendanceRecord
+        old_att = session.exec(
+            select(AttendanceRecord).where(
+                AttendanceRecord.student_id.in_(existing_ids),
+                AttendanceRecord.course_id == course_id,
+            )
+        ).all()
+        for r in old_att:
+            session.delete(r)
+        # KnowledgeMastery
+        old_km = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.student_id.in_(existing_ids),
+                KnowledgeMastery.course_id == course_id,
+            )
+        ).all()
+        for r in old_km:
+            session.delete(r)
+        # StudentProfile
+        old_sp = session.exec(
+            select(StudentProfile).where(
+                StudentProfile.student_id.in_(existing_ids),
+                StudentProfile.course_id == course_id,
+            )
+        ).all()
+        for r in old_sp:
+            session.delete(r)
+        # StudentEvaluationResult
+        old_ev = session.exec(
+            select(StudentEvaluationResult).where(
+                StudentEvaluationResult.student_id.in_(existing_ids),
+                StudentEvaluationResult.course_id == course_id,
+            )
+        ).all()
+        for r in old_ev:
+            session.delete(r)
+        # StudyWarning
+        old_sw = session.exec(
+            select(StudyWarning).where(
+                StudyWarning.student_id.in_(existing_ids),
+                StudyWarning.course_id == course_id,
+            )
+        ).all()
+        for r in old_sw:
+            session.delete(r)
+        session.commit()
+        print("  已清空测试学生的旧分析数据")
+
+        # ========== 2. 注入数据 ==========
+        total_scores = 0
+        total_attendance = 0
+        total_mastery = 0
+        total_profiles = 0
+        total_evals = 0
+        total_warnings = 0
+
+        for sid in existing_ids:
+            tier = _student_tier(sid)
+            trend = _tier_trend(tier, sid)
+            scores = _deterministic_scores(sid, tier, trend)
+            att_events = _deterministic_attendance(sid, tier)
+            mastery_dict = _knowledge_mastery_scores(sid, tier, scores)
+
+            # --- 2a. ScoreRecord（4条，对应 batch_id 1~4） ---
+            for i, score_val in enumerate(scores):
+                batch_id = i + 1  # batch 1=平时作业, 2=实验报告, 3=期中, 4=期末
+                is_pass = 1 if score_val >= 60 else 0
+                session.add(ScoreRecord(
+                    course_id=course_id,
+                    student_id=sid,
+                    batch_id=batch_id,
+                    score=score_val,
+                    is_pass=is_pass,
+                    create_by=2,  # 王建国
+                ))
+                total_scores += 1
+
+            # --- 2b. AttendanceRecord（6条） ---
+            for evt in att_events:
+                session.add(AttendanceRecord(
+                    course_id=course_id,
+                    student_id=sid,
+                    attendance_date=evt["date"],
+                    status=evt["status"],
+                    remark=evt["remark"],
+                    create_by=2,
+                ))
+                total_attendance += 1
+
+            # --- 2c. KnowledgeMastery（覆盖课程全部知识点） ---
+            # 获取课程1的全部知识点
+            all_course_points = session.exec(
+                select(KnowledgePoint.point_id).join(
+                    KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id
+                ).where(KnowledgeModule.course_id == course_id)
+            ).all()
+
+            avg_score = sum(scores) / len(scores)
+            for point_id in all_course_points:
+                # 用学生平均成绩 + 知识点ID偏移生成确定性掌握度
+                seed_val = sum(int(c) for c in str(sid) if c.isdigit())
+                base = avg_score + ((seed_val * point_id) % 15) - 7
+                m_score = round(max(0.0, min(100.0, base)), 1)
+                level = 3 if m_score >= 80 else (2 if m_score >= 60 else 1)
+                session.add(KnowledgeMastery(
+                    course_id=course_id,
+                    student_id=sid,
+                    point_id=point_id,
+                    mastery_score=m_score,
+                    mastery_level=level,
+                ))
+                total_mastery += 1
+
+            # --- 2d. StudentProfile ---
+            # 计算三维度得分
+            avg_score = sum(scores) / len(scores)
+            att_rate, absent = _attendance_stats(att_events)
+            att_score = att_rate * 100
+
+            # 学业水平：基于平均成绩
+            academic = round(avg_score, 1)
+            # 学习态度：基于出勤
+            attitude = round(att_score * 0.5 + 50.0, 1)  # 出勤权重0.5 + 基础分
+            # 学习进步：基于趋势
+            if trend == "up":
+                progress = round(50.0 + (scores[-1] - scores[0]) * 2, 1)
+            elif trend == "down":
+                progress = round(50.0 + (scores[-1] - scores[0]) * 2, 1)
+            else:
+                progress = 50.0 + abs(scores[-1] - scores[0]) * 0.5
+            progress = max(10.0, min(100.0, progress))
+            total_profile_score = round((academic + attitude + progress) / 3, 1)
+
+            tags = _gen_tags(tier, trend, att_events, mastery_dict)
+            good_mods, weak_mods = _gen_module_strengths(mastery_dict)
+
+            session.add(StudentProfile(
+                course_id=course_id,
+                student_id=sid,
+                academic_score=academic,
+                attitude_score=round(attitude, 1),
+                progress_score=round(progress, 1),
+                total_profile_score=total_profile_score,
+                study_tags=tags if tags else None,
+                good_modules=good_mods if good_mods else None,
+                weak_modules=weak_mods if weak_mods else None,
+            ))
+            total_profiles += 1
+
+            # --- 2e. StudentEvaluationResult + EvalDimensionScore ---
+            # 先获取 eval_id
+            eval_level = "优" if total_profile_score >= 85 else (
+                "良" if total_profile_score >= 75 else (
+                    "中" if total_profile_score >= 60 else "差"
+                )
+            )
+            er = StudentEvaluationResult(
+                course_id=course_id,
+                student_id=sid,
+                total_score=total_profile_score,
+                eval_level=eval_level,
+            )
+            session.add(er)
+            session.commit()
+            session.refresh(er)
+
+            # 维度得分（dimension 1=学业成绩, 2=学习态度）
+            session.add(EvalDimensionScore(
+                eval_id=er.eval_id,
+                dimension_id=1,
+                dimension_score=academic,
+            ))
+            session.add(EvalDimensionScore(
+                eval_id=er.eval_id,
+                dimension_id=2,
+                dimension_score=round(attitude, 1),
+            ))
+            total_evals += 1
+
+            # --- 2f. StudyWarning ---
+            warnings = _gen_warnings(sid, course_id, tier, trend, scores, att_events, mastery_dict)
+            for w in warnings:
+                session.add(StudyWarning(
+                    course_id=course_id,
+                    student_id=sid,
+                    warning_type=w["warning_type"],
+                    warning_level=w["warning_level"],
+                    warning_reason=w["warning_reason"],
+                    handle_status=0,
+                ))
+                total_warnings += 1
+
+            # --- 2g. StudentAnswerRecord（答题记录 → 教师视角热力图数据源） ---
+            # 为 Task1（Q1-Q5）和 Task3（Q12-Q16）生成答题记录
+            # 问题定义: (task_id, question_id, type, correct_answer, wrong_answers_pool)
+            _answer_tasks_def = [
+                # Task 1: 计算机网络单元测验1
+                (1, 1, 1, "C", ["A", "B", "D"]),
+                (1, 2, 1, "C", ["A", "B", "D"]),
+                (1, 3, 2, '["A","C"]', ['["A"]', '["C"]', '["A","B"]', '["B","C"]']),
+                (1, 4, 3, "正确", ["错误"]),
+                (1, 5, 3, "错误", ["正确"]),
+                # Task 3: 测验1
+                (3, 12, 1, "B", ["A", "C", "D"]),
+                (3, 13, 2, '["A","B"]', ['["A"]', '["B"]', '["A","B","C"]', '["A","B","D"]']),
+                (3, 14, 1, "B", ["A", "C", "D"]),
+                (3, 15, 2, '["A","B","C"]', ['["A","B"]', '["A","C"]', '["B","C"]', '["A","B","C","D"]']),
+                (3, 16, 1, "B", ["A", "C", "D"]),
+            ]
+
+            total_answers = 0
+            for sid in existing_ids:
+                tier = _student_tier(sid)
+                seed_val = sum(int(c) for c in str(sid) if c.isdigit())
+
+                # 不同档位的正确率
+                tier_accuracy = {0: 0.85, 1: 0.72, 2: 0.60, 3: 0.42, 4: 0.22}
+                acc = tier_accuracy.get(tier, 0.60)
+
+                for task_id, qid, qtype, correct_ans, wrong_pool in _answer_tasks_def:
+                    # 确定性判断是否正确
+                    is_correct = ((seed_val * (qid + 7) + sid) % 100) < (acc * 100)
+                    score = 5 if is_correct else (2 if qtype == 2 and not is_correct else 0)
+
+                    if is_correct:
+                        user_ans = correct_ans
+                    else:
+                        # 从错误选项池中选取
+                        idx = (seed_val + qid * 3) % len(wrong_pool)
+                        user_ans = wrong_pool[idx]
+
+                    session.add(StudentAnswerRecord(
+                        task_id=task_id,
+                        question_id=qid,
+                        student_id=sid,
+                        user_answer=user_ans,
+                        score=score,
+                        is_correct=1 if is_correct else 0,
+                    ))
+                    total_answers += 1
+
+        session.commit()
+
+        print(f"\n[inject-analysis] 注入完成！统计：")
+        print(f"  ScoreRecord（成绩记录）: {total_scores} 条")
+        print(f"  AttendanceRecord（考勤记录）: {total_attendance} 条")
+        print(f"  KnowledgeMastery（知识点掌握度）: {total_mastery} 条")
+        print(f"  StudentProfile（学情画像）: {total_profiles} 条")
+        print(f"  StudentEvaluationResult（评价结果）: {total_evals} 条")
+        print(f"  StudyWarning（学情预警）: {total_warnings} 条")
+        print(f"  StudentAnswerRecord（答题记录 → 教师热力图数据源）: {total_answers} 条")
+
+        # 打印一些样本数据
+        print("\n[inject-analysis] 样本数据预览：")
+        # 找一个优秀学生 (tier 0)
+        sample_s = next((sid for sid in existing_ids if _student_tier(sid) == 0), existing_ids[0])
+        sample_scores_s = _deterministic_scores(sample_s, 0, _tier_trend(0, sample_s))
+        student_s = session.get(Student, sample_s)
+        print(f"  S档（优秀）- {student_s.real_name if student_s else sample_s}: "
+              f"成绩 {sample_scores_s}, trend={_tier_trend(0, sample_s)}")
+
+        sample_d = next((sid for sid in existing_ids if _student_tier(sid) == 4), existing_ids[-1])
+        sample_scores_d = _deterministic_scores(sample_d, 4, _tier_trend(4, sample_d))
+        student_d = session.get(Student, sample_d)
+        print(f"  D档（不及格）- {student_d.real_name if student_d else sample_d}: "
+              f"成绩 {sample_scores_d}, trend={_tier_trend(4, sample_d)}")
+
+        # 查看数据库中实际数据
+        class_ids = set()
+        for sid in existing_ids:
+            st = session.get(Student, sid)
+            if st:
+                class_ids.add(st.class_id)
+        print(f"\n  覆盖班级 ID: {sorted(class_ids)} (软件1801=6, 软件1802=7, 软件1803=8)")
+        print("  所有数据已就绪，前端可直接展示！")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="灌入演示数据")
     parser.add_argument("--reset", action="store_true", help="删库重建后再灌入")
+    parser.add_argument("--inject-analysis", action="store_true",
+                        help="为所有学生注入智能分析数据（学情画像/成绩趋势/知识点/预警）")
     args = parser.parse_args()
-    if args.reset:
+    if args.inject_analysis:
+        inject_analysis_data()
+    elif args.reset:
         reset()
-    seed()
+        seed()
+    else:
+        # 默认行为：如果没有数据则 seed，否则提示
+        with Session(engine) as session:
+            existing = session.exec(select(SysRole)).first()
+        if existing:
+            print("数据已存在。使用 --reset 重建，或 --inject-analysis 注入分析数据")
+        else:
+            seed()
 
 
 if __name__ == "__main__":

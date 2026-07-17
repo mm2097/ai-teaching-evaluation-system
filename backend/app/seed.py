@@ -1215,6 +1215,24 @@ def inject_analysis_data() -> None:
         # 目标课程：计算机网络 (course_id=1)
         course_id = 1
 
+        # 教师视角热力图所需答题记录定义。
+        # 该定义放在学生循环外，确保每次注入只为每名学生生成一份记录。
+        answer_tasks_def = [
+            # Task 1: 计算机网络单元测验1
+            (1, 1, 1, "C", ["A", "B", "D"]),
+            (1, 2, 1, "C", ["A", "B", "D"]),
+            (1, 3, 2, '["A","C"]', ['["A"]', '["C"]', '["A","B"]', '["B","C"]']),
+            (1, 4, 3, "正确", ["错误"]),
+            (1, 5, 3, "错误", ["正确"]),
+            # Task 3: 测验1
+            (3, 12, 1, "B", ["A", "C", "D"]),
+            (3, 13, 2, '["A","B"]', ['["A"]', '["B"]', '["A","B","C"]', '["A","B","D"]']),
+            (3, 14, 1, "B", ["A", "C", "D"]),
+            (3, 15, 2, '["A","B","C"]', ['["A","B"]', '["A","C"]', '["B","C"]', '["A","B","C","D"]']),
+            (3, 16, 1, "B", ["A", "C", "D"]),
+        ]
+        analysis_task_ids = sorted({item[0] for item in answer_tasks_def})
+
         # 确认学生存在
         existing_ids = session.exec(
             select(Student.student_id).where(Student.student_id.in_(all_student_ids))
@@ -1281,8 +1299,24 @@ def inject_analysis_data() -> None:
                 StudentEvaluationResult.course_id == course_id,
             )
         ).all()
+        old_eval_ids = [item.eval_id for item in old_ev if item.eval_id is not None]
+        if old_eval_ids:
+            old_dimension_scores = session.exec(
+                select(EvalDimensionScore).where(
+                    EvalDimensionScore.eval_id.in_(old_eval_ids)
+                )
+            ).all()
+            for item in old_dimension_scores:
+                session.delete(item)
         for r in old_ev:
             session.delete(r)
+        session.flush()
+
+        # 清理历史注入可能留下的无父评价维度记录。
+        valid_eval_ids = set(session.exec(select(StudentEvaluationResult.eval_id)).all())
+        for item in session.exec(select(EvalDimensionScore)).all():
+            if item.eval_id not in valid_eval_ids:
+                session.delete(item)
         # StudyWarning
         old_sw = session.exec(
             select(StudyWarning).where(
@@ -1291,6 +1325,15 @@ def inject_analysis_data() -> None:
             )
         ).all()
         for r in old_sw:
+            session.delete(r)
+        # StudentAnswerRecord（仅清理本脚本负责的两个分析任务）
+        old_answers = session.exec(
+            select(StudentAnswerRecord).where(
+                StudentAnswerRecord.student_id.in_(existing_ids),
+                StudentAnswerRecord.task_id.in_(analysis_task_ids),
+            )
+        ).all()
+        for r in old_answers:
             session.delete(r)
         session.commit()
         print("  已清空测试学生的旧分析数据")
@@ -1302,6 +1345,7 @@ def inject_analysis_data() -> None:
         total_profiles = 0
         total_evals = 0
         total_warnings = 0
+        total_answers = 0
 
         for sid in existing_ids:
             tier = _student_tier(sid)
@@ -1439,54 +1483,35 @@ def inject_analysis_data() -> None:
                 ))
                 total_warnings += 1
 
-            # --- 2g. StudentAnswerRecord（答题记录 → 教师视角热力图数据源） ---
-            # 为 Task1（Q1-Q5）和 Task3（Q12-Q16）生成答题记录
-            # 问题定义: (task_id, question_id, type, correct_answer, wrong_answers_pool)
-            _answer_tasks_def = [
-                # Task 1: 计算机网络单元测验1
-                (1, 1, 1, "C", ["A", "B", "D"]),
-                (1, 2, 1, "C", ["A", "B", "D"]),
-                (1, 3, 2, '["A","C"]', ['["A"]', '["C"]', '["A","B"]', '["B","C"]']),
-                (1, 4, 3, "正确", ["错误"]),
-                (1, 5, 3, "错误", ["正确"]),
-                # Task 3: 测验1
-                (3, 12, 1, "B", ["A", "C", "D"]),
-                (3, 13, 2, '["A","B"]', ['["A"]', '["B"]', '["A","B","C"]', '["A","B","D"]']),
-                (3, 14, 1, "B", ["A", "C", "D"]),
-                (3, 15, 2, '["A","B","C"]', ['["A","B"]', '["A","C"]', '["B","C"]', '["A","B","C","D"]']),
-                (3, 16, 1, "B", ["A", "C", "D"]),
-            ]
+        # --- 2g. StudentAnswerRecord（答题记录 → 教师视角热力图数据源） ---
+        for sid in existing_ids:
+            tier = _student_tier(sid)
+            seed_val = sum(int(c) for c in str(sid) if c.isdigit())
 
-            total_answers = 0
-            for sid in existing_ids:
-                tier = _student_tier(sid)
-                seed_val = sum(int(c) for c in str(sid) if c.isdigit())
+            # 不同档位的正确率
+            tier_accuracy = {0: 0.85, 1: 0.72, 2: 0.60, 3: 0.42, 4: 0.22}
+            acc = tier_accuracy.get(tier, 0.60)
 
-                # 不同档位的正确率
-                tier_accuracy = {0: 0.85, 1: 0.72, 2: 0.60, 3: 0.42, 4: 0.22}
-                acc = tier_accuracy.get(tier, 0.60)
+            for task_id, qid, qtype, correct_ans, wrong_pool in answer_tasks_def:
+                # 确定性判断是否正确
+                is_correct = ((seed_val * (qid + 7) + sid) % 100) < (acc * 100)
+                score = 5 if is_correct else (2 if qtype == 2 and not is_correct else 0)
 
-                for task_id, qid, qtype, correct_ans, wrong_pool in _answer_tasks_def:
-                    # 确定性判断是否正确
-                    is_correct = ((seed_val * (qid + 7) + sid) % 100) < (acc * 100)
-                    score = 5 if is_correct else (2 if qtype == 2 and not is_correct else 0)
+                if is_correct:
+                    user_ans = correct_ans
+                else:
+                    idx = (seed_val + qid * 3) % len(wrong_pool)
+                    user_ans = wrong_pool[idx]
 
-                    if is_correct:
-                        user_ans = correct_ans
-                    else:
-                        # 从错误选项池中选取
-                        idx = (seed_val + qid * 3) % len(wrong_pool)
-                        user_ans = wrong_pool[idx]
-
-                    session.add(StudentAnswerRecord(
-                        task_id=task_id,
-                        question_id=qid,
-                        student_id=sid,
-                        user_answer=user_ans,
-                        score=score,
-                        is_correct=1 if is_correct else 0,
-                    ))
-                    total_answers += 1
+                session.add(StudentAnswerRecord(
+                    task_id=task_id,
+                    question_id=qid,
+                    student_id=sid,
+                    user_answer=user_ans,
+                    score=score,
+                    is_correct=1 if is_correct else 0,
+                ))
+                total_answers += 1
 
         session.commit()
 

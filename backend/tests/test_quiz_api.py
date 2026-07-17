@@ -42,6 +42,10 @@ def _create_task(session, question_ids: list[int], *, allow_review: int = 1) -> 
     return task
 
 
+def _assign_task_to_class(session, task: AnswerTask, class_id: int = 1) -> None:
+    session.add(AnswerTaskClass(task_id=task.task_id, class_id=class_id))
+    session.commit()
+
 def test_task_list_restores_stored_choice_options(session):
     task = _create_task(session, [1])
 
@@ -61,6 +65,7 @@ def test_task_list_restores_stored_choice_options(session):
 
 def test_student_task_list_does_not_expose_solutions(session):
     task = _create_task(session, [1])
+    _assign_task_to_class(session, task)
 
     tasks = quiz.list_answer_tasks(
         course_id=1,
@@ -126,9 +131,10 @@ def test_answer_record_detail_uses_real_submission_id(session):
     assert detail["questionResults"][0]["isCorrect"] is True
 
 
-def test_student_cannot_see_submitted_task_when_review_disabled(session):
+def test_student_can_see_submitted_task_and_record_when_review_disabled(session):
     task = _create_task(session, [1], allow_review=0)
-    quiz.submit_answers(
+    _assign_task_to_class(session, task)
+    result = quiz.submit_answers(
         quiz.SubmitAnswersRequest(task_id=task.task_id, student_id=1, answers={"1": "C"}),
         session=session,
         current_user=_user(session, 2),
@@ -140,7 +146,10 @@ def test_student_cannot_see_submitted_task_when_review_disabled(session):
         session=session,
         current_user=_user(session, 2),
     )
-    assert all(item["id"] != task.task_id for item in tasks)
+    serialized = next(item for item in tasks if item["id"] == task.task_id)
+    assert serialized["submitted"] is True
+    assert serialized["allowReview"] is False
+    assert serialized["mySubmissionId"] == result["submissionId"]
 
     records = quiz.list_answer_records(
         task_id=None,
@@ -149,11 +158,13 @@ def test_student_cannot_see_submitted_task_when_review_disabled(session):
         session=session,
         current_user=_user(session, 2),
     )
-    assert all(item["assignmentId"] != task.task_id for item in records)
-
+    record = next(item for item in records if item["assignmentId"] == task.task_id)
+    assert record["id"] == result["submissionId"]
+    assert record["score"] == result["score"]
 
 def test_student_cannot_open_detail_when_review_disabled(session):
     task = _create_task(session, [1], allow_review=0)
+    _assign_task_to_class(session, task)
     result = quiz.submit_answers(
         quiz.SubmitAnswersRequest(task_id=task.task_id, student_id=1, answers={"1": "C"}),
         session=session,

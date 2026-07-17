@@ -91,14 +91,13 @@ function viewDetail(record: QuizAssignment): void {
           </div>
         </div>
         <el-button
-          v-if="record.mySubmissionId"
-          :type="record.allowReview === false && !isSelfPracticeTask(record.title) ? 'info' : 'primary'"
+          v-if="record.mySubmissionId && (record.allowReview !== false || isSelfPracticeTask(record.title))"
+          type="primary"
           :icon="View"
           plain
-          :disabled="record.allowReview === false && !isSelfPracticeTask(record.title)"
           @click="viewDetail(record)"
         >
-          {{ record.allowReview === false && !isSelfPracticeTask(record.title) ? '详情不可查看' : '查看详情' }}
+          查看详情
         </el-button>
       </div>
     </div>

@@ -445,14 +445,13 @@ const resultSubtitle = computed(() => {
               <el-tag v-else-if="isExpired(quiz)" type="danger" size="small" effect="plain">已截止</el-tag>
               <el-tag v-else type="warning" size="small" effect="plain">待完成</el-tag>
               <el-button
-                v-if="quiz.submitted"
-                :type="quiz.allowReview === false ? 'info' : 'primary'"
+                v-if="quiz.submitted && quiz.allowReview !== false"
+                type="primary"
                 :icon="View"
                 plain
-                :disabled="quiz.allowReview === false"
                 @click="viewQuizResult(quiz)"
               >
-                {{ quiz.allowReview === false ? '详情不可查看' : '查看结果' }}
+                查看结果
               </el-button>
               <el-button
                 v-else-if="isExpired(quiz)"

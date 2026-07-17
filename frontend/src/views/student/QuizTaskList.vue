@@ -140,13 +140,13 @@ function viewResult(quiz: QuizAssignment): void {
             </p>
           </div>
           <el-button
-            :type="quiz.allowReview === false ? 'info' : 'primary'"
+            v-if="quiz.allowReview !== false"
+            type="primary"
             :icon="View"
             plain
-            :disabled="quiz.allowReview === false"
             @click="viewResult(quiz)"
           >
-            {{ quiz.allowReview === false ? '详情不可查看' : '查看结果' }}
+            查看结果
           </el-button>
         </div>
       </div>

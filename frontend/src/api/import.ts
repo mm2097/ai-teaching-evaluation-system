@@ -38,7 +38,7 @@ export async function executeImport(
 
   const res = await request.post('/v1/teaching-data/upload', formData, {
     params: { course_id: courseId },
-    headers: { 'Content-Type': 'multipart/form-data' },
+    // 不要手动设置 Content-Type，让 axios 自动带上正确的 boundary
     timeout: 120000,  // 大文件多 sheet 上传需要较长时间
   })
 

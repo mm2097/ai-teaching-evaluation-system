@@ -191,7 +191,7 @@ def seed() -> None:
         # ========== 5. 学生（10人，分散在不同班级、不同性别） ==========
         students = [
             Student(student_no="2024001001", real_name="赵伟", gender=1,
-                    class_id=1, user_id=5, phone="13900000001", email="zw@stu.edu.cn"),
+                    class_id=6, user_id=5, phone="13900000001", email="zw@stu.edu.cn"),
             Student(student_no="2024001002", real_name="钱丽华", gender=0,
                     class_id=1, user_id=6, phone="13900000002", email="qlh@stu.edu.cn"),
             Student(student_no="2024001003", real_name="孙浩然", gender=1,
@@ -216,11 +216,11 @@ def seed() -> None:
         print(f"  学生: {len(students)} 条")
 
         # 测试数据学生记录（47人，user_id 对应上一批测试用户 15~61）
-        # 演示联调：201726010101（孔祥宁）与 teacher 同属计科2401（class_id=1）
+        # 演示联调：student（赵伟）与 201726010101（孔祥宁）同属软件1801（class_id=6）
         # 其余 Excel 模板学生：6=软件1801班，7=软件1802班，8=软件1803班
         test_students = [
-            # ── 计科2401（演示账号，1人）──
-            Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=1, user_id=15),
+            # ── 软件1801（演示账号 student 同班，1人）──
+            Student(student_no="201726010101", real_name="孔祥宁", gender=1, class_id=6, user_id=15),
             # ── 软件1801 班（24人，user_id 16~39）──
             Student(student_no="201803030311", real_name="杨伯昊", gender=1, class_id=6, user_id=16),
             Student(student_no="201826010102", real_name="徐颖",    gender=0, class_id=6, user_id=17),
@@ -660,8 +660,8 @@ def seed() -> None:
         session.commit()
 
         task_classes = [
-            AnswerTaskClass(task_id=1, class_id=1),
-            AnswerTaskClass(task_id=2, class_id=1),
+            AnswerTaskClass(task_id=1, class_id=6),
+            AnswerTaskClass(task_id=2, class_id=6),
         ]
         session.add_all(task_classes)
         session.commit()

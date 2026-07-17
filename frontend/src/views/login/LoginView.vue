@@ -22,11 +22,11 @@ const loginForm = reactive({
 /** 登录加载状态 */
 const loading = ref(false)
 
-/** 演示账号（teacher / student 均为计科2401班，便于联调发布练习） */
+/** 演示账号（与 seed 数据库一致，密码均为 123456） */
 const demoAccounts = [
-  { username: 'admin', role: '系统管理员' },
-  { username: 'teacher', role: '任课教师（计科2401）' },
-  { username: 'student', role: '学生（计科2401）' },
+  { username: 'admin', label: '张管理（管理员）' },
+  { username: 'teacher', label: '王建国（任课教师）' },
+  { username: '201726010101', label: '孔祥宁（软件1801）' },
 ]
 
 onMounted(() => {
@@ -111,6 +111,7 @@ async function handleLogin(): Promise<void> {
           <el-form-item>
             <el-input
               v-model="loginForm.password"
+              class="login-password-input"
               type="password"
               placeholder="请输入密码"
               :prefix-icon="Lock"
@@ -137,7 +138,7 @@ async function handleLogin(): Promise<void> {
               effect="plain"
               @click="fillDemoAccount(item.username)"
             >
-              {{ item.role }}
+              {{ item.label }}
             </el-tag>
           </div>
         </div>
@@ -259,6 +260,19 @@ async function handleLogin(): Promise<void> {
     height: 44px;
     font-size: 16px;
     border-radius: 8px;
+  }
+
+  :deep(.login-password-input input) {
+    &:-webkit-autofill,
+    &:-webkit-autofill:hover,
+    &:-webkit-autofill:focus,
+    &:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 1000px #fff inset !important;
+      box-shadow: 0 0 0 1000px #fff inset !important;
+      -webkit-text-fill-color: #606266 !important;
+      caret-color: #606266;
+      transition: background-color 99999s ease-out;
+    }
   }
 
   .demo-accounts {

@@ -95,6 +95,7 @@ function mapUser(u: MockUser) {
     real_name: u.real_name,
     role_id: u.role_id,
     status: u.status,
+    department: u.college || '',
     create_time: u.create_time,
   }
 }
@@ -317,8 +318,28 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
 
   /* ----- 日志 ----- */
+  if (method === 'GET' && url === '/v1/logs/modules') {
+    return ok({ list: [...new Set(systemLogs.map(l => l.type))].sort() })
+  }
   if (method === 'GET' && url === '/v1/logs') {
-    return ok({ list: systemLogs })
+    // 与后端一致:用户名模糊、模块精确、日期范围、分页
+    let filtered = systemLogs.filter((log) => {
+      const username = params.username as string | undefined
+      const module = params.module as string | undefined
+      if (username && !log.username.includes(username)) return false
+      if (module && log.type !== module) return false
+      if (params.start_date || params.end_date) {
+        const day = log.time.slice(0, 10)
+        if (params.start_date && day < String(params.start_date)) return false
+        if (params.end_date && day > String(params.end_date)) return false
+      }
+      return true
+    })
+    filtered = [...filtered].sort((a, b) => (a.time < b.time ? 1 : -1))
+    const page = Number(params.page ?? 1)
+    const pageSize = Number(params.page_size ?? 20)
+    const start = (page - 1) * pageSize
+    return ok({ list: filtered.slice(start, start + pageSize), total: filtered.length })
   }
 
   /* ----- 教学数据 ----- */
@@ -435,6 +456,7 @@ function handleCreateUser(body: Record<string, any>) {
     real_name: body.real_name,
     role_id: body.role_id || roleMap[body.role_id] || 3,
     status: body.status ?? 1,
+    college: (body.college || '').trim() || '计算机学院',
     create_time: new Date().toISOString().slice(0, 19).replace('T', ' '),
   }
   users.push(newUser)
@@ -448,6 +470,7 @@ function handleUpdateUser(id: number, body: Record<string, any>) {
   if (body.role_id !== undefined) user.role_id = body.role_id
   if (body.status !== undefined) user.status = body.status
   if (body.password !== undefined) user.password = body.password
+  if (body.college !== undefined) user.college = body.college
   return ok(mapUser(user))
 }
 

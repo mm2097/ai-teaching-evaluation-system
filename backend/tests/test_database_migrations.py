@@ -24,6 +24,9 @@ def test_migrate_legacy_tables_adds_missing_columns(monkeypatch):
         connection.execute(text(
             "CREATE TABLE score_record (score_id INTEGER PRIMARY KEY)"
         ))
+        connection.execute(text(
+            "CREATE TABLE sys_user (user_id INTEGER PRIMARY KEY)"
+        ))
 
     monkeypatch.setattr(database, "engine", migration_engine)
     database._migrate_legacy_tables()
@@ -41,6 +44,9 @@ def test_migrate_legacy_tables_adds_missing_columns(monkeypatch):
     }
     assert "source_data" in {
         column["name"] for column in inspector.get_columns("score_record")
+    }
+    assert "college" in {
+        column["name"] for column in inspector.get_columns("sys_user")
     }
     with migration_engine.connect() as connection:
         rows = connection.execute(text(

@@ -15,6 +15,7 @@ export interface MockUser {
   real_name: string
   role_id: number // 1=admin, 2=teacher, 3=student
   status: number // 1=启用, 0=禁用
+  college?: string // 所属学院
   create_time: string
 }
 

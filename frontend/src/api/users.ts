@@ -25,6 +25,7 @@ interface UserUpdatePayload {
   role_id?: number
   status?: number
   password?: string
+  college?: string
 }
 
 let roleIdMap: Partial<Record<UserRole, number>> = {}
@@ -50,12 +51,13 @@ export const userApi = {
     return (res.data as UserResponse[]).map(mapUser)
   },
 
-  /** 创建用户（默认密码 123456） */
+  /** 创建用户（默认密码 123456，学院不填默认为计算机学院） */
   async create(data: {
     username: string
     name: string
     role: UserRole
     status: boolean
+    college?: string
   }): Promise<SystemUser> {
     const roleId = await getRoleId(data.role)
     const res = await request.post('/users', {
@@ -64,6 +66,7 @@ export const userApi = {
       real_name: data.name,
       role_id: roleId,
       status: data.status ? 1 : 0,
+      college: data.college,
     })
     return mapUser(res.data)
   },
@@ -71,7 +74,7 @@ export const userApi = {
   /** 更新用户（只传要改的字段） */
   async update(
     id: number,
-    data: Partial<{ name: string; role: UserRole; status: boolean; password: string }>,
+    data: Partial<{ name: string; role: UserRole; status: boolean; password: string; college: string }>,
   ): Promise<SystemUser> {
     const payload: UserUpdatePayload = {}
     if (data.name !== undefined) payload.real_name = data.name
@@ -80,6 +83,7 @@ export const userApi = {
     }
     if (data.status !== undefined) payload.status = data.status ? 1 : 0
     if (data.password !== undefined) payload.password = data.password
+    if (data.college !== undefined) payload.college = data.college
     const res = await request.put(`/users/${id}`, payload)
     return mapUser(res.data)
   },

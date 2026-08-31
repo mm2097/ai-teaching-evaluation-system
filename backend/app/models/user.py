@@ -30,6 +30,7 @@ class SysUser(SQLModel, table=True):
     real_name: str = Field(max_length=32)
     role_id: int = Field(foreign_key="sys_role.role_id", index=True)
     status: int = Field(default=1)  # 0=禁用, 1=启用
+    college: Optional[str] = Field(default=None, max_length=64)  # 所属学院
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)
 
@@ -50,6 +51,7 @@ class UserCreate(SQLModel):
     real_name: str
     role_id: int
     status: int = 1
+    college: Optional[str] = Field(default=None, max_length=64)
 
 
 class UserUpdate(SQLModel):
@@ -58,6 +60,7 @@ class UserUpdate(SQLModel):
     real_name: Optional[str] = None
     role_id: Optional[int] = None
     status: Optional[int] = None
+    college: Optional[str] = Field(default=None, max_length=64)
 
 
 class UserRead(SQLModel):

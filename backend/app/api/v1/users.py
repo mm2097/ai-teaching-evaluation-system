@@ -31,19 +31,20 @@ def _check_admin_protection(session: Session, target_user: SysUser, current_user
 def _serialize_user(session: Session, user: SysUser) -> dict:
     """Return management fields without exposing password hashes."""
     role = session.get(SysRole, user.role_id)
-    department = ""
-    if role and role.role_code == "teacher":
+    # 优先取用户表上的所属学院,老数据未填写时回退到教师/学生/管理员推导值
+    department = user.college or ""
+    if not department and role and role.role_code == "teacher":
         teacher = session.exec(
             select(Teacher).where(Teacher.user_id == user.user_id)
         ).first()
         department = teacher.college if teacher else ""
-    elif role and role.role_code == "student":
+    elif not department and role and role.role_code == "student":
         student = session.exec(
             select(Student).where(Student.user_id == user.user_id)
         ).first()
         class_info = session.get(ClassInfo, student.class_id) if student else None
         department = class_info.college if class_info else ""
-    elif role and role.role_code == "admin":
+    elif not department and role and role.role_code == "admin":
         department = "系统管理"
 
     return {
@@ -104,6 +105,9 @@ def create_user(
             raise HTTPException(status_code=403, detail="不允许创建已禁用的系统管理员账号")
     user_data = payload.model_dump()
     user_data["password"] = hash_password(user_data["password"])
+    # 所属学院未填写时默认为计算机学院
+    college = (user_data.get("college") or "").strip()
+    user_data["college"] = college or "计算机学院"
     user = SysUser(**user_data)
     session.add(user)
     session.commit()

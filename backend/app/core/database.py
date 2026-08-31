@@ -90,6 +90,9 @@ def _migrate_legacy_tables() -> None:
         "score_record": {
             "source_data": "ALTER TABLE score_record ADD COLUMN source_data TEXT",
         },
+        "sys_user": {
+            "college": "ALTER TABLE sys_user ADD COLUMN college VARCHAR(64)",
+        },
     }
 
     with engine.begin() as connection:

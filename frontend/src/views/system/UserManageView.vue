@@ -26,6 +26,7 @@ const form = ref({
   name: '',
   role: 'teacher' as UserRole,
   status: true,
+  college: '',
 })
 
 /** 加载用户列表 */
@@ -43,7 +44,7 @@ async function loadUsers(): Promise<void> {
 /** 新增用户 */
 function handleAdd(): void {
   isEdit.value = false
-  form.value = { id: 0, username: '', name: '', role: 'teacher', status: true }
+  form.value = { id: 0, username: '', name: '', role: 'teacher', status: true, college: '' }
   dialogVisible.value = true
 }
 
@@ -56,6 +57,7 @@ function handleEdit(row: SystemUser): void {
     name: row.name,
     role: row.role,
     status: row.status,
+    college: row.department,
   }
   dialogVisible.value = true
 }
@@ -102,6 +104,7 @@ async function saveUser(): Promise<void> {
         name: form.value.name,
         role: form.value.role,
         status: form.value.status,
+        college: form.value.college,
       })
     } else {
       await userApi.create({
@@ -109,6 +112,7 @@ async function saveUser(): Promise<void> {
         name: form.value.name,
         role: form.value.role,
         status: form.value.status,
+        college: form.value.college,
       })
     }
     dialogVisible.value = false
@@ -185,6 +189,9 @@ onMounted(loadUsers)
           <el-select v-model="form.role" style="width: 100%">
             <el-option v-for="(label, key) in RoleLabels" :key="key" :label="label" :value="key" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="所属学院">
+          <el-input v-model="form.college" placeholder="不填默认为计算机学院" clearable />
         </el-form-item>
         <el-form-item label="状态"><el-switch v-model="form.status" :disabled="form.role === 'admin'" /></el-form-item>
       </el-form>

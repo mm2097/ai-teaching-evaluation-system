@@ -7,7 +7,13 @@ import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
-import { fetchGradeTrend, fetchGradePredictions } from '@/api/analysis'
+import {
+  fetchGradeTrend,
+  fetchGradePredictions,
+  fetchGradeDistribution,
+  fetchKnowledgeHeatmap,
+  computeClassKnowledgeStats,
+} from '@/api/analysis'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
 const scope = useAnalysisScope('class')
@@ -23,17 +29,50 @@ const trendData = ref({ months: [] as string[], avgScore: [] as number[], passRa
 const predictions = ref<{ name: string; current: number; predicted: string; trend: string; confidence: number }[]>([])
 const classFeatures = ref<{ title: string; content: string }[]>([])
 
+function overallLevelText(avg: number): string {
+  if (avg >= 80) return '整体表现良好'
+  if (avg >= 70) return '处于中等水平'
+  return '需加强整体辅导'
+}
+
 async function loadTrend(): Promise<void> {
   if (!queryParams.value.courseId || !queryParams.value.classId) return
-  trendData.value = await fetchGradeTrend({ ...queryParams.value, analysisType: '成绩趋势' })
-  predictions.value = await fetchGradePredictions(queryParams.value)
+  const query = { ...queryParams.value, analysisType: '成绩趋势' }
+  const [trend, preds, dist, heatmap] = await Promise.all([
+    fetchGradeTrend(query),
+    fetchGradePredictions(query),
+    fetchGradeDistribution(query),
+    fetchKnowledgeHeatmap(query),
+  ])
+  trendData.value = trend
+  predictions.value = preds
 
-  const kps: string[] = []
-  const avg = trendData.value.avgScore.at(-1) ?? 0
+  const stats = dist.statistics ?? {}
+  const avg = stats.mean ?? trend.avgScore.at(-1) ?? 0
+  const maxScore = stats.maxScore ?? trend.maxScore.at(-1) ?? '-'
+  const minScore = stats.minScore ?? trend.minScore.at(-1) ?? '-'
+  const passHint = stats.passRate != null ? `及格率 ${stats.passRate}%。` : ''
+  const stdHint = stats.stdDev != null ? `标准差 ${stats.stdDev}。` : ''
+  const shapeHint = dist.characteristic && dist.characteristic !== '暂无成绩数据'
+    ? dist.characteristic
+    : '存在一定成绩分化'
+
+  const kpStats = computeClassKnowledgeStats(heatmap)
+  const weakNames = kpStats.weakPoints.map((p) => p.name)
+  let weakContent = '暂无知识点数据'
+  if (heatmap.knowledgePoints.length) {
+    if (weakNames.length) {
+      const focus = weakNames.slice(0, 3).join('、')
+      weakContent = `建议重点关注 ${focus} 等知识点`
+    } else {
+      weakContent = '本课程班级知识点掌握整体良好，暂无明显薄弱项'
+    }
+  }
+
   classFeatures.value = [
-    { title: '整体水平', content: `本课程班级最近一次平均分 ${avg}，${avg >= 80 ? '整体表现良好' : avg >= 70 ? '处于中等水平' : '需加强整体辅导'}` },
-    { title: '分化程度', content: `最高分 ${trendData.value.maxScore.at(-1) ?? '-'}、最低分 ${trendData.value.minScore.at(-1) ?? '-'}，存在一定成绩分化` },
-    { title: '薄弱知识点', content: kps.length ? `建议重点关注 ${kps.slice(-2).join('、')} 等知识点` : '暂无知识点数据' },
+    { title: '整体水平', content: `本课程班级平均分 ${avg}。${passHint}${overallLevelText(Number(avg))}` },
+    { title: '分化程度', content: `最高分 ${maxScore}、最低分 ${minScore}。${stdHint}${shapeHint}` },
+    { title: '薄弱知识点', content: weakContent },
   ]
 }
 

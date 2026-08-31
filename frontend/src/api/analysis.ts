@@ -139,6 +139,45 @@ export async function fetchGradePredictions(query: AnalysisQuery) {
   }
 }
 
+export interface GradeDistributionBucket {
+  range: string
+  low: number
+  high: number
+  count: number
+  ratio: number
+}
+
+export interface GradeDistributionStats {
+  count?: number
+  mean?: number
+  median?: number
+  stdDev?: number
+  maxScore?: number
+  minScore?: number
+  passRate?: number
+  excellentRate?: number
+  failRate?: number
+  skewness?: number
+}
+
+export interface GradeDistributionResult {
+  distribution: GradeDistributionBucket[]
+  statistics: GradeDistributionStats
+  characteristic: string
+}
+
+/** 成绩分布与班级特征（Analysis.ScoreTrend.Distribute） */
+export async function fetchGradeDistribution(query: AnalysisQuery): Promise<GradeDistributionResult> {
+  try {
+    const res = await request.get('/v1/analysis/grade-distribution', {
+      params: { course_id: query.courseId, class_id: query.classId },
+    })
+    return res.data as GradeDistributionResult
+  } catch {
+    return { distribution: [], statistics: {}, characteristic: '暂无成绩数据' }
+  }
+}
+
 /** 分析对象类型选项 */
 export const targetTypeOptions: { label: string; value: TargetType }[] = [
   { label: '学生', value: 'student' },

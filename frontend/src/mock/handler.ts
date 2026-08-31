@@ -36,6 +36,7 @@ import {
   studentProfile,
   knowledgeHeatmap,
   warnings,
+  gradeDistribution,
   gradePredictions,
 } from './analysis'
 import {
@@ -232,6 +233,9 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
   if (method === 'GET' && url === '/v1/analysis/knowledge-heatmap') {
     return ok(knowledgeHeatmap(params.course_id as number, params.class_id as number, params.student_id as number))
+  }
+  if (method === 'GET' && url === '/v1/analysis/grade-distribution') {
+    return ok(gradeDistribution(params))
   }
   if (method === 'GET' && url === '/v1/analysis/warnings') {
     return ok(warnings(params))

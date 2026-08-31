@@ -615,3 +615,116 @@ def get_grade_trend(
         "maxScore": max_scores,
         "minScore": min_scores,
     }
+
+
+@router.get("/dashboard/student-score-archive", tags=["看板"])
+def get_student_score_archive(
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """学生个人成绩档案：历次考试成绩明细（含班级均分与排名）。
+
+    权限：仅学生本人可查看，数据按当前登录学生隔离。
+    """
+    role = session.get(SysRole, current_user.role_id)
+    if not role or role.role_code != "student":
+        raise HTTPException(status_code=403, detail="仅学生可查看个人成绩档案")
+
+    student = session.exec(
+        select(Student).where(Student.user_id == current_user.user_id)
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="当前账号未关联学生信息")
+
+    enrollments = session.exec(
+        select(CourseStudent).where(
+            CourseStudent.student_id == student.student_id,
+            CourseStudent.status == 1,
+        )
+    ).all()
+    course_ids = sorted({item.course_id for item in enrollments})
+    if not course_ids:
+        return {"records": []}
+
+    courses = session.exec(
+        select(Course).where(Course.course_id.in_(course_ids))  # type: ignore[arg-type]
+    ).all()
+    course_map = {item.course_id: item for item in courses}
+
+    batches = session.exec(
+        select(ExamBatch).where(ExamBatch.course_id.in_(course_ids))  # type: ignore[arg-type]
+    ).all()
+    batches.sort(key=lambda b: (b.course_id, b.create_time))
+    batch_ids = [b.batch_id for b in batches if b.batch_id is not None]
+
+    # 同班同学（用于计算班级均分与排名）
+    class_student_ids = set(session.exec(
+        select(Student.student_id).where(Student.class_id == student.class_id)
+    ).all())
+
+    # 收集成绩：batch_id -> {student_id: [scores]}（合并新旧三张成绩表）
+    batch_scores: dict[int, dict[int, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    def _add(batch_id_val: int | None, student_id_val: int, score_val: float | None) -> None:
+        if batch_id_val is None or score_val is None:
+            return
+        batch_scores[batch_id_val][student_id_val].append(float(score_val))
+
+    for r in session.exec(
+        select(ScoreRecord).where(
+            ScoreRecord.course_id.in_(course_ids),  # type: ignore[arg-type]
+            ScoreRecord.student_id.in_(class_student_ids),  # type: ignore[arg-type]
+        )
+    ).all():
+        _add(r.batch_id, r.student_id, r.score)
+
+    if batch_ids:
+        for r in session.exec(
+            select(IndividualScore).where(
+                IndividualScore.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+                IndividualScore.student_id.in_(class_student_ids),  # type: ignore[arg-type]
+            )
+        ).all():
+            _add(r.exam_batch_id, r.student_id, r.score)
+
+        for r in session.exec(
+            select(CourseTestDetail).where(
+                CourseTestDetail.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+                CourseTestDetail.student_id.in_(class_student_ids),  # type: ignore[arg-type]
+            )
+        ).all():
+            _add(r.exam_batch_id, r.student_id, r.total_score)
+
+    records: list[dict] = []
+    for batch in batches:
+        if batch.batch_id is None:
+            continue
+        my_scores = batch_scores[batch.batch_id].get(student.student_id, [])
+        if not my_scores:
+            continue  # 该批次下本人无成绩（如考勤批次），跳过
+        my_score = round(sum(my_scores) / len(my_scores), 1)
+
+        peer_values: list[float] = []
+        for sid in class_student_ids:
+            vals = batch_scores[batch.batch_id].get(sid)
+            if vals:
+                peer_values.append(sum(vals) / len(vals))
+        class_avg = round(sum(peer_values) / len(peer_values), 1)
+        rank = 1 + sum(1 for v in peer_values if v > my_score)
+
+        course = course_map.get(batch.course_id)
+        records.append({
+            "id": batch.batch_id,
+            "courseName": course.course_name if course else "",
+            "semester": batch.semester,
+            "type": batch.batch_name,
+            "score": my_score,
+            "total": batch.full_score,
+            "classAvg": class_avg,
+            "rank": rank,
+            "date": batch.create_time.strftime("%Y-%m-%d") if batch.create_time else "",
+        })
+
+    return {"records": records}

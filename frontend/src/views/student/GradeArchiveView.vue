@@ -7,7 +7,7 @@ import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { delay } from '@/utils/auth'
+import { fetchStudentScoreArchive, type ScoreArchiveRecord } from '@/api/studentDashboard'
 
 const userStore = useUserStore()
 const loading = ref(true)
@@ -85,8 +85,13 @@ const stats = computed(() => {
 })
 
 onMounted(async () => {
-  await delay(300)
-  loading.value = false
+  try {
+    records.value = await fetchStudentScoreArchive()
+  } catch {
+    records.value = []
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 

@@ -37,3 +37,22 @@ export async function fetchStudentDashboardOverview(): Promise<StudentDashboardO
   const response = await request.get<StudentDashboardOverview>('/v1/dashboard/student-overview')
   return response.data
 }
+
+export interface ScoreArchiveRecord {
+  id: number
+  courseName: string
+  semester: string
+  type: string
+  score: number
+  total: number
+  classAvg: number
+  rank: number
+  date: string
+}
+
+export async function fetchStudentScoreArchive(): Promise<ScoreArchiveRecord[]> {
+  const response = await request.get<{ records: ScoreArchiveRecord[] }>(
+    '/v1/dashboard/student-score-archive',
+  )
+  return response.data.records
+}

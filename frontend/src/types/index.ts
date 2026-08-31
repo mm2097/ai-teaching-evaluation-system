@@ -138,6 +138,8 @@ export interface TeachingDataRecord {
   attendance?: string
   homework?: string
   dataType: 'score' | 'attendance' | 'assignment'
+  /** 子类型：individual_score / course_test_detail / attendance_sheet（旧表无此字段） */
+  subType?: string
   /** 成绩数据的批次名称（如"期中考试""期末考试"），考勤数据的状态文本 */
   batchName?: string
   /** 知识点/备注信息 */

@@ -75,6 +75,7 @@ interface TeachingDataApiRow {
   id: string
   recordId: number
   dataType: 'score' | 'attendance'
+  subType?: string
   studentId: string
   studentName: string
   courseId: number
@@ -102,6 +103,7 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     majorId: 0,
     classId: 0,
     dataType: row.dataType,
+    subType: row.subType,
     score: row.dataType === 'score' ? row.score : undefined,
     attendance: row.dataType === 'attendance' ? row.status : undefined,
     batchName: row.batchName,
@@ -139,6 +141,19 @@ export async function updateRowData(
   sourceData: Record<string, unknown>,
 ): Promise<void> {
   await request.put(`/v1/teaching-data/${recordId}/row`, { source_data: sourceData })
+}
+
+/**
+ * 删除单条教学数据（Data.Query.Delete，后端写入操作日志 BR4）。
+ *
+ * @param recordType 记录类型：score / individual_score / course_test_detail / attendance / attendance_sheet
+ * @param recordId   后端返回的记录主键
+ */
+export async function deleteTeachingData(
+  recordType: string,
+  recordId: number,
+): Promise<void> {
+  await request.delete(`/v1/teaching-data/${recordType}/${recordId}`)
 }
 
 /**

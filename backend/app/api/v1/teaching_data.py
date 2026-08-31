@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import openpyxl
 from typing import Any
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import Response
 from sqlmodel import Session, select
 from sqlalchemy import or_
@@ -24,7 +24,7 @@ from sqlalchemy import or_
 import logging
 
 from app.core.database import get_session, engine
-from app.core.operation_log import get_current_user
+from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole,
@@ -594,6 +594,130 @@ def edit_teaching_data(
 
     else:
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance")
+
+
+@router.delete("/teaching-data/{record_type}/{record_id}", tags=["教学数据"])
+def delete_teaching_data(
+    record_type: str,
+    record_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """删除单条教学数据（Data.Query.Delete + BR4 操作留痕）。
+
+    仅授课教师可删除自己课程的数据；每次删除都会写入操作日志。
+    支持旧表（ScoreRecord/AttendanceRecord）与新表（IndividualScore/AttendanceSheet/CourseTestDetail）。
+    """
+    student_no = ""
+    student_name = ""
+
+    if record_type == "score":
+        record = session.get(ScoreRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="成绩记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        # 级联删除该学生在本主批次下的各题扣分子记录（batch_name 形如 "{主批次}-第N大题"）
+        batch = session.get(ExamBatch, record.batch_id)
+        if batch:
+            sub_batches = session.exec(
+                select(ExamBatch).where(
+                    ExamBatch.course_id == course_id,
+                    ExamBatch.batch_name.like(f"{batch.batch_name}-第%"),
+                )
+            ).all()
+            for sub_batch in sub_batches:
+                for sub in session.exec(
+                    select(ScoreRecord).where(
+                        ScoreRecord.student_id == record.student_id,
+                        ScoreRecord.batch_id == sub_batch.batch_id,
+                    )
+                ).all():
+                    session.delete(sub)
+        session.delete(record)
+        session.commit()
+        label = "成绩记录"
+
+    elif record_type == "individual_score":
+        record = session.get(IndividualScore, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="单项成绩记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        session.delete(record)
+        session.commit()
+        label = "单项成绩记录"
+
+    elif record_type == "course_test_detail":
+        record = session.get(CourseTestDetail, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="课程测试记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        session.delete(record)
+        session.commit()
+        label = "课程测试记录"
+
+    elif record_type == "attendance":
+        record = session.get(AttendanceRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        session.delete(record)
+        session.commit()
+        label = "考勤记录"
+
+    elif record_type == "attendance_sheet":
+        record = session.get(AttendanceSheet, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤情况记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        session.delete(record)
+        session.commit()
+        label = "考勤情况记录"
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance, attendance_sheet",
+        )
+
+    save_operation_log(
+        session,
+        current_user.user_id,
+        "教学数据",
+        "删除数据",
+        f"删除{label}（学生：{student_name}，学号：{student_no}，课程ID：{course_id}）",
+        get_client_ip(request),
+    )
+    return {"recordType": record_type, "recordId": record_id, "deleted": True}
 
 
 @router.get("/teaching-data/export", tags=["教学数据"])

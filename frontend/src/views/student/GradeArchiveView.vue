@@ -12,15 +12,8 @@ import { fetchStudentScoreArchive, type ScoreArchiveRecord } from '@/api/student
 const userStore = useUserStore()
 const loading = ref(true)
 
-/** 历史成绩记录 */
-const records = ref([
-  { id: 1, courseName: '数据结构', semester: '2025-2026-1', type: '期中考', score: 82, total: 100, classAvg: 76, rank: 15, date: '2025-11-15' },
-  { id: 2, courseName: '数据结构', semester: '2025-2026-1', type: '期末考', score: 88, total: 100, classAvg: 74, rank: 8, date: '2026-01-20' },
-  { id: 3, courseName: '数据结构', semester: '2025-2026-2', type: '第一次测验', score: 85, total: 100, classAvg: 72, rank: 10, date: '2026-03-10' },
-  { id: 4, courseName: '数据结构', semester: '2025-2026-2', type: '第二次测验', score: 90, total: 100, classAvg: 73, rank: 6, date: '2026-04-15' },
-  { id: 5, courseName: '操作系统', semester: '2025-2026-1', type: '期末考', score: 82, total: 100, classAvg: 74, rank: 12, date: '2026-01-22' },
-  { id: 6, courseName: '计算机网络', semester: '2025-2026-1', type: '期末考', score: 78, total: 100, classAvg: 72, rank: 18, date: '2026-01-25' },
-])
+/** 历史成绩记录（来自后端真实接口） */
+const records = ref<ScoreArchiveRecord[]>([])
 
 const courseFilter = ref('')
 const courseOptions = computed(() =>

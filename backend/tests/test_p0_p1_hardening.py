@@ -21,6 +21,7 @@ from app.models import (
     KnowledgePoint,
     Student,
     StudentAnswerRecord,
+    StudyWarning,
     SysUser,
     TaskQuestion,
 )
@@ -328,3 +329,88 @@ def test_student_ai_quota_and_per_request_limit_are_persistent(session, monkeypa
     assert quota_error.value.status_code == 429
     assert size_error.value.status_code == 422
     assert len(usages) == 2
+
+
+# ============================================================================
+# 预警"标记已处理"状态更新接口（周计划任务 10）
+# ============================================================================
+
+def _warning(session, warning_id: int) -> StudyWarning:
+    return session.get(StudyWarning, warning_id)
+
+
+def test_teacher_marks_warning_handled_and_persists(session):
+    warning = _warning(session, 1)
+    warning.handle_status = 0
+    session.add(warning)
+    session.commit()
+
+    result = analysis.update_warning_status(
+        1, 1,
+        session=session,
+        current_user=_user(session, 1),
+    )
+
+    assert result["status"] == 1
+    assert result["statusLabel"] == "已处理"
+    assert _warning(session, 1).handle_status == 1  # 真实入库
+
+
+def test_update_warning_status_rejects_invalid_value(session):
+    with pytest.raises(HTTPException) as exc_info:
+        analysis.update_warning_status(
+            1, 2,
+            session=session,
+            current_user=_user(session, 1),
+        )
+    assert exc_info.value.status_code == 422
+
+
+def test_update_warning_status_rejects_non_teacher(session):
+    # 学生角色（user_id=2, role_id=2）无权更新预警状态
+    with pytest.raises(HTTPException) as exc_info:
+        analysis.update_warning_status(
+            1, 1,
+            session=session,
+            current_user=_user(session, 2),
+        )
+    assert exc_info.value.status_code == 403
+
+
+def test_update_warning_status_missing_warning_404(session):
+    with pytest.raises(HTTPException) as exc_info:
+        analysis.update_warning_status(
+            999, 1,
+            session=session,
+            current_user=_user(session, 1),
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_get_warnings_status_filter(session):
+    warning = _warning(session, 1)
+    warning.handle_status = 1
+    session.add(warning)
+    # 补一条待处理预警，保证两个状态列表均非空
+    pending_warning = StudyWarning(
+        course_id=1, student_id=2, warning_type="W3:缺勤超标",
+        warning_level=1, warning_reason="缺勤3次", handle_status=0,
+    )
+    session.add(pending_warning)
+    session.commit()
+    session.refresh(pending_warning)
+
+    teacher = _user(session, 1)
+    handled = analysis.get_warnings(
+        course_id=1, class_id=None, level=None, status=1, student_id=None,
+        session=session, current_user=teacher,
+    )
+    pending = analysis.get_warnings(
+        course_id=1, class_id=None, level=None, status=0, student_id=None,
+        session=session, current_user=teacher,
+    )
+
+    assert [w["id"] for w in handled] == [1]
+    assert all(w["status"] == 1 for w in handled)
+    assert any(w["id"] == pending_warning.warning_id for w in pending)
+    assert all(w["status"] == 0 for w in pending)

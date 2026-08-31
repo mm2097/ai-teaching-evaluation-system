@@ -8,6 +8,7 @@ from app.models import (
     Student, Course, CourseStudent, ClassInfo,
     KnowledgeMastery, KnowledgePoint, KnowledgeModule,
     StudyWarning, StudentProfile,
+    Notification,
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult,
     SysUser, Teacher, SysRole,
     IndividualScore, CourseTestDetail, ExamBatch,
@@ -428,11 +429,11 @@ def _parse_warning_type(raw_type: str) -> tuple[str, str]:
     return "", raw_type or ""
 
 
-def _warning_response(w, student, course, cls) -> dict:
+def _warning_response(w, student, course, cls, notified: bool = False) -> dict:
     """将 StudyWarning 模型转为 API 响应格式。"""
     rule_code, display_type = _parse_warning_type(w.warning_type)
     level_label = {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低")
-    status_label = {0: "未处理", 1: "已处理"}.get(w.handle_status, "未知")
+    status_label = {0: "待处理", 1: "已处理"}.get(w.handle_status, "未知")
 
     return {
         "id": w.warning_id,
@@ -450,7 +451,8 @@ def _warning_response(w, student, course, cls) -> dict:
         "reason": w.warning_reason,
         "warningTime": w.create_time.strftime("%Y-%m-%d %H:%M") if w.create_time else "",
         "status": w.handle_status,
-        "statusLabel": status_label,      # 未处理/已处理
+        "statusLabel": status_label,      # 待处理/已处理
+        "notified": notified,             # 是否已向学生发送过站内通知
     }
 
 
@@ -459,6 +461,7 @@ def get_warnings(
     course_id: int | None = Query(default=None),
     class_id: int | None = Query(default=None),
     level: str | None = Query(default=None, description="高/中/低"),
+    status: int | None = Query(default=None, description="处理状态: 0=待处理, 1=已处理"),
     student_id: int | None = Query(default=None, description="按数据库 student_id 筛选"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
@@ -504,8 +507,19 @@ def get_warnings(
         stmt = stmt.where(StudyWarning.course_id.in_(taught_ids))  # type: ignore[arg-type]
     if student_id:
         stmt = stmt.where(StudyWarning.student_id == student_id)
+    if status is not None:
+        stmt = stmt.where(StudyWarning.handle_status == status)
 
     warnings = session.exec(stmt).all()
+
+    # 一次查询带出「已发送通知」的预警 id，避免逐条 N+1
+    notified_ids: set[int] = set()
+    if warnings:
+        notified_ids = set(session.exec(
+            select(Notification.warning_id).where(
+                Notification.warning_id.in_([w.warning_id for w in warnings])  # type: ignore[arg-type]
+            )
+        ).all())
 
     result = []
     for w in warnings:
@@ -520,9 +534,110 @@ def get_warnings(
             if level_map.get(w.warning_level) != level:
                 continue
 
-        result.append(_warning_response(w, student, course, cls))
+        result.append(_warning_response(
+            w, student, course, cls, notified=w.warning_id in notified_ids,
+        ))
 
     return result
+
+
+@router.put("/analysis/warnings/{warning_id}/status", tags=["学情分析"])
+def update_warning_status(
+    warning_id: int,
+    status: int = Query(..., description="处理状态: 0=待处理, 1=已处理"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """更新预警处理状态（标记已处理/恢复待处理）。
+
+    状态真实入库：刷新预警扫描时已处理记录不会被覆盖删除。
+
+    权限（Analysis.Warning.UserValid）：仅课程授课教师可操作。
+    """
+    if status not in (0, 1):
+        raise HTTPException(
+            status_code=422,
+            detail="处理状态仅支持 0（待处理）或 1（已处理）",
+        )
+
+    warning = session.get(StudyWarning, warning_id)
+    if not warning:
+        raise HTTPException(status_code=404, detail="预警记录不存在")
+
+    _check_course_access(session, current_user, warning.course_id)
+
+    warning.handle_status = status
+    session.add(warning)
+    session.commit()
+    session.refresh(warning)
+
+    student = session.get(Student, warning.student_id)
+    course = session.get(Course, warning.course_id)
+    cls = session.get(ClassInfo, student.class_id) if student else None
+    notified = session.exec(
+        select(Notification).where(Notification.warning_id == warning.warning_id)
+    ).first() is not None
+    return _warning_response(warning, student, course, cls, notified=notified)
+
+
+@router.post("/analysis/warnings/{warning_id}/notify", tags=["学情分析"])
+def notify_warning_student(
+    warning_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """向预警学生发送站内通知（真实入库）。
+
+    教师点击"发送通知"后生成一条 notification 记录，学生端可在
+    顶部铃铛的消息通知中查看。同一预警仅允许发送一次。
+
+    权限（Analysis.Warning.UserValid）：仅课程授课教师可操作。
+    """
+    warning = session.get(StudyWarning, warning_id)
+    if not warning:
+        raise HTTPException(status_code=404, detail="预警记录不存在")
+
+    _check_course_access(session, current_user, warning.course_id)
+
+    existing = session.exec(
+        select(Notification).where(Notification.warning_id == warning_id)
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="已向该学生发送过预警通知")
+
+    student = session.get(Student, warning.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="预警学生不存在")
+    course = session.get(Course, warning.course_id)
+
+    _, display_type = _parse_warning_type(warning.warning_type)
+    level_label = {1: "低", 2: "中", 3: "高"}.get(warning.warning_level, "低")
+    title = f"学情预警：{display_type}"
+    content = (
+        f"您在《{course.course_name if course else ''}》课程中触发学情预警"
+        f"（{level_label}风险）：{warning.warning_reason}。"
+        f"请及时关注学习状态，并与任课老师沟通。"
+    )
+
+    notification = Notification(
+        course_id=warning.course_id,
+        student_id=warning.student_id,
+        warning_id=warning.warning_id,
+        title=title,
+        content=content,
+        is_read=0,
+    )
+    session.add(notification)
+    session.commit()
+    session.refresh(notification)
+
+    return {
+        "notificationId": notification.notification_id,
+        "studentId": student.student_no,
+        "studentName": student.real_name,
+        "title": title,
+        "message": f"预警通知已发送给 {student.real_name}",
+    }
 
 
 @router.post("/analysis/warnings/refresh", tags=["学情分析"])

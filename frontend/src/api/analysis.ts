@@ -99,12 +99,32 @@ export async function fetchWarnings(query: AnalysisQuery & {
         course_id: query.courseId,
         class_id: query.classId,
         level: query.level,
+        status: query.status,
       },
     })
     return res.data
   } catch {
     return []
   }
+}
+
+/** 更新预警处理状态（标记已处理：status=1 / 恢复待处理：status=0） */
+export async function updateWarningStatus(
+  warningId: number,
+  status: number,
+): Promise<WarningRecord> {
+  const res = await request.put(`/v1/analysis/warnings/${warningId}/status`, null, {
+    params: { status },
+  })
+  return res.data
+}
+
+/** 向预警学生发送站内通知（学生端铃铛可见） */
+export async function sendWarningNotice(
+  warningId: number,
+): Promise<{ notificationId: number; studentName: string; message: string }> {
+  const res = await request.post(`/v1/analysis/warnings/${warningId}/notify`)
+  return res.data
 }
 
 /** 获取成绩预测列表 */

@@ -6,7 +6,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchWarnings } from '@/api/analysis'
+import { fetchWarnings, updateWarningStatus, sendWarningNotice } from '@/api/analysis'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
@@ -120,26 +120,49 @@ function viewDetail(row: WarningRecord): void {
   drawerVisible.value = true
 }
 
-function markResolved(): void {
-  if (!currentWarning.value) return
-  const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
-  if (idx !== -1) {
-    warningList.value[idx] = { ...warningList.value[idx]!, status: 2 }
-    currentWarning.value = warningList.value[idx]
+const markingResolved = ref(false)
+
+async function markResolved(): Promise<void> {
+  if (!currentWarning.value || markingResolved.value) return
+  markingResolved.value = true
+  try {
+    await updateWarningStatus(currentWarning.value.id, 1)
+    const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+    if (idx !== -1) {
+      warningList.value[idx] = { ...warningList.value[idx]!, status: 1 }
+      currentWarning.value = warningList.value[idx]
+    }
+    ElMessage.success('已标记为已处理')
+  } catch {
+    // 错误提示由 request 拦截器统一处理
+  } finally {
+    markingResolved.value = false
   }
-  ElMessage.success('已标记为已处理')
 }
 
-function sendNotice(): void {
-  if (!currentWarning.value) return
-  ElMessage.success(`已向 ${currentWarning.value.studentName} 发送预警通知（模拟）`)
+const sendingNotice = ref(false)
+
+async function sendNotice(): Promise<void> {
+  if (!currentWarning.value || sendingNotice.value) return
+  sendingNotice.value = true
+  try {
+    await sendWarningNotice(currentWarning.value.id)
+    const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+    if (idx !== -1) {
+      warningList.value[idx] = { ...warningList.value[idx]!, notified: true }
+      currentWarning.value = warningList.value[idx]
+    }
+    ElMessage.success(`预警通知已发送给 ${currentWarning.value.studentName}，学生可在消息通知中查看`)
+  } catch {
+    // 错误提示（含重复发送 409）由 request 拦截器统一处理
+  } finally {
+    sendingNotice.value = false
+  }
 }
 
 const statusOptions = [
   { label: '待处理', value: 0 },
-  { label: '处理中', value: 1 },
-  { label: '已处理', value: 2 },
-  { label: '已忽略', value: 3 },
+  { label: '已处理', value: 1 },
 ]
 </script>
 
@@ -214,7 +237,7 @@ const statusOptions = [
         <el-table-column prop="warningTime" label="预警时间" width="120" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 2 ? 'success' : row.status === 0 ? 'danger' : 'warning'">
+            <el-tag size="small" :type="row.status === 1 ? 'success' : 'danger'">
               {{ statusOptions.find(s => s.value === row.status)?.label }}
             </el-tag>
           </template>
@@ -243,8 +266,17 @@ const statusOptions = [
         <el-descriptions-item label="预警时间">{{ currentWarning?.warningTime }}</el-descriptions-item>
       </el-descriptions>
       <div style="margin-top: 20px">
-        <el-button type="primary" @click="markResolved">标记已处理</el-button>
-        <el-button @click="sendNotice">发送通知</el-button>
+        <el-button
+          type="primary"
+          :loading="markingResolved"
+          :disabled="currentWarning?.status === 1"
+          @click="markResolved"
+        >{{ currentWarning?.status === 1 ? '已处理' : '标记已处理' }}</el-button>
+        <el-button
+          :loading="sendingNotice"
+          :disabled="currentWarning?.notified === true"
+          @click="sendNotice"
+        >{{ currentWarning?.notified ? '已通知' : '发送通知' }}</el-button>
       </div>
     </el-drawer>
   </div>

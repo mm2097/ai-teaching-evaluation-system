@@ -509,7 +509,20 @@ export interface WarningRecord {
   level: '高' | '中' | '低'
   reason: string
   warningTime: string
-  status: 0 | 1 | 2 | 3
+  status: 0 | 1 // 0=待处理, 1=已处理
+  notified?: boolean // 是否已向学生发送过站内通知
+}
+
+/** 站内通知（教师 → 学生） */
+export interface NotificationItem {
+  id: number
+  title: string
+  content: string
+  courseId?: number
+  courseName?: string
+  warningId?: number
+  isRead: boolean
+  createTime: string
 }
 
 /** 评价等级 */

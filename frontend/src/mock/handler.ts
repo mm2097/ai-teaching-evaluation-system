@@ -46,6 +46,7 @@ import {
 } from './evaluation'
 import { classReport, studentReport } from './report'
 import { systemLogs } from './logs'
+import { addNotification, listNotifications, markAllRead, markRead } from './notifications'
 
 /* ============================================================ */
 /* 字段映射工具（后端格式 → 前端期望）                             */
@@ -234,6 +235,43 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
   if (method === 'GET' && url === '/v1/analysis/warnings') {
     return ok(warnings(params))
+  }
+  if (method === 'PUT' && matchPath(url, '/v1/analysis/warnings/:id/status')) {
+    const id = extractIdFromSegment(url, 1)
+    const found = warnings(params).find((w) => w.id === id)
+    if (!found) return { status: 404, data: { detail: '预警记录不存在' } }
+    return ok({ ...found, status: params.status as number })
+  }
+  if (method === 'POST' && matchPath(url, '/v1/analysis/warnings/:id/notify')) {
+    const id = extractIdFromSegment(url, 1)
+    const found = warnings(params).find((w) => w.id === id)
+    if (!found) return { status: 404, data: { detail: '预警记录不存在' } }
+    const item = addNotification({
+      courseId: found.courseId,
+      courseName: found.courseName,
+      warningId: found.id,
+      title: `学情预警：${found.type}`,
+      content: `您在《${found.courseName}》课程中触发学情预警：${found.reason}。请及时关注学习状态，并与任课老师沟通。`,
+    })
+    return ok({
+      notificationId: item.id,
+      studentName: found.studentName,
+      title: item.title,
+      message: `预警通知已发送给 ${found.studentName}`,
+    })
+  }
+
+  /* ----- 消息通知 ----- */
+  if (method === 'GET' && url === '/v1/notifications') {
+    return ok(listNotifications())
+  }
+  if (method === 'PUT' && url === '/v1/notifications/read-all') {
+    return ok({ updated: markAllRead() })
+  }
+  if (method === 'PUT' && matchPath(url, '/v1/notifications/:id/read')) {
+    const item = markRead(extractIdFromSegment(url, 1))
+    if (!item) return { status: 404, data: { detail: '通知不存在' } }
+    return ok(item)
   }
   if (method === 'GET' && url === '/v1/analysis/grade-predictions') {
     return ok(gradePredictions(params.course_id as number, params.class_id as number))

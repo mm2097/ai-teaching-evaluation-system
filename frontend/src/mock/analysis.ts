@@ -149,7 +149,7 @@ export function warnings(_params: Record<string, unknown>) {
       classId: 3, deptId: 2, courseId: 1, courseName: '数据结构与算法',
       semesterId: 2, type: '综合预警', level: '高',
       reason: '成绩下滑 + 出勤不足 + 作业缺交，多维度预警',
-      warningTime: '2026-03-14 14:00:00', status: 2,
+      warningTime: '2026-03-14 14:00:00', status: 1,
     },
   ]
 }

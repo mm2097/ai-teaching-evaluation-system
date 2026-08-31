@@ -25,6 +25,7 @@ from app.models.question import (
 )
 from app.models.evaluation import EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore
 from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
+from app.models.notification import Notification
 from app.models.log import AiGenerationLog, SysOperationLog
 
 __all__ = [
@@ -38,5 +39,6 @@ __all__ = [
     "AiQuestion", "AnswerTask", "AnswerTaskClass", "TaskQuestion", "StudentAnswerRecord",
     "EvalDimension", "EvalIndex", "StudentEvaluationResult", "EvalDimensionScore",
     "KnowledgeMastery", "StudyWarning", "StudentProfile",
+    "Notification",
     "AiGenerationLog", "SysOperationLog",
 ]

@@ -22,6 +22,7 @@ from app.models import (
     AiQuestion, AnswerTask, AnswerTaskClass, TaskQuestion, StudentAnswerRecord,
     EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore,
     KnowledgeMastery, StudyWarning, StudentProfile,
+    Notification,
     SysOperationLog,
 )
 
@@ -853,6 +854,21 @@ def seed() -> None:
         session.add_all(warnings)
         session.commit()
         print(f"  学情预警: {len(warnings)} 条")
+
+        # ========== 18a. 站内通知（演示：学生账号 student/赵伟 收到两条） ==========
+        notifications = [
+            Notification(course_id=1, student_id=1, warning_id=None,
+                         title="学情预警：成绩下滑",
+                         content="您在《计算机网络》课程中触发学情预警（中风险）：期末成绩较平时大幅下滑，连续两次不及格。请及时关注学习状态，并与任课老师沟通。",
+                         is_read=0),
+            Notification(course_id=1, student_id=1, warning_id=None,
+                         title="考试成绩发布提醒",
+                         content="《计算机网络》期中考试成绩已发布，请登录系统查看个人成绩档案。",
+                         is_read=1),
+        ]
+        session.add_all(notifications)
+        session.commit()
+        print(f"  站内通知: {len(notifications)} 条")
 
         # ========== 19. 学情画像 ==========
         profiles = [

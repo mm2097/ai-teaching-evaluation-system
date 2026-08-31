@@ -4,12 +4,16 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
 import { fetchKnowledgeHeatmap, computeClassKnowledgeStats, type KnowledgeHeatmapResult } from '@/api/analysis'
+import { fetchSemesters } from '@/api/dict'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 import { useUserStore } from '@/stores/user'
+
+const route = useRoute()
 
 type ViewMode = 'class' | 'student'
 
@@ -180,10 +184,50 @@ function handleViewModeChange(mode: ViewMode): void {
   viewMode.value = mode
 }
 
+/**
+ * 从路由 query 读取看板下钻携带的筛选条件并应用
+ * 支持 semester（学期编码）/ courseId / classId
+ * 注意：需按"学期 → 课程 → 班级"顺序设置并等待级联刷新，
+ * 保证 loadHeatmap 使用最终筛选值
+ */
+async function applyQueryFilters(): Promise<void> {
+  const qSemester = route.query.semester
+  if (typeof qSemester === 'string' && qSemester) {
+    const sems = await fetchSemesters()
+    const sem = sems.find((s) => s.semesterCode === qSemester)
+    if (sem && sem.id !== semesterId.value) {
+      semesterId.value = sem.id
+      // 学期变化会级联刷新课程/班级选项，等待完成后再设置下游筛选
+      await scope.loadOptions(true)
+    }
+  }
+  const qCourse = Number(route.query.courseId)
+  if (Number.isFinite(qCourse) && qCourse > 0 && qCourse !== courseId.value) {
+    courseId.value = qCourse
+  }
+  const qClass = Number(route.query.classId)
+  if (Number.isFinite(qClass) && qClass > 0 && qClass !== classId.value) {
+    classId.value = qClass
+  }
+  // 等待课程/班级变更触发的级联刷新完成，最终值收敛后再查询
+  await scope.loadOptions(true)
+}
+
 onMounted(async () => {
   await scope.loadOptions()
+  await applyQueryFilters()
   await loadHeatmap()
 })
+
+// 从看板再次下钻时（同一组件复用），重新应用筛选并刷新热力图
+watch(
+  () => route.query,
+  async () => {
+    if (!route.query.courseId && !route.query.classId) return
+    await applyQueryFilters()
+    await loadHeatmap()
+  },
+)
 </script>
 
 <template>

@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData, exportTeachingData } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -314,8 +314,35 @@ function handleDetail(row: TeachingDataRecord): void {
   detailVisible.value = true
 }
 
-function handleExport(): void {
-  ElMessage.success('数据导出成功，文件已保存至下载目录')
+const exporting = ref(false)
+
+async function handleExport(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  exporting.value = true
+  try {
+    const { blob, filename } = await exportTeachingData({
+      courseId: courseId.value,
+      // 学生下拉选项的 id 即学号，交给后端做姓名/学号模糊匹配
+      keyword: selectedStudentId.value !== undefined ? String(selectedStudentId.value) : undefined,
+      dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance'
+        ? query.value.dataType
+        : undefined,
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('数据导出成功，文件已保存至下载目录')
+  } catch {
+    ElMessage.error('数据导出失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function filterByCurrentFile(): void {
@@ -376,7 +403,7 @@ function filterByCurrentFile(): void {
             {{ dataFlowStore.currentImportLog.fileName }}
           </el-button>
           <el-button type="danger" :icon="Delete" plain @click="handleBatchDelete">批量删除</el-button>
-          <el-button type="primary" :icon="Download" @click="handleExport">导出 Excel</el-button>
+          <el-button type="primary" :icon="Download" :loading="exporting" @click="handleExport">导出 Excel</el-button>
         </div>
       </div>
 

@@ -48,11 +48,12 @@ async function getRoleId(role: UserRole): Promise<number> {
 }
 
 export const userApi = {
-  /** 列出用户，可按角色、学生班级筛选 */
-  async list(params?: { classId?: number; role?: UserRole | '' }): Promise<SystemUser[]> {
+  /** 列出用户，可按角色、学生班级、账号状态筛选 */
+  async list(params?: { classId?: number; role?: UserRole | ''; status?: number }): Promise<SystemUser[]> {
     const q: Record<string, string | number> = {}
     if (params?.classId) q.class_id = params.classId
     if (params?.role) q.role_code = params.role
+    if (params?.status !== undefined && params.status !== null) q.status = params.status
     const res = await request.get('/users', { params: q })
     return (res.data as UserResponse[]).map(mapUser)
   },

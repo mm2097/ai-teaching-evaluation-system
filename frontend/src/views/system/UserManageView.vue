@@ -4,6 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search } from '@element-plus/icons-vue'
 import { userApi } from '@/api/users'
@@ -11,11 +12,13 @@ import { fetchClasses } from '@/api/dict'
 import { RoleLabels } from '@/types'
 import type { ClassInfo, SystemUser, UserRole } from '@/types'
 
+const route = useRoute()
 const userList = ref<SystemUser[]>([])
 const classOptions = ref<ClassInfo[]>([])
 const keyword = ref('')
 const roleFilter = ref<UserRole | ''>('')
 const classFilter = ref<number | undefined>()
+const statusFilter = ref<number | ''>('')
 const loading = ref(false)
 
 const dialogVisible = ref(false)
@@ -51,6 +54,7 @@ const filteredUsers = computed(() => {
     if (classFilter.value != null) {
       if (u.role !== 'student' || u.classId !== classFilter.value) return false
     }
+    if (statusFilter.value !== '' && (u.status ? 1 : 0) !== statusFilter.value) return false
     return true
   })
 })
@@ -61,6 +65,7 @@ async function loadUsers(): Promise<void> {
     userList.value = await userApi.list({
       role: roleFilter.value || undefined,
       classId: classFilter.value,
+      status: statusFilter.value === '' ? undefined : statusFilter.value,
     })
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载用户失败')
@@ -180,13 +185,36 @@ async function resetPassword(row: SystemUser): Promise<void> {
   }
 }
 
-watch([roleFilter, classFilter], () => {
+watch([roleFilter, classFilter, statusFilter], () => {
   void loadUsers()
 })
 
+/**
+ * 从路由 query 读取管理工作台下钻携带的筛选条件并应用
+ * 支持 roleCode（teacher/student/admin）与 status（0=停用, 1=正常）
+ */
+function applyQueryFilters(): void {
+  const qRole = route.query.roleCode
+  if (typeof qRole === 'string' && (qRole === 'teacher' || qRole === 'student' || qRole === 'admin')) {
+    roleFilter.value = qRole
+  }
+  const qStatus = Number(route.query.status)
+  if (qStatus === 0 || qStatus === 1) statusFilter.value = qStatus
+}
+
 onMounted(async () => {
+  applyQueryFilters()
   await Promise.all([loadUsers(), loadClasses()])
 })
+
+// 从管理工作台再次下钻时（同一组件复用），重新应用筛选并刷新
+watch(
+  () => route.query,
+  () => {
+    applyQueryFilters()
+    void loadUsers()
+  },
+)
 </script>
 
 <template>
@@ -204,6 +232,10 @@ onMounted(async () => {
             :label="item.className"
             :value="item.id"
           />
+        </el-select>
+        <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 130px">
+          <el-option label="正常账号" :value="1" />
+          <el-option label="停用账号" :value="0" />
         </el-select>
         <el-button type="primary" :icon="Plus" @click="handleAdd">新增用户</el-button>
       </div>

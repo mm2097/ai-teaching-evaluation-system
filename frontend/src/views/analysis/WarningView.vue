@@ -4,6 +4,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchWarnings, updateWarningStatus, sendWarningNotice } from '@/api/analysis'
@@ -12,6 +13,7 @@ import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
 import type { LinkedStudentOption, WarningRecord } from '@/types'
 
+const route = useRoute()
 const userStore = useUserStore()
 const role = computed(() => userStore.userInfo?.role || 'student')
 
@@ -96,7 +98,39 @@ async function handleQuery(): Promise<void> {
   await loadWarnings()
 }
 
-onMounted(handleQuery)
+/**
+ * 从路由 query 读取看板下钻携带的筛选条件并应用
+ * 支持 courseId / classId / semester（学期编码）
+ */
+function applyQueryFilters(): void {
+  const qSemester = route.query.semester
+  if (typeof qSemester === 'string' && qSemester) {
+    const sem = semesterOptions.value.find((s) => s.value === qSemester)
+    if (sem?.id) semesterId.value = sem.id
+  }
+  const qCourse = Number(route.query.courseId)
+  if (Number.isFinite(qCourse) && qCourse > 0) courseId.value = qCourse
+  const qClass = Number(route.query.classId)
+  if (Number.isFinite(qClass) && qClass > 0) classId.value = qClass
+}
+
+onMounted(async () => {
+  // 先加载学期选项，才能把 semester 编码映射为学期 id
+  await loadSemesters()
+  applyQueryFilters()
+  await handleQuery()
+})
+
+// 从看板再次下钻时（同一组件复用），重新应用筛选并刷新
+watch(
+  () => route.query,
+  async () => {
+    if (!route.query.courseId && !route.query.classId) return
+    await loadSemesters()
+    applyQueryFilters()
+    await handleQuery()
+  },
+)
 
 let _inited = false
 watch([courseId, classId, levelFilter, typeFilter, statusFilter], async () => {

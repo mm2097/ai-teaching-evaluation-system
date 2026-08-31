@@ -68,6 +68,8 @@ def _create(client, **kwargs):
         payload["college"] = kwargs["college"]
     if "class_id" in kwargs:
         payload["class_id"] = kwargs["class_id"]
+    if "status" in kwargs:
+        payload["status"] = kwargs["status"]
     return client.post("/api/users", json=payload, headers=_auth())
 
 
@@ -141,3 +143,19 @@ def test_update_student_class(client):
     assert resp.status_code == 200
     assert resp.json()["class_id"] == 2
     assert resp.json()["class_name"] == "软件1801班"
+
+
+def test_list_users_filter_by_status(client):
+    """按账号状态筛选：0=停用, 1=正常。"""
+    _create(client, username="t_off", status=0)
+    _create(client, username="t_on", status=1)
+
+    disabled = client.get("/api/users", params={"status": 0}, headers=_auth()).json()
+    names = {u["username"] for u in disabled}
+    assert "t_off" in names
+    assert "t_on" not in names
+
+    enabled = client.get("/api/users", params={"status": 1}, headers=_auth()).json()
+    names = {u["username"] for u in enabled}
+    assert "t_on" in names
+    assert "t_off" not in names

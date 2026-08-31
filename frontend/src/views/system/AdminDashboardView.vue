@@ -32,6 +32,7 @@ const statCards = computed(() => {
       icon: 'CircleCheck',
       color: '#10b981',
       link: '/system/user',
+      query: { status: '1' },
     },
     {
       title: '教师账号',
@@ -39,6 +40,7 @@ const statCards = computed(() => {
       icon: 'Reading',
       color: '#06b6d4',
       link: '/system/user',
+      query: { roleCode: 'teacher' },
     },
     {
       title: '学生账号',
@@ -46,6 +48,7 @@ const statCards = computed(() => {
       icon: 'School',
       color: '#8b5cf6',
       link: '/system/user',
+      query: { roleCode: 'student' },
     },
     {
       title: '停用账号',
@@ -53,6 +56,7 @@ const statCards = computed(() => {
       icon: 'Warning',
       color: '#f59e0b',
       link: '/system/user',
+      query: { status: '0' },
     },
   ]
 })
@@ -105,8 +109,10 @@ async function loadOverview(): Promise<void> {
   }
 }
 
-function handleStatClick(item: { link?: string }): void {
-  if (item.link) router.push(item.link)
+function handleStatClick(item: { link?: string; query?: Record<string, string> }): void {
+  if (!item.link) return
+  // 携带卡片对应的筛选条件跳转，用户管理页自动按同一口径过滤
+  router.push({ path: item.link, query: item.query })
 }
 
 onMounted(loadOverview)

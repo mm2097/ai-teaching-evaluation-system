@@ -114,10 +114,11 @@ def list_roles(
 def list_users(
     class_id: int | None = Query(default=None, description="按学生所属班级筛选"),
     role_code: str | None = Query(default=None, description="按角色筛选：admin/teacher/student"),
+    status: int | None = Query(default=None, description="按账号状态筛选：0=停用, 1=正常"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(require_admin),
 ) -> list[dict]:
-    """列出用户。可按角色、学生所属班级筛选。"""
+    """列出用户。可按角色、学生所属班级、账号状态筛选。"""
     stmt = select(SysUser)
     if class_id is not None:
         stmt = stmt.join(Student, Student.user_id == SysUser.user_id).where(  # type: ignore[arg-type]
@@ -127,6 +128,8 @@ def list_users(
         role = session.exec(select(SysRole).where(SysRole.role_code == role_code)).first()
         if role:
             stmt = stmt.where(SysUser.role_id == role.role_id)
+    if status is not None:
+        stmt = stmt.where(SysUser.status == status)
     users = session.exec(stmt.order_by(SysUser.create_time.desc())).all()
     return [_serialize_user(session, user) for user in users]
 

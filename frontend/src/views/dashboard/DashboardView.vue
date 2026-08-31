@@ -31,7 +31,8 @@ async function loadDashboardData(courseId?: number, classId?: number) {
     if (classId) params.class_id = classId
     const [statsRes, warnRes] = await Promise.all([
       request.get('/v1/dashboard/stats', { params }),
-      request.get('/v1/analysis/warnings', { params: { class_id: classId } }),
+      // 预警人数与"异常学情预警"页保持同一筛选口径（课程 + 班级）
+      request.get('/v1/analysis/warnings', { params: { course_id: courseId, class_id: classId } }),
     ])
     dashboardStats.value = statsRes.data
     warnings.value = warnRes.data
@@ -222,7 +223,15 @@ const trendLineOption = computed<EChartsOption>(() => {
 })
 
 function handleStatClick(item: { link?: string }): void {
-  if (item.link) router.push(item.link)
+  if (!item.link) return
+  // 分析类下钻（预警/知识点）携带当前筛选条件，目标页自动按同一口径过滤
+  const query: Record<string, string> = {}
+  if (item.link.startsWith('/analysis/')) {
+    if (applied.value.courseId != null) query.courseId = String(applied.value.courseId)
+    if (applied.value.classId != null) query.classId = String(applied.value.classId)
+    if (applied.value.semester) query.semester = applied.value.semester
+  }
+  router.push({ path: item.link, query })
 }
 
 // 查询计数器，避免 showDashboard 不变时跳过刷新

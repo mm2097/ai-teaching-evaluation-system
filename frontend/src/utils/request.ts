@@ -33,7 +33,7 @@ if (USE_MOCK) {
     const params = config.params
     const data = config.data
 
-    const result = handleRequest({ method, url, params, data })
+    const result = handleRequest({ method, url, params, data, headers: config.headers as Record<string, unknown> })
 
     if (result.status >= 400) {
       // 构造错误让拦截器处理

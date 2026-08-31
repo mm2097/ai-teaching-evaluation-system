@@ -25,4 +25,9 @@ export const authApi = {
       },
     }
   },
+
+  /** 修改本人登录密码（校验原密码后更新） */
+  async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    await request.post('/password/change', { old_password: oldPassword, new_password: newPassword })
+  },
 }

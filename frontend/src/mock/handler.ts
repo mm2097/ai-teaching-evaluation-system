@@ -167,6 +167,8 @@ export interface MockConfig {
   url: string
   params?: Record<string, unknown>
   data?: unknown
+  /** 请求头（用于识别 mock 令牌中的当前用户） */
+  headers?: Record<string, unknown>
 }
 
 export function handleRequest(config: MockConfig): { status: number; data: unknown } {
@@ -179,6 +181,9 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   /* ----- 认证 ----- */
   if (method === 'POST' && url === '/login') {
     return handleLogin(body)
+  }
+  if (method === 'POST' && url === '/password/change') {
+    return handleChangePassword(config, body)
   }
 
   /* ----- 用户管理 ----- */
@@ -530,6 +535,28 @@ function handleLogin(body: Record<string, any>) {
       role_code: roleCode,
     },
   })
+}
+
+function handleChangePassword(config: MockConfig, body: Record<string, unknown>) {
+  // 从 Authorization 头解析 mock 令牌中的当前用户名：Bearer mock-token-<username>
+  const auth = String(config.headers?.Authorization || config.headers?.authorization || '')
+  const match = /^Bearer mock-token-(.+)$/.exec(auth.trim())
+  if (!match) return { status: 401, data: { detail: '未登录或登录已过期' } }
+
+  const user = users.find((u) => u.username === match[1])
+  if (!user) return { status: 401, data: { detail: '未登录或登录已过期' } }
+  if (user.password !== body.old_password) {
+    return { status: 400, data: { detail: '原密码错误' } }
+  }
+  const newPassword = String(body.new_password || '').trim()
+  if (newPassword.length < 6) {
+    return { status: 400, data: { detail: '新密码长度不能少于 6 位' } }
+  }
+  if (newPassword === user.password) {
+    return { status: 400, data: { detail: '新密码不能与原密码相同' } }
+  }
+  user.password = newPassword
+  return ok({ message: '密码修改成功' })
 }
 
 function handleCreateUser(body: Record<string, any>) {

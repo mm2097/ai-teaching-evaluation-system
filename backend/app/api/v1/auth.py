@@ -1,12 +1,13 @@
-"""认证接口:登录。"""
+"""认证接口:登录、修改本人密码。"""
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlmodel import Session, SQLModel, select
 
 from app.core.config import settings
 from app.core.database import get_session
+from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.core.security import hash_password, password_needs_rehash, verify_password
 from app.models import SysUser, SysRole, LoginRequest
 from app.models.student import Student
@@ -34,6 +35,12 @@ class LoginUser(SQLModel):
 class LoginResponse(SQLModel):
     token: str
     user: LoginUser
+
+
+class ChangePasswordRequest(SQLModel):
+    """修改密码请求体。"""
+    old_password: str
+    new_password: str
 
 
 def create_token(user_id: int, username: str) -> str:
@@ -104,3 +111,33 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             title=title,
         ),
     )
+
+
+@router.post("/password/change", tags=["认证"])
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """修改本人登录密码。校验原密码后写入新密码哈希，并记录操作日志。"""
+    if not verify_password(payload.old_password, current_user.password):
+        raise HTTPException(status_code=400, detail="原密码错误")
+    new_password = payload.new_password.strip()
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="新密码长度不能少于 6 位")
+    if verify_password(new_password, current_user.password):
+        raise HTTPException(status_code=400, detail="新密码不能与原密码相同")
+    current_user.password = hash_password(new_password)
+    current_user.update_time = datetime.now()
+    session.add(current_user)
+    session.commit()
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="个人设置",
+        operation="修改密码",
+        content=f"用户 {current_user.username} 修改登录密码",
+        ip_address=get_client_ip(request),
+    )
+    return {"message": "密码修改成功"}

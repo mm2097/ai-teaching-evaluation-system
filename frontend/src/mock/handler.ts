@@ -64,11 +64,13 @@ function mapClass(c: MockClass) {
 }
 
 function mapStudent(s: MockStudent) {
+  const cls = classes.find((c) => c.class_id === s.class_id)
   return {
     student_id: s.student_id,
     student_no: s.student_no,
     real_name: s.real_name,
     class_id: s.class_id,
+    class_name: cls?.class_name || '',
   }
 }
 
@@ -91,6 +93,7 @@ function mapCourse(c: MockCourse) {
 }
 
 function mapUser(u: MockUser) {
+  const cls = u.class_id ? classes.find((c) => c.class_id === u.class_id) : undefined
   return {
     user_id: u.user_id,
     username: u.username,
@@ -98,6 +101,8 @@ function mapUser(u: MockUser) {
     role_id: u.role_id,
     status: u.status,
     department: u.college || '',
+    class_id: u.class_id ?? null,
+    class_name: cls?.class_name || '',
     create_time: u.create_time,
   }
 }
@@ -177,8 +182,23 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
 
   /* ----- 用户管理 ----- */
+  if (method === 'GET' && url === '/roles') {
+    return ok([
+      { role_id: 1, role_code: 'admin', role_name: '系统管理员' },
+      { role_id: 2, role_code: 'teacher', role_name: '教师' },
+      { role_id: 3, role_code: 'student', role_name: '学生' },
+    ])
+  }
   if (method === 'GET' && url === '/users') {
-    return ok(users.map(mapUser))
+    let list = users
+    if (params.class_id) {
+      list = list.filter((u) => u.class_id === params.class_id)
+    }
+    if (params.role_code) {
+      const roleMap: Record<string, number> = { admin: 1, teacher: 2, student: 3 }
+      list = list.filter((u) => u.role_id === roleMap[String(params.role_code)])
+    }
+    return ok(list.map(mapUser))
   }
   if (method === 'POST' && url === '/users') {
     return handleCreateUser(body)
@@ -211,6 +231,29 @@ export function handleRequest(config: MockConfig): { status: number; data: unkno
   }
   if (method === 'GET' && url === '/v1/students') {
     return handleStudents(params)
+  }
+  if (method === 'POST' && url === '/v1/students') {
+    const item = {
+      student_id: 2000 + students.length,
+      student_no: body.student_no || `mock${Date.now()}`,
+      real_name: body.real_name || body.student_no || '学生',
+      class_id: body.class_id,
+    }
+    students.push(item)
+    return ok(mapStudent(item))
+  }
+  if (method === 'PUT' && matchPath(url, '/v1/students/:id')) {
+    const found = students.find((s) => s.student_id === extractId(url))
+    if (!found) return { status: 404, data: { detail: '学生不存在' } }
+    if (body.class_id !== undefined) found.class_id = body.class_id
+    if (body.real_name !== undefined) found.real_name = body.real_name
+    return ok(mapStudent(found))
+  }
+  if (method === 'DELETE' && matchPath(url, '/v1/students/:id')) {
+    const idx = students.findIndex((s) => s.student_id === extractId(url))
+    if (idx === -1) return { status: 404, data: { detail: '学生不存在' } }
+    students.splice(idx, 1)
+    return ok(null)
   }
   if (method === 'GET' && url === '/v1/teachers') {
     return ok(teachers.map(mapTeacher))
@@ -490,15 +533,19 @@ function handleLogin(body: Record<string, any>) {
 }
 
 function handleCreateUser(body: Record<string, any>) {
-  const roleMap: Record<number, number> = { 1: 1, 2: 2, 3: 3 }
+  const roleId = body.role_id || 3
+  if (roleId === 3 && !body.class_id) {
+    return { status: 400, data: { detail: '学生用户必须选择所属班级' } }
+  }
   const newUser: MockUser = {
     user_id: nextUserId(),
     username: body.username,
     password: body.password || '123456',
     real_name: body.real_name,
-    role_id: body.role_id || roleMap[body.role_id] || 3,
+    role_id: roleId,
     status: body.status ?? 1,
     college: (body.college || '').trim() || '计算机学院',
+    class_id: roleId === 3 ? body.class_id : undefined,
     create_time: new Date().toISOString().slice(0, 19).replace('T', ' '),
   }
   users.push(newUser)
@@ -513,6 +560,8 @@ function handleUpdateUser(id: number, body: Record<string, any>) {
   if (body.status !== undefined) user.status = body.status
   if (body.password !== undefined) user.password = body.password
   if (body.college !== undefined) user.college = body.college
+  if (body.class_id !== undefined) user.class_id = body.class_id
+  if (user.role_id !== 3) user.class_id = undefined
   return ok(mapUser(user))
 }
 

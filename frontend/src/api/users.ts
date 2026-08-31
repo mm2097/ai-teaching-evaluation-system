@@ -16,6 +16,8 @@ interface UserResponse {
   role_id: number
   role_code?: UserRole
   department?: string
+  class_id?: number | null
+  class_name?: string
   status: number
   create_time?: string
 }
@@ -26,6 +28,7 @@ interface UserUpdatePayload {
   status?: number
   password?: string
   college?: string
+  class_id?: number | null
 }
 
 let roleIdMap: Partial<Record<UserRole, number>> = {}
@@ -45,19 +48,23 @@ async function getRoleId(role: UserRole): Promise<number> {
 }
 
 export const userApi = {
-  /** 列出全部用户 */
-  async list(): Promise<SystemUser[]> {
-    const res = await request.get('/users')
+  /** 列出用户，可按角色、学生班级筛选 */
+  async list(params?: { classId?: number; role?: UserRole | '' }): Promise<SystemUser[]> {
+    const q: Record<string, string | number> = {}
+    if (params?.classId) q.class_id = params.classId
+    if (params?.role) q.role_code = params.role
+    const res = await request.get('/users', { params: q })
     return (res.data as UserResponse[]).map(mapUser)
   },
 
-  /** 创建用户（默认密码 123456，学院不填默认为计算机学院） */
+  /** 创建用户（默认密码 123456，学生须传班级） */
   async create(data: {
     username: string
     name: string
     role: UserRole
     status: boolean
     college?: string
+    classId?: number | null
   }): Promise<SystemUser> {
     const roleId = await getRoleId(data.role)
     const res = await request.post('/users', {
@@ -67,6 +74,7 @@ export const userApi = {
       role_id: roleId,
       status: data.status ? 1 : 0,
       college: data.college,
+      class_id: data.role === 'student' ? data.classId : undefined,
     })
     return mapUser(res.data)
   },
@@ -74,7 +82,7 @@ export const userApi = {
   /** 更新用户（只传要改的字段） */
   async update(
     id: number,
-    data: Partial<{ name: string; role: UserRole; status: boolean; password: string; college: string }>,
+    data: Partial<{ name: string; role: UserRole; status: boolean; password: string; college: string; classId: number | null }>,
   ): Promise<SystemUser> {
     const payload: UserUpdatePayload = {}
     if (data.name !== undefined) payload.real_name = data.name
@@ -84,6 +92,7 @@ export const userApi = {
     if (data.status !== undefined) payload.status = data.status ? 1 : 0
     if (data.password !== undefined) payload.password = data.password
     if (data.college !== undefined) payload.college = data.college
+    if (data.classId !== undefined) payload.class_id = data.classId
     const res = await request.put(`/users/${id}`, payload)
     return mapUser(res.data)
   },
@@ -102,6 +111,8 @@ function mapUser(raw: UserResponse): SystemUser {
     name: raw.real_name,
     role: raw.role_code || roleMap[raw.role_id] || 'student',
     department: raw.department || '',
+    classId: raw.class_id ?? null,
+    className: raw.class_name || '',
     status: raw.status === 1,
     createTime: raw.create_time?.slice(0, 10) ?? '',
   }

@@ -16,7 +16,7 @@ from app import models  # noqa: F401  确保所有表注册到 metadata
 from app.api.v1.auth import create_token
 from app.api.v1.users import router as users_router
 from app.core.database import get_session
-from app.models import SysRole, SysUser, Teacher
+from app.models import ClassInfo, SysRole, SysUser, Teacher
 
 
 @pytest.fixture(scope="module")
@@ -30,10 +30,12 @@ def engine():
     with Session(eng) as s:
         s.add(SysRole(role_id=1, role_name="系统管理员", role_code="admin"))
         s.add(SysRole(role_id=2, role_name="教师", role_code="teacher"))
+        s.add(SysRole(role_id=3, role_name="学生", role_code="student"))
         s.add(SysUser(user_id=1, username="admin", password="x", real_name="管理员", role_id=1, status=1))
-        # 老数据:没有填 college 的教师用户,依赖教师档案推导
         s.add(SysUser(user_id=2, username="oldteacher", password="x", real_name="老教师", role_id=2, status=1))
         s.add(Teacher(teacher_id=1, teacher_no="T001", real_name="老教师", user_id=2, college="数学学院"))
+        s.add(ClassInfo(class_id=1, class_name="计科2401班", college="计算机学院", major="计算机科学与技术", grade="2024级"))
+        s.add(ClassInfo(class_id=2, class_name="软件1801班", college="计算机学院", major="软件工程", grade="2018级"))
         s.commit()
     return eng
 
@@ -64,6 +66,8 @@ def _create(client, **kwargs):
     }
     if "college" in kwargs:
         payload["college"] = kwargs["college"]
+    if "class_id" in kwargs:
+        payload["class_id"] = kwargs["class_id"]
     return client.post("/api/users", json=payload, headers=_auth())
 
 
@@ -103,3 +107,37 @@ def test_legacy_user_falls_back_to_teacher_college(client):
     assert resp.status_code == 200
     by_username = {u["username"]: u for u in resp.json()}
     assert by_username["oldteacher"]["department"] == "数学学院"
+
+
+def test_create_student_requires_class(client):
+    resp = _create(client, username="stu_none", role_id=3)
+    assert resp.status_code == 400
+    assert "所属班级" in resp.json()["detail"]
+
+
+def test_create_student_with_class(client):
+    resp = _create(client, username="stu_ok", role_id=3, class_id=1)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["class_id"] == 1
+    assert body["class_name"] == "计科2401班"
+    assert body["role_code"] == "student"
+
+
+def test_list_users_filter_by_class(client):
+    _create(client, username="stu_a", role_id=3, class_id=1)
+    _create(client, username="stu_b", role_id=3, class_id=2)
+    resp = client.get("/api/users", params={"class_id": 2}, headers=_auth())
+    assert resp.status_code == 200
+    names = {u["username"] for u in resp.json()}
+    assert "stu_b" in names
+    assert "stu_a" not in names
+
+
+def test_update_student_class(client):
+    created = _create(client, username="stu_move", role_id=3, class_id=1)
+    user_id = created.json()["user_id"]
+    resp = client.put(f"/api/users/{user_id}", json={"class_id": 2}, headers=_auth())
+    assert resp.status_code == 200
+    assert resp.json()["class_id"] == 2
+    assert resp.json()["class_name"] == "软件1801班"

@@ -8,7 +8,7 @@
 
 from app.models.user import SysUser, SysRole, LoginRequest, UserCreate, UserRead, UserUpdate
 from app.models.teacher import Teacher
-from app.models.student import Student
+from app.models.student import Student, StudentCreate, StudentUpdate
 from app.models.class_info import ClassInfo
 from app.models.course import Course, CourseStudent
 from app.models.knowledge import KnowledgeModule, KnowledgePoint
@@ -30,7 +30,7 @@ from app.models.log import AiGenerationLog, SysOperationLog
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
-    "Teacher", "Student", "ClassInfo",
+    "Teacher", "Student", "StudentCreate", "StudentUpdate", "ClassInfo",
     "Course", "CourseStudent",
     "KnowledgeModule", "KnowledgePoint",
     "AttendanceRecord", "InteractionRecord",

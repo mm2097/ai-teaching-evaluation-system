@@ -52,6 +52,7 @@ class UserCreate(SQLModel):
     role_id: int
     status: int = 1
     college: Optional[str] = Field(default=None, max_length=64)
+    class_id: Optional[int] = None  # 仅学生：写入 student 表
 
 
 class UserUpdate(SQLModel):
@@ -61,6 +62,7 @@ class UserUpdate(SQLModel):
     role_id: Optional[int] = None
     status: Optional[int] = None
     college: Optional[str] = Field(default=None, max_length=64)
+    class_id: Optional[int] = None
 
 
 class UserRead(SQLModel):

@@ -33,6 +33,8 @@ export interface SystemUser {
   name: string
   role: UserRole
   department: string
+  classId?: number | null
+  className?: string
   status: boolean
   createTime: string
 }

@@ -20,3 +20,21 @@ class Student(SQLModel, table=True):
     email: Optional[str] = Field(default=None, max_length=64)
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)
+
+
+class StudentCreate(SQLModel):
+    user_id: int
+    class_id: int
+    student_no: Optional[str] = None
+    real_name: Optional[str] = None
+    gender: Optional[int] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class StudentUpdate(SQLModel):
+    class_id: Optional[int] = None
+    real_name: Optional[str] = None
+    gender: Optional[int] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None

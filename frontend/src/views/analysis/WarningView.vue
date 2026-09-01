@@ -6,7 +6,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchWarnings } from '@/api/analysis'
+import { fetchWarnings, refreshWarnings, updateWarningStatus } from '@/api/analysis'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
@@ -27,6 +27,7 @@ const courseOptions = ref<{ label: string; value: number }[]>([])
 const warningList = ref<WarningRecord[]>([])
 const studentList = ref<LinkedStudentOption[]>([])
 const studentLoading = ref(false)
+const refreshing = ref(false)
 const selectedStudentNo = ref<string | undefined>()
 
 async function loadStudentOptions(): Promise<void> {
@@ -99,7 +100,7 @@ async function handleQuery(): Promise<void> {
 onMounted(handleQuery)
 
 let _inited = false
-watch([courseId, classId, levelFilter, typeFilter, statusFilter], async () => {
+watch([courseId, classId, levelFilter, typeFilter, statusFilter, selectedStudentNo], async () => {
   if (!_inited) { _inited = true; return }
   await loadWarnings()
 })
@@ -120,14 +121,30 @@ function viewDetail(row: WarningRecord): void {
   drawerVisible.value = true
 }
 
-function markResolved(): void {
+async function markResolved(): Promise<void> {
   if (!currentWarning.value) return
-  const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+  const updated = await updateWarningStatus(currentWarning.value.id, 1)
+  const idx = warningList.value.findIndex((w) => w.id === updated.id)
   if (idx !== -1) {
-    warningList.value[idx] = { ...warningList.value[idx]!, status: 2 }
-    currentWarning.value = warningList.value[idx]
+    warningList.value[idx] = updated
   }
+  currentWarning.value = updated
   ElMessage.success('已标记为已处理')
+}
+
+async function handleRefreshWarnings(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  refreshing.value = true
+  try {
+    const result = await refreshWarnings({ courseId: courseId.value, classId: classId.value })
+    ElMessage.success(result.message || '预警刷新完成')
+    await loadWarnings()
+  } finally {
+    refreshing.value = false
+  }
 }
 
 function sendNotice(): void {
@@ -137,9 +154,7 @@ function sendNotice(): void {
 
 const statusOptions = [
   { label: '待处理', value: 0 },
-  { label: '处理中', value: 1 },
-  { label: '已处理', value: 2 },
-  { label: '已忽略', value: 3 },
+  { label: '已处理', value: 1 },
 ]
 </script>
 
@@ -191,6 +206,7 @@ const statusOptions = [
           <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
         <el-button type="primary" @click="handleQuery">查询</el-button>
+        <el-button :loading="refreshing" @click="handleRefreshWarnings">刷新预警</el-button>
       </div>
 
       <el-table :data="filteredWarnings" stripe border>
@@ -214,7 +230,7 @@ const statusOptions = [
         <el-table-column prop="warningTime" label="预警时间" width="120" />
         <el-table-column prop="status" label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === 2 ? 'success' : row.status === 0 ? 'danger' : 'warning'">
+            <el-tag size="small" :type="row.status === 1 ? 'success' : 'danger'">
               {{ statusOptions.find(s => s.value === row.status)?.label }}
             </el-tag>
           </template>

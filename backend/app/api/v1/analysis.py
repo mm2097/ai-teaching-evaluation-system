@@ -8,7 +8,7 @@ from app.models import (
     Student, Course, CourseStudent, ClassInfo,
     KnowledgeMastery, KnowledgePoint, KnowledgeModule,
     StudyWarning, StudentProfile,
-    ScoreRecord, EvalDimensionScore, StudentEvaluationResult,
+    ScoreRecord, EvalDimensionScore, StudentEvaluationResult, EvalDimension,
     SysUser, Teacher, SysRole,
     IndividualScore, CourseTestDetail, ExamBatch,
 )
@@ -173,8 +173,21 @@ def get_student_profile(
         ds = session.exec(
             select(EvalDimensionScore).where(EvalDimensionScore.eval_id == eval_result.eval_id)
         ).all()
+        dimension_ids = [d.dimension_id for d in ds]
+        dimensions = {
+            dim.dimension_id: dim
+            for dim in session.exec(
+                select(EvalDimension).where(EvalDimension.dimension_id.in_(dimension_ids))
+            ).all()
+        } if dimension_ids else {}
         for d in ds:
-            dim_scores.append({"name": f"维度{d.dimension_id}", "score": d.dimension_score})
+            dim = dimensions.get(d.dimension_id)
+            dim_scores.append({
+                "id": d.dimension_id,
+                "name": dim.dimension_name if dim else f"维度{d.dimension_id}",
+                "description": dim.description if dim else "",
+                "score": d.dimension_score,
+            })
 
     tags = [t.strip() for t in (profile.study_tags or "").split(",") if t.strip()]
 
@@ -432,7 +445,7 @@ def _warning_response(w, student, course, cls) -> dict:
     """将 StudyWarning 模型转为 API 响应格式。"""
     rule_code, display_type = _parse_warning_type(w.warning_type)
     level_label = {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低")
-    status_label = {0: "未处理", 1: "已处理"}.get(w.handle_status, "未知")
+    status_label = {0: "待处理", 1: "已处理"}.get(w.handle_status, "未知")
 
     return {
         "id": w.warning_id,
@@ -460,6 +473,9 @@ def get_warnings(
     class_id: int | None = Query(default=None),
     level: str | None = Query(default=None, description="高/中/低"),
     student_id: int | None = Query(default=None, description="按数据库 student_id 筛选"),
+    student_no: str | None = Query(default=None, description="按学号筛选"),
+    warning_type: str | None = Query(default=None, description="按预警类型筛选"),
+    status: int | None = Query(default=None, description="处理状态：0=待处理 1=已处理"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
@@ -474,7 +490,6 @@ def get_warnings(
     role_code = role.role_code if role else ""
 
     if role_code == "teacher":
-        # 教师：限定只看自己授课课程的预警
         teacher = session.exec(
             select(Teacher).where(Teacher.user_id == current_user.user_id)
         ).first()
@@ -489,14 +504,11 @@ def get_warnings(
                     status_code=403,
                     detail="仅授课教师可查看该课程的预警数据",
                 )
-        else:
-            # 未指定课程时自动限定为教师授课课程
-            if not taught_ids:
-                return []
+        elif not taught_ids:
+            return []
     else:
         raise HTTPException(status_code=403, detail="无权查看预警数据")
 
-    # 构建查询
     stmt = select(StudyWarning)
     if course_id:
         stmt = stmt.where(StudyWarning.course_id == course_id)
@@ -504,6 +516,10 @@ def get_warnings(
         stmt = stmt.where(StudyWarning.course_id.in_(taught_ids))  # type: ignore[arg-type]
     if student_id:
         stmt = stmt.where(StudyWarning.student_id == student_id)
+    if status is not None:
+        stmt = stmt.where(StudyWarning.handle_status == status)
+    if warning_type:
+        stmt = stmt.where(StudyWarning.warning_type.contains(warning_type))
 
     warnings = session.exec(stmt).all()
 
@@ -515,6 +531,8 @@ def get_warnings(
 
         if class_id and (not student or student.class_id != class_id):
             continue
+        if student_no and (not student or student.student_no != student_no):
+            continue
         if level:
             level_map = {1: "低", 2: "中", 3: "高"}
             if level_map.get(w.warning_level) != level:
@@ -524,6 +542,28 @@ def get_warnings(
 
     return result
 
+@router.put("/analysis/warnings/{warning_id}/status", tags=["学情分析"])
+def update_warning_status(
+    warning_id: int,
+    status: int = Query(..., ge=0, le=1, description="0=待处理 1=已处理"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """更新预警处理状态。仅课程授课教师可操作。"""
+    warning = session.get(StudyWarning, warning_id)
+    if not warning:
+        raise HTTPException(status_code=404, detail="预警记录不存在")
+
+    _check_course_access(session, current_user, warning.course_id)
+    warning.handle_status = status
+    session.add(warning)
+    session.commit()
+    session.refresh(warning)
+
+    student = session.get(Student, warning.student_id)
+    course = session.get(Course, warning.course_id)
+    cls = session.get(ClassInfo, student.class_id) if student else None
+    return _warning_response(warning, student, course, cls)
 
 @router.post("/analysis/warnings/refresh", tags=["学情分析"])
 def refresh_warnings(
@@ -743,3 +783,4 @@ def get_grade_distribution(
         },
         "characteristic": characteristic,
     }
+

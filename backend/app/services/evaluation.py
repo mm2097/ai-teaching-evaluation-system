@@ -7,12 +7,12 @@
     知识掌握（D05）   0.3
 
 等级映射：
-    ≥ 85  优
+    >= 85  优
     75-85 良
     60-75 中
     < 60  差
 
-权重支持外部注入（来自 EvalIndex 配置表）。
+课程评价配置中的 EvalIndex.weight 会按维度汇总后归一化为四维权重。
 """
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from sqlmodel import Session, select
 from app.models import (
     EvalDimension,
     EvalDimensionScore,
+    EvalIndex,
     StudentEvaluationResult,
 )
 from app.services.mastery import compute_student_mastery
@@ -34,6 +35,19 @@ DEFAULT_WEIGHTS = {
     "attitude": 0.2,
     "progress": 0.1,
     "mastery": 0.3,
+}
+
+DIMENSION_NAME_KEYS = {
+    "学业成绩": "academic",
+    "学业水平": "academic",
+    "成绩": "academic",
+    "学习态度": "attitude",
+    "态度": "attitude",
+    "学习进步": "progress",
+    "进步": "progress",
+    "知识掌握": "mastery",
+    "知识点掌握": "mastery",
+    "掌握度": "mastery",
 }
 
 
@@ -54,12 +68,49 @@ def score_to_level(score: float) -> str:
     return "差"
 
 
+def _dimension_key(name: str) -> str | None:
+    compact = (name or "").replace(" ", "")
+    for token, key in DIMENSION_NAME_KEYS.items():
+        if token in compact:
+            return key
+    return None
+
+
+def load_dimension_weights(session: Session, course_id: int) -> dict[str, float]:
+    """从 EvalDimension/EvalIndex 读取课程四维评价权重。
+
+    规则：每个维度下所有指标 weight 求和，映射到 academic/attitude/progress/mastery，
+    再归一化为总和 1。若课程没有可用配置，则返回默认权重。
+    """
+    dims = session.exec(
+        select(EvalDimension).where(EvalDimension.course_id == course_id)
+    ).all()
+    if not dims:
+        return dict(DEFAULT_WEIGHTS)
+
+    raw = {key: 0.0 for key in DEFAULT_WEIGHTS}
+    for dim in dims:
+        key = _dimension_key(dim.dimension_name)
+        if not key or dim.dimension_id is None:
+            continue
+        indexes = session.exec(
+            select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+        ).all()
+        weight_sum = sum(max(0.0, float(idx.weight or 0.0)) for idx in indexes)
+        raw[key] += weight_sum
+
+    total = sum(raw.values())
+    if total <= 0:
+        return dict(DEFAULT_WEIGHTS)
+    return {key: value / total for key, value in raw.items()}
+
+
 def compute_evaluation(
     session: Session, student_id: int, course_id: int,
     weights: dict | None = None,
 ) -> EvaluationResult:
     """综合评价：四维度加权求和 + 等级。"""
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    w = load_dimension_weights(session, course_id) if weights is None else {**DEFAULT_WEIGHTS, **weights}
 
     profile = compute_profile(session, student_id, course_id)
     masteries = compute_student_mastery(session, student_id, course_id)
@@ -101,12 +152,10 @@ def persist_evaluation(
     if result is None:
         result = compute_evaluation(session, student_id, course_id)
 
-    # 取该课程的维度配置
     dims = session.exec(
         select(EvalDimension).where(EvalDimension.course_id == course_id)
     ).all()
 
-    # 删除该学生在本课程的旧评价
     old = session.exec(
         select(StudentEvaluationResult).where(
             StudentEvaluationResult.student_id == student_id,
@@ -127,7 +176,6 @@ def persist_evaluation(
     session.commit()
     session.refresh(er)
 
-    # 维度分映射（名称匹配）
     name_to_dim = {d.dimension_name: d for d in dims}
     mapping = [
         ("学业成绩", result.dimensions["academic"]),

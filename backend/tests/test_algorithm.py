@@ -207,6 +207,68 @@ class TestEvaluation:
         assert "mastery" in result.dimensions
 
 
+
+    def test_eval_index_weights_affect_total_score(self, session):
+        """课程评价指标权重应接入综合评价总分。"""
+        from app.models import EvalDimension, EvalIndex
+        from app.services.evaluation import compute_evaluation, load_dimension_weights
+
+        dim_academic = EvalDimension(course_id=1, dimension_name="学业成绩", sort_num=1)
+        dim_attitude = EvalDimension(course_id=1, dimension_name="学习态度", sort_num=2)
+        session.add_all([dim_academic, dim_attitude])
+        session.flush()
+        idx_academic = EvalIndex(dimension_id=dim_academic.dimension_id, index_name="考试成绩", weight=90, score_rule="{}")
+        idx_attitude = EvalIndex(dimension_id=dim_attitude.dimension_id, index_name="课堂参与", weight=10, score_rule="{}")
+        session.add_all([idx_academic, idx_attitude])
+        session.commit()
+
+        academic_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        weights = load_dimension_weights(session, course_id=1)
+        assert round(weights["academic"], 2) == 0.9
+        assert round(weights["attitude"], 2) == 0.1
+
+        idx_academic.weight = 10
+        idx_attitude.weight = 90
+        session.add_all([idx_academic, idx_attitude])
+        session.commit()
+
+        attitude_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        assert academic_heavy.total_score != attitude_heavy.total_score
+    def test_interaction_records_feed_attitude_score(self, session):
+        """学习态度互动项应使用 InteractionRecord，而不是固定常量。"""
+        from datetime import date
+        from app.models import InteractionRecord
+        from app.services.profile import compute_attitude_score
+
+        low_score, low_detail = compute_attitude_score(
+            session,
+            student_id=1,
+            course_id=1,
+            w_attendance=0.0,
+            w_interaction=1.0,
+            w_homework=0.0,
+        )
+        session.add(InteractionRecord(
+            course_id=1,
+            student_id=1,
+            interaction_date=date(2024, 12, 1),
+            type=1,
+            score=100,
+            create_by=1,
+        ))
+        session.commit()
+
+        high_score, high_detail = compute_attitude_score(
+            session,
+            student_id=1,
+            course_id=1,
+            w_attendance=0.0,
+            w_interaction=1.0,
+            w_homework=0.0,
+        )
+        assert high_detail["interaction_count"] == low_detail["interaction_count"] + 1
+        assert high_score > low_score
+
 # ===== D12 去重 =====
 
 class TestDedup:
@@ -262,3 +324,23 @@ class TestReport:
         report = render_report(ctx)
         assert report["scope"] == "student"
         assert "张三" in report["summary"]
+
+
+def test_warning_w4_homework_missing_uses_interaction_records(session):
+    from datetime import date
+    from app.models import InteractionRecord
+    from app.services.warning import evaluate_student
+
+    for idx in range(3):
+        session.add(InteractionRecord(
+            course_id=1,
+            student_id=2,
+            interaction_date=date(2024, 12, idx + 1),
+            type=3,
+            score=100,
+            create_by=1,
+        ))
+    session.commit()
+
+    result = evaluate_student(session, student_id=3, course_id=1, weak_count=0)
+    assert any(hit.rule == "W4" for hit in result.hits)

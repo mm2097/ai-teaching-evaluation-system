@@ -7,7 +7,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
-import { fetchGradeTrend, fetchGradePredictions } from '@/api/analysis'
+import { fetchGradeTrend, fetchGradePredictions, fetchKnowledgeHeatmap, computeClassKnowledgeStats } from '@/api/analysis'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 
 const scope = useAnalysisScope('class')
@@ -28,12 +28,14 @@ async function loadTrend(): Promise<void> {
   trendData.value = await fetchGradeTrend({ ...queryParams.value, analysisType: '成绩趋势' })
   predictions.value = await fetchGradePredictions(queryParams.value)
 
-  const kps: string[] = []
+  const heatmap = await fetchKnowledgeHeatmap(queryParams.value)
+  const weakPoints = computeClassKnowledgeStats(heatmap).weakPoints
   const avg = trendData.value.avgScore.at(-1) ?? 0
+  const weakNames = weakPoints.slice(0, 2).map((p) => `${p.name}（${p.rate}%）`)
   classFeatures.value = [
     { title: '整体水平', content: `本课程班级最近一次平均分 ${avg}，${avg >= 80 ? '整体表现良好' : avg >= 70 ? '处于中等水平' : '需加强整体辅导'}` },
     { title: '分化程度', content: `最高分 ${trendData.value.maxScore.at(-1) ?? '-'}、最低分 ${trendData.value.minScore.at(-1) ?? '-'}，存在一定成绩分化` },
-    { title: '薄弱知识点', content: kps.length ? `建议重点关注 ${kps.slice(-2).join('、')} 等知识点` : '暂无知识点数据' },
+    { title: '薄弱知识点', content: weakNames.length ? `建议重点关注 ${weakNames.join('、')} 等知识点` : '暂无知识点数据' },
   ]
 }
 
@@ -213,3 +215,4 @@ const chartTitle = computed(() =>
   }
 }
 </style>
+

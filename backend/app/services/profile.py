@@ -17,6 +17,8 @@ from app.models import (
     AttendanceSheet,
     CourseStudent,
     CourseTestDetail,
+    EvalDimension,
+    EvalIndex,
     ExamBatch,
     IndividualScore,
     InteractionRecord,
@@ -165,20 +167,100 @@ def _attendance_rate(session: Session, student_id: int, course_id: int) -> float
 def _interaction_score(
     session: Session, student_id: int, course_id: int
 ) -> tuple[float, int]:
-    """互动得分：已禁用（InteractionRecord 废弃）。"""
-    return 50.0, 0  # disabled
+    """互动得分：基于课堂互动记录平均分，作业提交不计入课堂互动。"""
+    records = session.exec(
+        select(InteractionRecord).where(
+            InteractionRecord.student_id == student_id,
+            InteractionRecord.course_id == course_id,
+            InteractionRecord.type != 3,
+        )
+    ).all()
+    if not records:
+        return 50.0, 0
+    avg = sum(float(r.score or 0.0) for r in records) / len(records)
+    return max(0.0, min(100.0, avg)), len(records)
 
 
 def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
-    """作业提交率：已禁用（InteractionRecord 废弃）。"""
-    return 0.9  # disabled
+    """作业提交率：InteractionRecord.type=3 视为作业提交记录。"""
+    course_students = session.exec(
+        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    ).all()
+    if not course_students:
+        return 0.9
+
+    homework_counts = []
+    for sid in course_students:
+        count = session.exec(
+            select(func.count()).select_from(InteractionRecord).where(
+                InteractionRecord.student_id == sid,
+                InteractionRecord.course_id == course_id,
+                InteractionRecord.type == 3,
+            )
+        ).one()
+        homework_counts.append(int(count or 0))
+
+    expected = max(homework_counts) if homework_counts else 0
+    if expected <= 0:
+        return 0.9
+
+    submitted = session.exec(
+        select(func.count()).select_from(InteractionRecord).where(
+            InteractionRecord.student_id == student_id,
+            InteractionRecord.course_id == course_id,
+            InteractionRecord.type == 3,
+        )
+    ).one()
+    return max(0.0, min(1.0, int(submitted or 0) / expected))
+
+
+def _attitude_component_weights(
+    session: Session, course_id: int,
+    default_attendance: float,
+    default_interaction: float,
+    default_homework: float,
+) -> tuple[float, float, float]:
+    """从学习态度维度的指标名推导出勤/互动/作业子权重。"""
+    dim = session.exec(
+        select(EvalDimension).where(
+            EvalDimension.course_id == course_id,
+            EvalDimension.dimension_name.contains("态度"),
+        )
+    ).first()
+    if not dim or dim.dimension_id is None:
+        return default_attendance, default_interaction, default_homework
+
+    raw = {"attendance": 0.0, "interaction": 0.0, "homework": 0.0}
+    indexes = session.exec(
+        select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+    ).all()
+    for idx in indexes:
+        name = (idx.index_name or "").replace(" ", "")
+        weight = max(0.0, float(idx.weight or 0.0))
+        if "出勤" in name or "考勤" in name:
+            raw["attendance"] += weight
+        elif "作业" in name:
+            raw["homework"] += weight
+        elif "互动" in name or "参与" in name or "课堂" in name:
+            raw["interaction"] += weight
+
+    total = sum(raw.values())
+    if total <= 0:
+        return default_attendance, default_interaction, default_homework
+    return raw["attendance"] / total, raw["interaction"] / total, raw["homework"] / total
 
 
 def compute_attitude_score(
     session: Session, student_id: int, course_id: int,
-    w_attendance: float = 0.5, w_interaction: float = 0.3, w_homework: float = 0.2,
+    w_attendance: float | None = None, w_interaction: float | None = None, w_homework: float | None = None,
 ) -> tuple[float, dict]:
-    """D03 学习态度得分 = 0.5*出勤 + 0.3*互动 + 0.2*作业。返回 (score, detail)。"""
+    """D03 学习态度得分。返回 (score, detail)。"""
+    default_weights = (0.5, 0.3, 0.2)
+    if w_attendance is None or w_interaction is None or w_homework is None:
+        w_attendance, w_interaction, w_homework = _attitude_component_weights(
+            session, course_id, *default_weights
+        )
+
     att_rate = _attendance_rate(session, student_id, course_id)
     att_score = att_rate * 100.0
 

@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData, deleteTeachingDataRecord, batchDeleteTeachingDataRecords, exportTeachingData } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -240,9 +240,6 @@ async function saveEdit(): Promise<void> {
     srcData[f.key] = f.value
   }
 
-  console.log('[saveEdit] recordId:', editRecordId.value)
-  console.log('[saveEdit] sourceData:', JSON.stringify(srcData))
-
   try {
     await updateRowData(editRecordId.value, srcData)
     await loadTeachingData()
@@ -262,7 +259,8 @@ async function saveEdit(): Promise<void> {
 
 async function handleDelete(row: TeachingDataRecord): Promise<void> {
   await ElMessageBox.confirm(`确定删除 ${row.studentName} 的 ${row.courseName} 记录吗？`, '删除确认', { type: 'warning' })
-  tableData.value = tableData.value.filter((item) => item.id !== row.id)
+  await deleteTeachingDataRecord(row.recordType, row.id)
+  await loadTeachingData()
   ElMessage.success('删除成功')
 }
 
@@ -272,8 +270,9 @@ async function handleBatchDelete(): Promise<void> {
     return
   }
   await ElMessageBox.confirm(`确定删除选中的 ${selectedRows.value.length} 条数据吗？`, '批量删除', { type: 'warning' })
-  const ids = selectedRows.value.map((r) => r.id)
-  tableData.value = tableData.value.filter((item) => !ids.includes(item.id))
+  await batchDeleteTeachingDataRecords(selectedRows.value.map((row) => ({ recordType: row.recordType, recordId: row.id })))
+  selectedRows.value = []
+  await loadTeachingData()
   ElMessage.success('批量删除成功')
 }
 
@@ -314,8 +313,27 @@ function handleDetail(row: TeachingDataRecord): void {
   detailVisible.value = true
 }
 
-function handleExport(): void {
-  ElMessage.success('数据导出成功，文件已保存至下载目录')
+async function handleExport(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  try {
+    const { blob, filename } = await exportTeachingData({
+      courseId: courseId.value,
+      keyword: query.value.courseName || undefined,
+      dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance' ? query.value.dataType : undefined,
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('数据导出成功')
+  } catch {
+    ElMessage.error('数据导出失败')
+  }
 }
 
 function filterByCurrentFile(): void {
@@ -488,3 +506,4 @@ function filterByCurrentFile(): void {
     </el-dialog>
   </div>
 </template>
+

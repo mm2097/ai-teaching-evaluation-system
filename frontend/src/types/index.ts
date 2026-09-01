@@ -125,6 +125,7 @@ export interface ImportLog {
 /** 教学数据记录 */
 export interface TeachingDataRecord {
   id: number
+  recordType: 'score' | 'attendance' | 'individual_score' | 'course_test_detail' | 'attendance_sheet'
   studentId: string
   studentName: string
   courseId: string

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import create_engine, inspect, text
 from sqlmodel import select
 
-from app.api.v1 import analysis, auth, quiz
+from app.api.v1 import analysis, auth, quiz, teaching_data
 from app.core import database
 from app.core.config import Settings, settings
 from app.core.security import hash_password, verify_password
@@ -17,7 +17,9 @@ from app.models import (
     AiQuestion,
     AnswerTask,
     CourseStudent,
-    KnowledgeMastery,
+    ScoreRecord,
+    AttendanceRecord,
+KnowledgeMastery,
     KnowledgePoint,
     Student,
     StudentAnswerRecord,
@@ -328,3 +330,119 @@ def test_student_ai_quota_and_per_request_limit_are_persistent(session, monkeypa
     assert quota_error.value.status_code == 429
     assert size_error.value.status_code == 422
     assert len(usages) == 2
+
+
+def test_teaching_data_query_exposes_record_type(session):
+    result = teaching_data.query_teaching_data(
+        course_id=1,
+        keyword=None,
+        data_type=None,
+        batch_id=None,
+        page=1,
+        page_size=50,
+        session=session,
+        current_user=_user(session, 1),
+    )
+
+    assert result["data"]
+    assert all("recordType" in row for row in result["data"])
+
+
+def test_teaching_data_delete_and_batch_delete_persist(session):
+    score = ScoreRecord(course_id=1, student_id=1, batch_id=1, score=88, is_pass=1, create_by=1)
+    attendance = AttendanceRecord(course_id=1, student_id=1, attendance_date=datetime.now().date(), status=0, create_by=1)
+    session.add_all([score, attendance])
+    session.commit()
+    session.refresh(score)
+    session.refresh(attendance)
+
+    response = teaching_data.delete_teaching_data(
+        "score",
+        score.score_id,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert response["deleted"] is True
+    assert session.get(ScoreRecord, score.score_id) is None
+
+    other_score = ScoreRecord(course_id=1, student_id=2, batch_id=1, score=77, is_pass=1, create_by=1)
+    session.add(other_score)
+    session.commit()
+    session.refresh(other_score)
+
+    response = teaching_data.batch_delete_teaching_data(
+        {
+            "records": [
+                {"recordType": "attendance", "recordId": attendance.attendance_id},
+                {"recordType": "score", "recordId": other_score.score_id},
+            ]
+        },
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert response == {"deleted": 2}
+    assert session.get(AttendanceRecord, attendance.attendance_id) is None
+    assert session.get(ScoreRecord, other_score.score_id) is None
+
+def test_warning_filters_and_status_update_persist(session):
+    from app.api.v1 import analysis
+    from app.models import StudyWarning
+
+    rows = analysis.get_warnings(
+        course_id=1,
+        class_id=1,
+        level="中",
+        student_id=None,
+        student_no="2024001",
+        warning_type="成绩下滑",
+        status=0,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert len(rows) == 1
+    assert rows[0]["id"] == 1
+
+    updated = analysis.update_warning_status(
+        1,
+        status=1,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert updated["status"] == 1
+    assert session.get(StudyWarning, 1).handle_status == 1
+
+    pending = analysis.get_warnings(
+        course_id=1,
+        class_id=None,
+        level=None,
+        student_id=None,
+        student_no=None,
+        warning_type=None,
+        status=0,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert all(row["id"] != 1 for row in pending)
+
+def test_dashboard_ai_completion_and_excellent_trend_are_real(session):
+    from app.api.v1 import dashboard
+
+    stats = dashboard.get_stats(
+        course_id=1,
+        class_id=None,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert "aiCompletionRate" in stats
+    assert 0 <= stats["aiCompletionRate"] <= 100
+
+    trend = dashboard.get_grade_trend(
+        course_id=1,
+        class_id=None,
+        student_id=None,
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert "excellentRate" in trend
+    assert len(trend["excellentRate"]) == len(trend["passRate"])
+    assert all(0 <= rate <= 100 for rate in trend["excellentRate"])

@@ -7,20 +7,24 @@ import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
-import { delay } from '@/utils/auth'
+import { fetchStudentScores } from '@/api/scores'
+
+interface GradeRecord {
+  id: number
+  courseName: string
+  semester: string
+  type: string
+  score: number
+  total: number
+  classAvg?: number
+  rank?: number
+  date?: string
+}
 
 const userStore = useUserStore()
 const loading = ref(true)
 
-/** 历史成绩记录 */
-const records = ref([
-  { id: 1, courseName: '数据结构', semester: '2025-2026-1', type: '期中考', score: 82, total: 100, classAvg: 76, rank: 15, date: '2025-11-15' },
-  { id: 2, courseName: '数据结构', semester: '2025-2026-1', type: '期末考', score: 88, total: 100, classAvg: 74, rank: 8, date: '2026-01-20' },
-  { id: 3, courseName: '数据结构', semester: '2025-2026-2', type: '第一次测验', score: 85, total: 100, classAvg: 72, rank: 10, date: '2026-03-10' },
-  { id: 4, courseName: '数据结构', semester: '2025-2026-2', type: '第二次测验', score: 90, total: 100, classAvg: 73, rank: 6, date: '2026-04-15' },
-  { id: 5, courseName: '操作系统', semester: '2025-2026-1', type: '期末考', score: 82, total: 100, classAvg: 74, rank: 12, date: '2026-01-22' },
-  { id: 6, courseName: '计算机网络', semester: '2025-2026-1', type: '期末考', score: 78, total: 100, classAvg: 72, rank: 18, date: '2026-01-25' },
-])
+const records = ref<GradeRecord[]>([])
 
 const courseFilter = ref('')
 const courseOptions = computed(() =>
@@ -32,16 +36,15 @@ const filteredRecords = computed(() => {
   return records.value.filter((r) => r.courseName === courseFilter.value)
 })
 
-/** 成绩趋势折线图 */
 const trendOption = computed<EChartsOption>(() => {
   const data = [...filteredRecords.value].reverse()
   return {
     tooltip: { trigger: 'axis' },
-    legend: { data: ['我的成绩', '班级均分'], top: 0, textStyle: { color: '#64748b' } },
+    legend: { data: ['我的成绩'], top: 0, textStyle: { color: '#64748b' } },
     grid: { left: 50, right: 20, top: 40, bottom: 30 },
     xAxis: {
       type: 'category',
-      data: data.map((r) => r.type + '\n' + r.date),
+      data: data.map((r) => r.type),
       axisLabel: { color: '#64748b', fontSize: 11 },
     },
     yAxis: { type: 'value', max: 100, name: '分数', axisLabel: { color: '#64748b' } },
@@ -58,14 +61,6 @@ const trendOption = computed<EChartsOption>(() => {
           data: [{ type: 'average', name: '平均' }],
           lineStyle: { color: '#f59e0b', type: 'dashed' },
         },
-      },
-      {
-        name: '班级均分',
-        type: 'line',
-        smooth: true,
-        data: data.map((r) => r.classAvg),
-        itemStyle: { color: '#94a3b8' },
-        lineStyle: { type: 'dashed' },
       },
     ],
   }
@@ -85,8 +80,26 @@ const stats = computed(() => {
 })
 
 onMounted(async () => {
-  await delay(300)
-  loading.value = false
+  try {
+    const studentId = userStore.userInfo?.studentId
+    if (!studentId) return
+    const courses = await fetchStudentScores(studentId)
+    records.value = courses.flatMap((course) =>
+      course.details.map((detail, index) => ({
+        id: course.courseId * 1000 + index,
+        courseName: course.courseName,
+        semester: '—',
+        type: detail.batchName,
+        score: detail.score,
+        total: 100,
+        classAvg: undefined,
+        rank: undefined,
+        date: undefined,
+      })),
+    )
+  } finally {
+    loading.value = false
+  }
 })
 </script>
 
@@ -140,15 +153,17 @@ onMounted(async () => {
             <span style="color:#94a3b8"> / {{ row.total }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="classAvg" label="班级均分" width="90" align="center" />
+        <el-table-column label="班级均分" width="90" align="center"><template #default="{ row }">{{ row.classAvg ?? '—' }}</template></el-table-column>
         <el-table-column label="班级排名" width="90" align="center">
           <template #default="{ row }">
-            <el-tag v-if="row.rank <= 5" type="success" size="small">第 {{ row.rank }} 名</el-tag>
-            <el-tag v-else-if="row.rank <= 15" type="warning" size="small">第 {{ row.rank }} 名</el-tag>
-            <span v-else>第 {{ row.rank }} 名</span>
+            <el-tag v-if="row.rank && row.rank <= 5" type="success" size="small">第 {{ row.rank }} 名</el-tag>
+            <el-tag v-else-if="row.rank && row.rank <= 15" type="warning" size="small">第 {{ row.rank }} 名</el-tag>
+            <span v-else>{{ row.rank ? `第 ${row.rank} 名` : '—' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="date" label="日期" width="120" />
+        <el-table-column label="日期" width="120">
+          <template #default="{ row }">{{ row.date || '—' }}</template>
+        </el-table-column>
       </el-table>
     </div>
   </div>

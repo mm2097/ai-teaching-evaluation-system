@@ -4,6 +4,8 @@
 import request from '@/utils/request'
 import type { TeachingDataRecord } from '@/types'
 
+export type TeachingRecordType = TeachingDataRecord['recordType']
+
 // ---------------------------------------------------------------------------
 // 模板下载
 // ---------------------------------------------------------------------------
@@ -73,6 +75,7 @@ interface TeachingDataApiRow {
   id: string
   recordId: number
   dataType: 'score' | 'attendance'
+  recordType?: TeachingRecordType
   studentId: string
   studentName: string
   courseId: number
@@ -90,6 +93,7 @@ interface TeachingDataApiRow {
 function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): TeachingDataRecord {
   return {
     id: row.recordId,
+    recordType: row.recordType || row.dataType,
     studentId: row.studentId,
     studentName: row.studentName,
     courseId: String(row.courseId),
@@ -137,4 +141,42 @@ export async function updateRowData(
   sourceData: Record<string, unknown>,
 ): Promise<void> {
   await request.put(`/v1/teaching-data/${recordId}/row`, { source_data: sourceData })
+}
+
+export async function deleteTeachingDataRecord(
+  recordType: TeachingRecordType,
+  recordId: number,
+): Promise<void> {
+  await request.delete(`/v1/teaching-data/${recordType}/${recordId}`)
+}
+
+export async function batchDeleteTeachingDataRecords(
+  records: { recordType: TeachingRecordType; recordId: number }[],
+): Promise<{ deleted: number }> {
+  const res = await request.post('/v1/teaching-data/batch-delete', { records })
+  return res.data as { deleted: number }
+}
+
+function parseDownloadFilename(disposition: string, fallback: string): string {
+  const rfc5987 = disposition.match(/filename\*=UTF-8''([^;]+)/)
+  if (rfc5987) return decodeURIComponent(rfc5987[1]!)
+  const ascii = disposition.match(/filename="?([^";\s]+)"?/)
+  return ascii ? ascii[1]! : fallback
+}
+
+export async function exportTeachingData(params: TeachingDataQuery): Promise<{ blob: Blob; filename: string }> {
+  const res = await request.get('/v1/teaching-data/export', {
+    params: {
+      course_id: params.courseId,
+      keyword: params.keyword || undefined,
+      data_type: params.dataType || undefined,
+      batch_id: params.batchId || undefined,
+    },
+    responseType: 'blob',
+  })
+  const disposition = (res.headers as Record<string, string>)['content-disposition'] ?? ''
+  return {
+    blob: res.data as Blob,
+    filename: parseDownloadFilename(disposition, 'teaching_data_export.xlsx'),
+  }
 }

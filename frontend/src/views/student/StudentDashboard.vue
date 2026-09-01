@@ -10,27 +10,38 @@ import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
 import { countPendingStudentQuizzes } from '@/api/quiz'
+import { fetchStudentScores } from '@/api/scores'
 
 const userStore = useUserStore()
 const loading = ref(true)
 
+interface StudentCourseOverview {
+  id: number
+  name: string
+  teacher: string
+  progress: number
+  score: number
+  rank: string
+}
+
 /** 学生个人课程概览 */
-const courses = ref([
-  { id: 1, name: '数据结构', teacher: '王教授', progress: 72, score: 88, avgScore: 76, rank: '前15%' },
-  { id: 2, name: '操作系统', teacher: '李副教授', progress: 65, score: 82, avgScore: 74, rank: '前25%' },
-  { id: 3, name: '计算机网络', teacher: '张讲师', progress: 80, score: 78, avgScore: 72, rank: '前35%' },
-])
+const courses = ref<StudentCourseOverview[]>([])
 
 const pendingQuizCount = ref(0)
 
-const statCards = computed(() => [
-  { title: '课程数', value: courses.value.length, icon: 'Notebook', color: '#2563eb' },
-  { title: '平均成绩', value: +(courses.value.reduce((s, c) => s + c.score, 0) / courses.value.length).toFixed(1), unit: '分', icon: 'DataLine', color: '#10b981', trend: 2.5 },
-  { title: '总出勤率', value: 94.8, unit: '%', icon: 'Calendar', color: '#06b6d4' },
-  { title: '待完成练习', value: pendingQuizCount.value, icon: 'EditPen', color: '#f59e0b', link: '/quiz/answer?tab=assigned' },
-  { title: '薄弱知识点', value: 3, icon: 'Grid', color: '#ef4444', link: '/student/knowledge' },
-  { title: '班级排名', value: '前15%', icon: 'Trophy', color: '#8b5cf6' },
-])
+const statCards = computed(() => {
+  const average = courses.value.length
+    ? +(courses.value.reduce((s, c) => s + c.score, 0) / courses.value.length).toFixed(1)
+    : '—'
+  return [
+    { title: '课程数', value: courses.value.length, icon: 'Notebook', color: '#2563eb' },
+    { title: '平均成绩', value: average, unit: average === '—' ? undefined : '分', icon: 'DataLine', color: '#10b981' },
+    { title: '总出勤率', value: '—', icon: 'Calendar', color: '#06b6d4' },
+    { title: '待完成练习', value: pendingQuizCount.value, icon: 'EditPen', color: '#f59e0b', link: '/quiz/answer?tab=assigned' },
+    { title: '薄弱知识点', value: '—', icon: 'Grid', color: '#ef4444', link: '/student/knowledge' },
+    { title: '班级排名', value: '—', icon: 'Trophy', color: '#8b5cf6' },
+  ]
+})
 
 /** 各课程成绩柱状图 */
 const scoreBarOption = computed<EChartsOption>(() => ({
@@ -49,15 +60,8 @@ const scoreBarOption = computed<EChartsOption>(() => ({
       barWidth: 28,
       itemStyle: { color: '#2563eb', borderRadius: [6, 6, 0, 0] },
     },
-    {
-      name: '班级均分',
-      type: 'bar',
-      data: courses.value.map((c) => c.avgScore),
-      barWidth: 28,
-      itemStyle: { color: '#94a3b8', borderRadius: [6, 6, 0, 0] },
-    },
   ],
-  legend: { top: 0, textStyle: { color: '#64748b' } },
+  legend: { show: false },
   grid: { left: 50, right: 20, top: 40, bottom: 30 },
 }))
 
@@ -85,17 +89,27 @@ onMounted(async () => {
   try {
     const studentId = userStore.userInfo?.studentId
     if (studentId) {
-      pendingQuizCount.value = await countPendingStudentQuizzes(studentId)
+      const [pending, scoreCourses] = await Promise.all([
+        countPendingStudentQuizzes(studentId),
+        fetchStudentScores(studentId),
+      ])
+      pendingQuizCount.value = pending
+      courses.value = scoreCourses.map((course) => ({
+        id: course.courseId,
+        name: course.courseName,
+        teacher: '—',
+        progress: course.details.length ? Math.round(course.details.filter((d) => d.isPass).length / course.details.length * 100) : 0,
+        score: course.totalScore,
+        rank: '—',
+      }))
     }
-    // 加载成绩趋势
     const trendRes = await request.get('/v1/dashboard/grade-trend', {
-      params: { student_id: studentId, dept_id: 1 },
+      params: { student_id: studentId },
     })
     if (trendRes.data?.months) {
       trendMonths.value = trendRes.data.months
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     } else if (trendRes.data?.labels) {
-      // 兼容 mock 数据格式
       trendMonths.value = trendRes.data.labels
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     }

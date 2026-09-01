@@ -27,7 +27,7 @@ from app.core.database import get_session, engine
 from app.core.operation_log import get_current_user
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
-    SysUser, Teacher, SysRole,
+    SysUser, Teacher, SysRole, SysOperationLog,
     IndividualScore, AttendanceSheet, CourseTestDetail,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
@@ -36,6 +36,36 @@ from app.services.analysis_refresh import refresh_course_analysis
 router = APIRouter()
 
 ALLOWED_EXTENSIONS = {".xlsx", ".txt"}
+
+
+def _import_type_from_template(template_name: str | None) -> str:
+    text = template_name or ""
+    if "考勤" in text:
+        return "attendance"
+    if "成绩" in text or "扣分" in text or "测试" in text:
+        return "score"
+    return "score"
+
+
+def _build_import_log_content(
+    *,
+    file_name: str,
+    data_source: str,
+    course_id: int,
+    course_name: str,
+    result: ImportResult,
+) -> str:
+    payload = {
+        "fileName": file_name[:90],
+        "dataSource": data_source,
+        "courseId": course_id,
+        "importType": _import_type_from_template(result.detected_template),
+        "totalCount": result.success_count + result.error_count,
+        "successCount": result.success_count,
+        "failCount": result.error_count,
+        "status": 1 if result.error_count == 0 else 2,
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 # ============================================================================
@@ -124,6 +154,7 @@ def query_teaching_data(
             rows.append({
                 "id": f"score_{s.score_id}",
                 "recordId": s.score_id,
+                "recordType": "score",
                 "dataType": "score",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
@@ -157,6 +188,7 @@ def query_teaching_data(
             rows.append({
                 "id": f"individual_{s.score_id}",
                 "recordId": s.score_id,
+                "recordType": "score",
                 "dataType": "score",
                 "subType": "individual_score",
                 "studentId": student.student_no,
@@ -189,6 +221,7 @@ def query_teaching_data(
             rows.append({
                 "id": f"test_detail_{s.score_id}",
                 "recordId": s.score_id,
+                "recordType": "score",
                 "dataType": "score",
                 "subType": "course_test_detail",
                 "studentId": student.student_no,
@@ -227,6 +260,7 @@ def query_teaching_data(
             rows.append({
                 "id": f"attendance_{a.attendance_id}",
                 "recordId": a.attendance_id,
+                "recordType": "attendance",
                 "dataType": "attendance",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
@@ -267,6 +301,7 @@ def query_teaching_data(
             rows.append({
                 "id": f"attendance_sheet_{a.score_id}",
                 "recordId": a.score_id,
+                "recordType": "attendance_sheet",
                 "dataType": "attendance",
                 "subType": "attendance_sheet",
                 "studentId": student.student_no,
@@ -596,6 +631,83 @@ def edit_teaching_data(
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance")
 
 
+
+# ============================================================================
+# 删除接口（3.2.6 / 3.2.7 节：Data.Query.Delete）
+# ============================================================================
+
+_RECORD_MODEL_BY_TYPE = {
+    "score": ScoreRecord,
+    "attendance": AttendanceRecord,
+    "individual_score": IndividualScore,
+    "course_test_detail": CourseTestDetail,
+    "attendance_sheet": AttendanceSheet,
+}
+
+
+def _get_record_course_id(record: Any, session: Session) -> int:
+    if isinstance(record, (ScoreRecord, AttendanceRecord)):
+        return record.course_id
+    batch_id = getattr(record, "exam_batch_id", None)
+    batch = session.get(ExamBatch, batch_id) if batch_id is not None else None
+    if not batch:
+        raise HTTPException(status_code=404, detail="关联考试批次不存在")
+    return batch.course_id
+
+
+def _delete_teaching_record(record_type: str, record_id: int, session: Session, current_user: SysUser) -> None:
+    model = _RECORD_MODEL_BY_TYPE.get(record_type)
+    if model is None:
+        supported = ", ".join(_RECORD_MODEL_BY_TYPE)
+        raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: {supported}")
+
+    record = session.get(model, record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="记录不存在")
+
+    _require_teacher_for_course(current_user, _get_record_course_id(record, session), session)
+    session.delete(record)
+
+
+@router.delete("/teaching-data/{record_type}/{record_id}", tags=["教学数据"])
+def delete_teaching_data(
+    record_type: str,
+    record_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """删除单条教学数据。仅授课教师可删除自己课程的数据。"""
+    _delete_teaching_record(record_type, record_id, session, current_user)
+    session.commit()
+    return {"recordType": record_type, "recordId": record_id, "deleted": True}
+
+
+@router.post("/teaching-data/batch-delete", tags=["教学数据"])
+def batch_delete_teaching_data(
+    payload: dict = Body(...),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """批量删除教学数据；任一记录无权限或不存在时整体失败。"""
+    records = payload.get("records") if isinstance(payload, dict) else None
+    if not isinstance(records, list) or not records:
+        raise HTTPException(status_code=422, detail="records 不能为空")
+
+    normalized: list[tuple[str, int]] = []
+    for item in records:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="records 格式错误")
+        record_type = item.get("recordType")
+        record_id = item.get("recordId")
+        if not isinstance(record_type, str) or not isinstance(record_id, int):
+            raise HTTPException(status_code=422, detail="recordType 和 recordId 必填")
+        normalized.append((record_type, record_id))
+
+    for record_type, record_id in normalized:
+        _delete_teaching_record(record_type, record_id, session, current_user)
+    session.commit()
+    return {"deleted": len(normalized)}
+
 @router.get("/teaching-data/export", tags=["教学数据"])
 def export_teaching_data(
     course_id: int = Query(..., description="课程 ID"),
@@ -691,6 +803,55 @@ def export_teaching_data(
 # ============================================================================
 # 文件上传导入接口
 # ============================================================================
+
+
+@router.get("/teaching-data/import-logs", tags=["教学数据"])
+def list_import_logs(
+    limit: int = Query(default=20, ge=1, le=100),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """返回真实上传历史。
+
+    当前系统未单独建导入日志表，上传成功/失败结果记录在 sys_operation_log，
+    此接口将结构化操作日志转换为前端上传历史所需字段。
+    """
+    role = session.get(SysRole, current_user.role_id)
+    stmt = select(SysOperationLog).where(
+        SysOperationLog.module == "数据管理",
+        SysOperationLog.operation == "导入",
+    )
+    if not role or role.role_code != "admin":
+        stmt = stmt.where(SysOperationLog.user_id == current_user.user_id)
+    logs = session.exec(
+        stmt.order_by(SysOperationLog.operation_time.desc()).limit(limit)
+    ).all()
+    user_ids = {log.user_id for log in logs}
+    users = {
+        user.user_id: user
+        for user in session.exec(select(SysUser).where(SysUser.user_id.in_(user_ids))).all()
+    } if user_ids else {}
+
+    rows: list[dict] = []
+    for log in logs:
+        try:
+            payload = json.loads(log.content or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        user = users.get(log.user_id)
+        rows.append({
+            "id": log.log_id,
+            "importType": payload.get("importType", "score"),
+            "dataSource": payload.get("dataSource", "excel"),
+            "fileName": payload.get("fileName", log.content or ""),
+            "totalCount": int(payload.get("totalCount") or 0),
+            "successCount": int(payload.get("successCount") or 0),
+            "failCount": int(payload.get("failCount") or 0),
+            "operatorName": user.real_name if user else "",
+            "importTime": log.operation_time.strftime("%Y-%m-%d %H:%M:%S") if log.operation_time else "",
+            "status": int(payload.get("status") or 1),
+        })
+    return rows
 
 
 def _refresh_analysis_in_background(course_id: int) -> None:
@@ -793,6 +954,21 @@ def upload_teaching_data(
                 _refresh_analysis_in_background, course_id
             )
             analysis_refresh = {"scheduled": True}
+
+
+        session.add(SysOperationLog(
+            user_id=current_user.user_id or 0,
+            module="数据管理",
+            operation="导入",
+            content=_build_import_log_content(
+                file_name=file.filename or "",
+                data_source="excel" if ext == ".xlsx" else "txt",
+                course_id=course_id,
+                course_name=course.course_name,
+                result=result,
+            ),
+        ))
+        session.commit()
 
     finally:
         # 清理临时文件
@@ -910,3 +1086,5 @@ def download_template(
             ),
         },
     )
+
+

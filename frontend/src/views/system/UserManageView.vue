@@ -32,6 +32,14 @@ const form = ref({
   status: true,
   college: '',
   classId: undefined as number | undefined,
+  // 学生档案字段（仅学生角色使用，写入 student 表）
+  studentNo: '',
+  gender: 1 as number,  // 0=女, 1=男，默认男
+  // 教师档案字段（仅教师角色使用，写入 teacher 表）
+  teacherNo: '',
+  title: '',
+  phone: '',
+  email: '',
 })
 
 function emptyForm() {
@@ -43,6 +51,12 @@ function emptyForm() {
     status: true,
     college: '',
     classId: undefined as number | undefined,
+    studentNo: '',
+    gender: 1 as number,
+    teacherNo: '',
+    title: '',
+    phone: '',
+    email: '',
   }
 }
 
@@ -83,7 +97,19 @@ async function loadClasses(): Promise<void> {
 }
 
 function onRoleChange(role: UserRole): void {
-  if (role !== 'student') form.value.classId = undefined
+  if (role !== 'student') {
+    form.value.classId = undefined
+    form.value.studentNo = ''
+    form.value.gender = 1
+  }
+  if (role !== 'teacher') {
+    form.value.teacherNo = ''
+    form.value.title = ''
+  }
+  if (role === 'admin') {
+    form.value.phone = ''
+    form.value.email = ''
+  }
 }
 
 function handleAdd(): void {
@@ -102,6 +128,12 @@ function handleEdit(row: SystemUser): void {
     status: row.status,
     college: row.department,
     classId: row.classId ?? undefined,
+    studentNo: row.studentNo || '',
+    gender: row.gender ?? 1,
+    teacherNo: row.teacherNo || '',
+    title: row.title || '',
+    phone: row.phone || '',
+    email: row.email || '',
   }
   dialogVisible.value = true
 }
@@ -154,6 +186,12 @@ async function saveUser(): Promise<void> {
         status: form.value.status,
         college: form.value.college,
         classId,
+        studentNo: form.value.studentNo,
+        gender: form.value.gender,
+        teacherNo: form.value.teacherNo,
+        title: form.value.title,
+        phone: form.value.phone,
+        email: form.value.email,
       })
     } else {
       await userApi.create({
@@ -163,6 +201,12 @@ async function saveUser(): Promise<void> {
         status: form.value.status,
         college: form.value.college,
         classId,
+        studentNo: form.value.studentNo,
+        gender: form.value.gender,
+        teacherNo: form.value.teacherNo,
+        title: form.value.title,
+        phone: form.value.phone,
+        email: form.value.email,
       })
     }
     dialogVisible.value = false
@@ -294,6 +338,44 @@ watch(
             />
           </el-select>
         </el-form-item>
+        <!-- 学生档案字段：写入 student 表；学号留空默认与账号相同，手机号/邮箱可空 -->
+        <template v-if="form.role === 'student'">
+          <el-form-item label="学号">
+            <el-input v-model="form.studentNo" placeholder="留空则默认与账号相同" clearable />
+          </el-form-item>
+          <el-form-item label="性别">
+            <el-radio-group v-model="form.gender">
+              <el-radio :value="1">男</el-radio>
+              <el-radio :value="0">女</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="form.phone" placeholder="可为空" clearable maxlength="20" />
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="form.email" placeholder="可为空" clearable maxlength="64" />
+          </el-form-item>
+        </template>
+        <!-- 教师档案字段：写入 teacher 表；教工号留空默认与账号相同 -->
+        <template v-if="form.role === 'teacher'">
+          <el-form-item label="教工号">
+            <el-input v-model="form.teacherNo" placeholder="留空则默认与账号相同" clearable />
+          </el-form-item>
+          <el-form-item label="职称">
+            <el-select v-model="form.title" placeholder="可为空" clearable filterable allow-create default-first-option style="width: 100%">
+              <el-option label="教授" value="教授" />
+              <el-option label="副教授" value="副教授" />
+              <el-option label="讲师" value="讲师" />
+              <el-option label="助教" value="助教" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="form.phone" placeholder="可为空" clearable maxlength="20" />
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="form.email" placeholder="可为空" clearable maxlength="64" />
+          </el-form-item>
+        </template>
         <el-form-item label="所属学院">
           <el-input v-model="form.college" placeholder="不填默认为计算机学院" clearable />
         </el-form-item>

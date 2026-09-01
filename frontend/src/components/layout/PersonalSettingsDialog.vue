@@ -1,13 +1,14 @@
 <!--
   个人设置弹窗
-  展示当前账号基本信息，并提供修改登录密码功能
-  （修改密码为个人自助入口，与管理员"重置密码"功能互补）
+  展示当前账号基本信息；提供修改登录密码功能
+  学生角色额外支持修改本人手机号/邮箱（学生仅可更改手机号、邮箱、密码）
 -->
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { authApi } from '@/api/auth'
+import { setStoredUser } from '@/utils/auth'
 import { useUserStore } from '@/stores/user'
 
 /** 弹窗显隐（v-model） */
@@ -17,13 +18,21 @@ const userStore = useUserStore()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 
+const isStudent = computed(() => userStore.userRole === 'student')
+
 /** 基本信息（只读展示，来源于登录态） */
-const basicInfo = computed(() => [
-  { label: '账号', value: userStore.userInfo?.username || '-' },
-  { label: '姓名', value: userStore.userInfo?.name || '-' },
-  { label: '角色', value: userStore.roleLabel || '-' },
-  { label: '院系', value: userStore.userInfo?.department || '-' },
-])
+const basicInfo = computed(() => {
+  const items = [
+    { label: '账号', value: userStore.userInfo?.username || '-' },
+    { label: '姓名', value: userStore.userInfo?.name || '-' },
+    { label: '角色', value: userStore.roleLabel || '-' },
+    { label: '院系', value: userStore.userInfo?.department || '-' },
+  ]
+  if (userStore.userInfo?.studentNo) {
+    items.push({ label: '学号', value: userStore.userInfo.studentNo })
+  }
+  return items
+})
 
 /** 修改密码表单 */
 const form = reactive({
@@ -53,13 +62,22 @@ const rules: FormRules = {
   ],
 }
 
-/** 打开弹窗时清空上次的输入 */
+/** 学生联系方式表单（手机号/邮箱可空） */
+const contactForm = reactive({
+  phone: '',
+  email: '',
+})
+const savingContact = ref(false)
+
+/** 打开弹窗时回填当前值并清空上次的输入 */
 watch(visible, (val) => {
   if (val) {
     form.oldPassword = ''
     form.newPassword = ''
     form.confirmPassword = ''
     formRef.value?.clearValidate()
+    contactForm.phone = userStore.userInfo?.phone || ''
+    contactForm.email = userStore.userInfo?.email || ''
   }
 })
 
@@ -77,6 +95,27 @@ async function handleSubmit(): Promise<void> {
     visible.value = false
   } finally {
     submitting.value = false
+  }
+}
+
+/**
+ * 学生保存联系方式（手机号/邮箱，留空表示清空）
+ */
+async function handleSaveContact(): Promise<void> {
+  if (savingContact.value) return
+  savingContact.value = true
+  try {
+    await authApi.updateContact(contactForm.phone.trim(), contactForm.email.trim())
+    if (userStore.userInfo) {
+      userStore.userInfo.phone = contactForm.phone.trim() || undefined
+      userStore.userInfo.email = contactForm.email.trim() || undefined
+      setStoredUser(JSON.stringify(userStore.userInfo))
+    }
+    ElMessage.success('联系方式已更新')
+  } catch {
+    // 错误提示由请求拦截器统一处理
+  } finally {
+    savingContact.value = false
   }
 }
 </script>
@@ -99,6 +138,24 @@ async function handleSubmit(): Promise<void> {
           :label="item.label"
         >{{ item.value }}</el-descriptions-item>
       </el-descriptions>
+    </div>
+
+    <!-- 学生联系方式（学生仅可更改手机号、邮箱、密码） -->
+    <div v-if="isStudent" class="contact-section">
+      <div class="section-title">联系方式</div>
+      <el-form label-width="90px" @submit.prevent>
+        <el-form-item label="手机号">
+          <el-input v-model="contactForm.phone" placeholder="可为空" clearable maxlength="20" />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="contactForm.email" placeholder="可为空" clearable maxlength="64" />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="savingContact" @click="handleSaveContact">
+            保存联系方式
+          </el-button>
+        </el-form-item>
+      </el-form>
     </div>
 
     <!-- 修改密码 -->
@@ -150,7 +207,8 @@ async function handleSubmit(): Promise<void> {
 </template>
 
 <style scoped lang="scss">
-.basic-section {
+.basic-section,
+.contact-section {
   margin-bottom: 20px;
 }
 

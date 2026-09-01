@@ -26,6 +26,8 @@ class LoginUser(SQLModel):
     student_id: int | None = None
     student_no: str | None = None
     class_id: int | None = None
+    student_phone: str | None = None
+    student_email: str | None = None
     # 教师
     teacher_id: int | None = None
     college: str | None = None
@@ -41,6 +43,12 @@ class ChangePasswordRequest(SQLModel):
     """修改密码请求体。"""
     old_password: str
     new_password: str
+
+
+class UpdateContactRequest(SQLModel):
+    """学生修改本人联系方式请求体（手机号/邮箱可空）。"""
+    phone: str | None = None
+    email: str | None = None
 
 
 def create_token(user_id: int, username: str) -> str:
@@ -73,16 +81,20 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
     role = session.get(SysRole, user.role_id)
     role_code = role.role_code if role else ""
 
-    # 学生登录时附加 student_id / student_no / class_id
+    # 学生登录时附加 student_id / student_no / class_id / 联系方式
     student_id: int | None = None
     student_no: str | None = None
     class_id: int | None = None
+    student_phone: str | None = None
+    student_email: str | None = None
     if role_code == "student":
         student = session.exec(select(Student).where(Student.user_id == user.user_id)).first()
         if student:
             student_id = student.student_id
             student_no = student.student_no
             class_id = student.class_id
+            student_phone = student.phone
+            student_email = student.email
 
     # 教师登录时附加 teacher_id / college / title
     teacher_id: int | None = None
@@ -106,6 +118,8 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             student_id=student_id,
             student_no=student_no,
             class_id=class_id,
+            student_phone=student_phone,
+            student_email=student_email,
             teacher_id=teacher_id,
             college=college,
             title=title,
@@ -141,3 +155,33 @@ def change_password(
         ip_address=get_client_ip(request),
     )
     return {"message": "密码修改成功"}
+
+
+@router.put("/profile/contact", tags=["认证"])
+def update_contact(
+    payload: UpdateContactRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """学生修改本人联系方式（手机号/邮箱）。学生仅可更改手机号、邮箱、密码。"""
+    student = session.exec(select(Student).where(Student.user_id == current_user.user_id)).first()
+    if not student:
+        raise HTTPException(status_code=403, detail="仅学生可修改联系方式")
+    # 传空串表示清空，传 null 表示不改动
+    if payload.phone is not None:
+        student.phone = (payload.phone or "").strip() or None
+    if payload.email is not None:
+        student.email = (payload.email or "").strip() or None
+    student.update_time = datetime.now()
+    session.add(student)
+    session.commit()
+    save_operation_log(
+        session,
+        user_id=current_user.user_id,
+        module="个人设置",
+        operation="修改联系方式",
+        content=f"学生 {current_user.username} 更新手机号/邮箱",
+        ip_address=get_client_ip(request),
+    )
+    return {"phone": student.phone, "email": student.email}

@@ -18,6 +18,12 @@ interface UserResponse {
   department?: string
   class_id?: number | null
   class_name?: string
+  student_no?: string
+  gender?: number | null
+  teacher_no?: string
+  title?: string
+  phone?: string
+  email?: string
   status: number
   create_time?: string
 }
@@ -29,6 +35,12 @@ interface UserUpdatePayload {
   password?: string
   college?: string
   class_id?: number | null
+  student_no?: string
+  gender?: number
+  teacher_no?: string
+  title?: string | null
+  phone?: string | null
+  email?: string | null
 }
 
 let roleIdMap: Partial<Record<UserRole, number>> = {}
@@ -58,7 +70,7 @@ export const userApi = {
     return (res.data as UserResponse[]).map(mapUser)
   },
 
-  /** 创建用户（默认密码 123456，学生须传班级） */
+  /** 创建用户（默认密码 123456，学生须传班级与学生档案字段，教师同步教师档案） */
   async create(data: {
     username: string
     name: string
@@ -66,6 +78,12 @@ export const userApi = {
     status: boolean
     college?: string
     classId?: number | null
+    studentNo?: string
+    gender?: number | null
+    teacherNo?: string
+    title?: string
+    phone?: string
+    email?: string
   }): Promise<SystemUser> {
     const roleId = await getRoleId(data.role)
     const res = await request.post('/users', {
@@ -76,6 +94,12 @@ export const userApi = {
       status: data.status ? 1 : 0,
       college: data.college,
       class_id: data.role === 'student' ? data.classId : undefined,
+      student_no: data.role === 'student' ? data.studentNo : undefined,
+      gender: data.role === 'student' ? data.gender ?? 1 : undefined,
+      teacher_no: data.role === 'teacher' ? data.teacherNo : undefined,
+      title: data.role === 'teacher' ? data.title : undefined,
+      phone: data.role === 'student' || data.role === 'teacher' ? data.phone : undefined,
+      email: data.role === 'student' || data.role === 'teacher' ? data.email : undefined,
     })
     return mapUser(res.data)
   },
@@ -83,7 +107,20 @@ export const userApi = {
   /** 更新用户（只传要改的字段） */
   async update(
     id: number,
-    data: Partial<{ name: string; role: UserRole; status: boolean; password: string; college: string; classId: number | null }>,
+    data: Partial<{
+      name: string
+      role: UserRole
+      status: boolean
+      password: string
+      college: string
+      classId: number | null
+      studentNo: string
+      gender: number | null
+      teacherNo: string
+      title: string | null
+      phone: string | null
+      email: string | null
+    }>,
   ): Promise<SystemUser> {
     const payload: UserUpdatePayload = {}
     if (data.name !== undefined) payload.real_name = data.name
@@ -94,6 +131,12 @@ export const userApi = {
     if (data.password !== undefined) payload.password = data.password
     if (data.college !== undefined) payload.college = data.college
     if (data.classId !== undefined) payload.class_id = data.classId
+    if (data.studentNo !== undefined) payload.student_no = data.studentNo
+    if (data.gender !== undefined && data.gender !== null) payload.gender = data.gender
+    if (data.teacherNo !== undefined) payload.teacher_no = data.teacherNo
+    if (data.title !== undefined) payload.title = data.title
+    if (data.phone !== undefined) payload.phone = data.phone
+    if (data.email !== undefined) payload.email = data.email
     const res = await request.put(`/users/${id}`, payload)
     return mapUser(res.data)
   },
@@ -114,6 +157,12 @@ function mapUser(raw: UserResponse): SystemUser {
     department: raw.department || '',
     classId: raw.class_id ?? null,
     className: raw.class_name || '',
+    studentNo: raw.student_no || '',
+    gender: raw.gender ?? null,
+    teacherNo: raw.teacher_no || '',
+    title: raw.title || '',
+    phone: raw.phone || '',
+    email: raw.email || '',
     status: raw.status === 1,
     createTime: raw.create_time?.slice(0, 10) ?? '',
   }

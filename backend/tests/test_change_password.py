@@ -12,10 +12,10 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app import models  # noqa: F401  确保所有表注册到 metadata
-from app.api.v1.auth import router as auth_router
+from app.api.v1.auth import create_token, router as auth_router
 from app.core.database import get_session
 from app.core.security import hash_password
-from app.models import SysOperationLog, SysRole, SysUser
+from app.models import ClassInfo, Student, SysOperationLog, SysRole, SysUser
 
 import pytest
 from fastapi import FastAPI
@@ -32,9 +32,19 @@ def engine():
     SQLModel.metadata.create_all(eng)
     with Session(eng) as s:
         s.add(SysRole(role_id=2, role_name="教师", role_code="teacher"))
+        s.add(SysRole(role_id=3, role_name="学生", role_code="student"))
+        s.add(ClassInfo(class_id=1, class_name="软件1801班", college="计算机学院"))
         s.add(SysUser(
             user_id=1, username="teacher", password=hash_password("123456"),
             real_name="王老师", role_id=2, status=1,
+        ))
+        s.add(SysUser(
+            user_id=2, username="student1", password=hash_password("123456"),
+            real_name="赵同学", role_id=3, status=1,
+        ))
+        s.add(Student(
+            student_id=1, student_no="S001", real_name="赵同学",
+            class_id=1, user_id=2,
         ))
         s.commit()
     return eng
@@ -121,3 +131,44 @@ def test_change_password_success(client, engine):
         ).first()
         assert log is not None
         assert "teacher" in log.content
+
+
+def _student_auth(client) -> dict[str, str]:
+    """学生登录获取 Bearer 头。"""
+    resp = client.post("/api/login", json={"username": "student1", "password": "123456"})
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['token']}"}
+
+
+def test_update_contact_requires_student_role(client):
+    """非学生角色修改联系方式 → 403。"""
+    # 直接签发教师 token（前面用例已修改教师密码，不能再用旧密码登录）
+    headers = {"Authorization": f"Bearer {create_token(1, 'teacher')}"}
+    resp = client.put("/api/profile/contact", json={
+        "phone": "13800000000", "email": "t@hunnu.edu.cn",
+    }, headers=headers)
+    assert resp.status_code == 403
+
+
+def test_update_contact_success(client, engine):
+    """学生可更新本人手机号/邮箱，写入学生表。"""
+    resp = client.put("/api/profile/contact", json={
+        "phone": "13800000000", "email": "stu@hunnu.edu.cn",
+    }, headers=_student_auth(client))
+    assert resp.status_code == 200
+    assert resp.json()["phone"] == "13800000000"
+    assert resp.json()["email"] == "stu@hunnu.edu.cn"
+
+    with Session(engine) as s:
+        student = s.exec(select(Student).where(Student.student_no == "S001")).first()
+        assert student.phone == "13800000000"
+        assert student.email == "stu@hunnu.edu.cn"
+
+
+def test_update_contact_clear_by_empty_string(client):
+    """传空串 → 清空对应联系方式。"""
+    resp = client.put("/api/profile/contact", json={
+        "phone": "", "email": None,
+    }, headers=_student_auth(client))
+    assert resp.status_code == 200
+    assert resp.json()["phone"] is None

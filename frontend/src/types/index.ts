@@ -24,6 +24,9 @@ export interface UserInfo {
   teacherId?: number
   classId?: number
   avatar?: string
+  /** 学生联系方式（可空） */
+  phone?: string
+  email?: string
 }
 
 /** 系统用户(用户管理页面用) */
@@ -35,6 +38,18 @@ export interface SystemUser {
   department: string
   classId?: number | null
   className?: string
+  /** 学号（学生角色，存于学生表） */
+  studentNo?: string
+  /** 性别：0=女, 1=男（学生角色） */
+  gender?: number | null
+  /** 教工号（教师角色，存于教师表） */
+  teacherNo?: string
+  /** 职称（教师角色，可空） */
+  title?: string
+  /** 手机号（学生/教师档案，可空） */
+  phone?: string
+  /** 邮箱（学生/教师档案，可空） */
+  email?: string
   status: boolean
   createTime: string
 }

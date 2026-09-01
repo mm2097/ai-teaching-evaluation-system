@@ -34,8 +34,7 @@ const {
 const profileData = ref<StudentProfileData | null>(null)
 
 async function loadProfile(): Promise<void> {
-  if (!queryParams.value.courseId) return
-  if (queryParams.value.targetType === 'student' && !queryParams.value.targetId) return
+  if (!queryParams.value.courseId || !queryParams.value.targetId) return
   profileData.value = await fetchStudentProfile({
     ...queryParams.value,
     analysisType: '学情画像',
@@ -43,17 +42,21 @@ async function loadProfile(): Promise<void> {
 }
 
 const studentName = computed(() => profileData.value?.studentName || '加载中...')
-const studentInfo = computed(() =>
-  profileData.value
-    ? `学号：${profileData.value.studentNo} · ${profileData.value.className} · ${profileData.value.courseName}`
-    : '',
-)
+const isClassView = computed(() => profileData.value?.viewType === 'class')
+const studentInfo = computed(() => {
+  if (!profileData.value) return ''
+  if (isClassView.value) {
+    return `班级：${profileData.value.className} · ${profileData.value.courseName}`
+  }
+  return `学号：${profileData.value.studentNo} · ${profileData.value.className} · ${profileData.value.courseName}`
+})
 
+// 五轴雷达（成绩/考勤/互动/进步/综合）；后端返回 radarIndicators 时优先使用
 const defaultIndicators = [
   { name: '成绩', max: 100 },
   { name: '考勤', max: 100 },
-  { name: '作业', max: 100 },
   { name: '互动', max: 100 },
+  { name: '进步', max: 100 },
   { name: '综合', max: 100 },
 ]
 
@@ -131,13 +134,17 @@ watch(queryParams, async (val) => {
               <p class="profile-meta">{{ studentInfo }}</p>
             </div>
           </div>
-          <div class="tag-list">
+          <div v-if="studentTags.length" class="tag-list">
             <el-tag v-for="tag in studentTags" :key="tag" type="primary" effect="plain" size="small">
               {{ tag }}
             </el-tag>
           </div>
           <el-divider />
-          <div class="strength-weakness">
+          <!-- 班级视角：说明平均口径；个人视角：优势/薄弱知识点 -->
+          <div v-if="isClassView" class="class-view-hint">
+            班级平均画像：考勤轴为班级平均到课率，互动轴为班级平均课堂参与度。
+          </div>
+          <div v-else class="strength-weakness">
             <div class="sw-item success">
               <h4>优势知识点</h4>
               <p>{{ profileData?.strongPoints || '-' }}</p>
@@ -157,7 +164,7 @@ watch(queryParams, async (val) => {
       </el-col>
     </el-row>
 
-    <div class="content-card">
+    <div v-if="!isClassView" class="content-card">
       <div class="content-card__title">维度得分详情</div>
       <el-table :data="dimensionScores" stripe border>
         <el-table-column prop="name" label="维度" width="140" />
@@ -210,6 +217,15 @@ watch(queryParams, async (val) => {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.class-view-hint {
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
+  padding: 12px;
+  border-radius: 8px;
+  background: #eff6ff;
 }
 
 .strength-weakness {

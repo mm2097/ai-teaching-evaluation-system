@@ -706,31 +706,36 @@ def seed() -> None:
 
         # ========== 15. 评价维度 & 指标 ==========
         dimensions = [
-            EvalDimension(course_id=1, dimension_name="学业成绩", description="考核成绩综合评价", sort_num=1),
+            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
             EvalDimension(course_id=1, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学业成绩", description="考核成绩综合评价", sort_num=1),
+            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
             EvalDimension(course_id=3, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
         ]
         session.add_all(dimensions)
         session.commit()
 
+        def _academic_part_indexes(dim_id: int) -> list:
+            """学业水平组成部分指标：小班讨论/期中/期末/考勤/其他（占比自动补足）。"""
+            return [
+                EvalIndex(dimension_id=dim_id, index_name="小班讨论", weight=10,
+                          score_rule='{"type":"academic_part","part":"discussion"}'),
+                EvalIndex(dimension_id=dim_id, index_name="期中考试", weight=30,
+                          score_rule='{"type":"academic_part","part":"midterm"}'),
+                EvalIndex(dimension_id=dim_id, index_name="期末考试", weight=30,
+                          score_rule='{"type":"academic_part","part":"final"}'),
+                EvalIndex(dimension_id=dim_id, index_name="考勤", weight=10,
+                          score_rule='{"type":"academic_part","part":"attendance"}'),
+                EvalIndex(dimension_id=dim_id, index_name="其他", weight=20,
+                          score_rule='{"type":"academic_part","part":"other"}'),
+            ]
+
         indexes = [
-            EvalIndex(dimension_id=1, index_name="期末成绩", weight=40,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":4}'),
-            EvalIndex(dimension_id=1, index_name="平时成绩", weight=30,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":1}'),
-            EvalIndex(dimension_id=1, index_name="期中成绩", weight=30,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":3}'),
+            *_academic_part_indexes(1),
             EvalIndex(dimension_id=2, index_name="出勤率", weight=50,
                       score_rule='{"type":"attendance","full_score":100}'),
             EvalIndex(dimension_id=2, index_name="课堂参与", weight=50,
                       score_rule='{"type":"interaction","full_score":100}'),
-            EvalIndex(dimension_id=3, index_name="期末成绩", weight=40,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":4}'),
-            EvalIndex(dimension_id=3, index_name="平时成绩", weight=30,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":1}'),
-            EvalIndex(dimension_id=3, index_name="期中成绩", weight=30,
-                      score_rule='{"type":"direct","source":"score_record","batch_type":3}'),
+            *_academic_part_indexes(3),
             EvalIndex(dimension_id=4, index_name="出勤率", weight=50,
                       score_rule='{"type":"attendance","full_score":100}'),
             EvalIndex(dimension_id=4, index_name="课堂参与", weight=50,

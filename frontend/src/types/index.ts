@@ -154,8 +154,8 @@ export interface TeachingDataRecord {
   score?: number
   attendance?: string
   homework?: string
-  dataType: 'score' | 'attendance' | 'assignment'
-  /** 子类型：individual_score / course_test_detail / attendance_sheet（旧表无此字段） */
+  dataType: 'score' | 'attendance' | 'participation' | 'assignment'
+  /** 子类型：individual_score / course_test_detail / attendance_sheet / participation_sheet */
   subType?: string
   /** 成绩数据的批次名称（如"期中考试""期末考试"），考勤数据的状态文本 */
   batchName?: string
@@ -163,6 +163,10 @@ export interface TeachingDataRecord {
   remark?: string
   /** 考核批次 ID */
   batchId?: number
+  /** 课堂参与度（0-1，课堂参与数据行） */
+  participationRate?: number
+  /** 课堂总数（课堂参与数据行） */
+  totalCount?: number
   /** 原始上传行数据 JSON（含完整表头-值对） */
   sourceData?: string
   importLogId?: number
@@ -182,9 +186,11 @@ export interface AnalysisQuery {
   studentNo?: string
 }
 
-/** 学情画像数据（单课程维度） */
+/** 学情画像数据（单课程维度，支持学生/班级两种视角） */
 export interface StudentProfileData {
-  studentId: number
+  /** 视角：student=学生个人，class=班级平均 */
+  viewType?: 'student' | 'class'
+  studentId: number | null
   studentNo: string
   studentName: string
   className: string

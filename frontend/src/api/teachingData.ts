@@ -65,7 +65,7 @@ export async function downloadTemplateFromServer(
 export interface TeachingDataQuery {
   courseId: number
   keyword?: string
-  dataType?: 'score' | 'attendance'
+  dataType?: 'score' | 'attendance' | 'participation'
   batchId?: number
   page?: number
   pageSize?: number
@@ -74,7 +74,7 @@ export interface TeachingDataQuery {
 interface TeachingDataApiRow {
   id: string
   recordId: number
-  dataType: 'score' | 'attendance'
+  dataType: 'score' | 'attendance' | 'participation'
   subType?: string
   studentId: string
   studentName: string
@@ -88,6 +88,8 @@ interface TeachingDataApiRow {
   remark?: string
   sourceData?: string
   attendanceDate?: string | null
+  participationRate?: number
+  totalCount?: number
 }
 
 function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): TeachingDataRecord {
@@ -109,6 +111,8 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     batchName: row.batchName,
     remark: row.remark,
     batchId: row.batchId,
+    participationRate: row.dataType === 'participation' ? row.participationRate : undefined,
+    totalCount: row.dataType === 'participation' ? row.totalCount : undefined,
     sourceData: row.sourceData,
   }
 }

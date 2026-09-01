@@ -28,7 +28,7 @@ from app.core.operation_log import get_client_ip, get_current_user, save_operati
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole,
-    IndividualScore, AttendanceSheet, CourseTestDetail,
+    IndividualScore, AttendanceSheet, ParticipationSheet, CourseTestDetail,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
 from app.services.analysis_refresh import refresh_course_analysis
@@ -77,7 +77,7 @@ STATUS_MAP = {0: "正常", 1: "迟到", 2: "早退", 3: "缺勤", 4: "请假"}
 def query_teaching_data(
     course_id: int = Query(..., description="课程 ID"),
     keyword: str | None = Query(default=None, description="学生姓名/学号模糊搜索"),
-    data_type: str | None = Query(default=None, description="数据类型: score / attendance"),
+    data_type: str | None = Query(default=None, description="数据类型: score / attendance / participation"),
     batch_id: int | None = Query(default=None, description="考核批次 ID（仅 dataType=score 时生效）"),
     page: int = Query(default=1, ge=1, description="页码"),
     page_size: int = Query(default=50, ge=1, le=10000, description="每页条数"),
@@ -284,6 +284,40 @@ def query_teaching_data(
                 "earlyLeaveCount": a.early_leave_count,
                 "attendanceRate": a.attendance_rate,
                 "sourceData": a.source_data,
+            })
+
+    # ── 课堂参与数据 ──
+    if data_type is None or data_type == "participation":
+        pstmt = select(ParticipationSheet).join(
+            ExamBatch, ParticipationSheet.exam_batch_id == ExamBatch.batch_id
+        ).where(ExamBatch.course_id == course_id)
+        if student_ids:
+            pstmt = pstmt.where(ParticipationSheet.student_id.in_(student_ids))  # type: ignore[arg-type]
+        if keyword and not student_ids:
+            pstmt = pstmt.where(ParticipationSheet.student_id == -1)
+
+        for p in session.exec(pstmt).all():
+            student = session.get(Student, p.student_id)
+            batch = session.get(ExamBatch, p.exam_batch_id)
+            if not student:
+                continue
+            part_data = [getattr(p, f"participation_{i}") for i in range(1, 33)]
+            rows.append({
+                "id": f"participation_sheet_{p.score_id}",
+                "recordId": p.score_id,
+                "dataType": "participation",
+                "subType": "participation_sheet",
+                "studentId": student.student_no,
+                "studentName": student.real_name,
+                "courseId": course_id,
+                "courseName": "",
+                "semester": batch.semester if batch else "",
+                "batchId": p.exam_batch_id,
+                "batchName": batch.batch_name if batch else "",
+                "participationData": part_data,
+                "totalCount": p.total_count,
+                "participationRate": p.participation_rate,
+                "sourceData": p.source_data,
             })
 
     # 分页
@@ -703,10 +737,26 @@ def delete_teaching_data(
         session.commit()
         label = "考勤情况记录"
 
+    elif record_type == "participation_sheet":
+        record = session.get(ParticipationSheet, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="课堂参与记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        if student:
+            student_no, student_name = student.student_no, student.real_name
+        session.delete(record)
+        session.commit()
+        label = "课堂参与记录"
+
     else:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance, attendance_sheet",
+            detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance, attendance_sheet, participation_sheet",
         )
 
     save_operation_log(
@@ -764,6 +814,8 @@ def export_teaching_data(
         # 根据第一条决定列
         if rows[0]["dataType"] == "score":
             headers = ["序号", "学号", "姓名", "数据类型", "考核批次", "成绩", "是否及格", "备注"]
+        elif rows[0]["dataType"] == "participation":
+            headers = ["序号", "学号", "姓名", "数据类型", "考核批次", "课堂总数", "课堂参与度"]
         else:
             headers = ["序号", "学号", "姓名", "数据类型", "考勤日期", "出勤状态", "备注"]
 
@@ -778,6 +830,12 @@ def export_teaching_data(
                     ri - 1, row["studentId"], row["studentName"], "成绩",
                     row.get("batchName", ""), row.get("score", ""),
                     "是" if row.get("isPass") else "否", row.get("remark", ""),
+                ]
+            elif row["dataType"] == "participation":
+                vals = [
+                    ri - 1, row["studentId"], row["studentName"], "课堂参与",
+                    row.get("batchName", ""), row.get("totalCount", ""),
+                    row.get("participationRate", ""),
                 ]
             else:
                 vals = [

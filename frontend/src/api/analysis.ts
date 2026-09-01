@@ -45,11 +45,17 @@ export function computeClassKnowledgeStats(heatmap: KnowledgeHeatmapResult) {
 
 /** 获取学情画像 */
 export async function fetchStudentProfile(query: AnalysisQuery): Promise<StudentProfileData | null> {
-  if (query.targetType !== 'student' || !query.targetId) return null
+  if (!query.targetId) return null
   try {
-    const res = await request.get('/v1/analysis/profile', {
-      params: { student_id: query.targetId, course_id: query.courseId },
-    })
+    // 学生视角 → student_id；班级视角 → class_id（后端返回班级平均画像）
+    const params: Record<string, number> = { course_id: query.courseId! }
+    if (query.targetType === 'class') {
+      params.class_id = query.targetId
+      params.student_id = query.targetId
+    } else {
+      params.student_id = query.targetId
+    }
+    const res = await request.get('/v1/analysis/profile', { params })
     return res.data || null
   } catch {
     return null

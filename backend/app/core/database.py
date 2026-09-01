@@ -22,6 +22,91 @@ def init_db() -> None:
     _migrate_answer_task()
     _migrate_ai_question()
     _migrate_legacy_tables()
+    _migrate_academic_parts()
+
+
+def _migrate_academic_parts() -> None:
+    """学业水平五部分默认配置（幂等）。
+
+    - 旧「期末/平时/期中」指标配置迁移为：小班讨论/期中考试/期末考试/考勤/其他
+    - 旧维度名「学业成绩」统一更名为「学业水平」
+    - 没有任何学业水平维度的课程自动补建默认维度与五部分指标
+    """
+    import json
+
+    from sqlmodel import select
+
+    from app.models import Course, EvalDimension, EvalIndex
+
+    ACADEMIC_NAMES = ("学业成绩", "学业水平")
+    DEFAULT_PARTS = [
+        ("小班讨论", 10, "discussion"),
+        ("期中考试", 30, "midterm"),
+        ("期末考试", 30, "final"),
+        ("考勤", 10, "attendance"),
+        ("其他", 20, "other"),
+    ]
+
+    def _rule(idx: EvalIndex) -> dict:
+        try:
+            return json.loads(idx.score_rule or "{}")
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    with Session(engine) as session:
+        dims = session.exec(select(EvalDimension)).all()
+        academic_dims = [
+            d for d in dims if (d.dimension_name or "").strip() in ACADEMIC_NAMES
+        ]
+        configured_course_ids = {d.course_id for d in academic_dims}
+
+        for dim in academic_dims:
+            indexes = list(session.exec(
+                select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+            ).all())
+            # 已是五部分配置（存在「其他」自动补足指标）→ 跳过
+            if any(
+                _rule(idx).get("type") == "academic_part"
+                and _rule(idx).get("part") == "other"
+                for idx in indexes
+            ):
+                continue
+            # 删除旧指标，写入五部分默认
+            for idx in indexes:
+                session.delete(idx)
+            for name, weight, part in DEFAULT_PARTS:
+                session.add(EvalIndex(
+                    dimension_id=dim.dimension_id,
+                    index_name=name,
+                    weight=weight,
+                    score_rule=json.dumps({"type": "academic_part", "part": part}, ensure_ascii=False),
+                ))
+            if (dim.dimension_name or "").strip() == "学业成绩":
+                dim.dimension_name = "学业水平"
+                session.add(dim)
+            session.commit()
+
+        # 没有学业水平维度的课程：自动补建默认维度与五部分
+        for course_id in session.exec(select(Course.course_id)).all():
+            if course_id in configured_course_ids:
+                continue
+            dim = EvalDimension(
+                course_id=course_id,
+                dimension_name="学业水平",
+                description="课程考核构成配比（小班讨论/期中/期末/考勤/其他，合计固定 100%）",
+                sort_num=1,
+            )
+            session.add(dim)
+            session.commit()
+            session.refresh(dim)
+            for name, weight, part in DEFAULT_PARTS:
+                session.add(EvalIndex(
+                    dimension_id=dim.dimension_id,
+                    index_name=name,
+                    weight=weight,
+                    score_rule=json.dumps({"type": "academic_part", "part": part}, ensure_ascii=False),
+                ))
+            session.commit()
 
 
 def _migrate_ai_question() -> None:

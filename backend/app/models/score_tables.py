@@ -1,9 +1,10 @@
-"""三张专用成绩表，分别对应三种数据模板。
+"""四张专用数据表，分别对应四种数据模板。
 
 替代通用 ScoreRecord 的设计：
   - individual_score     → 单项成绩模板
   - attendance_sheet     → 考勤情况模板（32次课考勤槽位）
   - course_test_detail   → 课程测试各题扣分情况模板
+  - participation_sheet  → 课堂参与情况模板（32次课参与槽位）
 
 设计原则：有了 student_id 就不存学号；有了 exam_batch_id 就不存课程/学期/名称。
 """
@@ -88,6 +89,63 @@ class AttendanceSheet(SQLModel, table=True):
     late_count: Optional[int] = Field(default=None)         # 迟到数
     early_leave_count: Optional[int] = Field(default=None)  # 早退数
     attendance_rate: Optional[float] = Field(default=None)  # 到课率
+
+    source_data: Optional[str] = Field(default=None, sa_type=Text)
+    create_by: int = Field(foreign_key="sys_user.user_id")
+    create_time: datetime = Field(default_factory=datetime.now)
+    update_time: datetime = Field(default_factory=datetime.now)
+
+
+class ParticipationSheet(SQLModel, table=True):
+    """课堂参与情况表 participation_sheet。
+
+    对应模板「课堂参与情况」：每位学生一行，包含 32 次课的参与状态（是/否）。
+    设计成列式存储（participation_1 ~ participation_32），与模板结构一一对应。
+    """
+
+    __tablename__ = "participation_sheet"
+
+    score_id: Optional[int] = Field(default=None, primary_key=True)
+    student_id: int = Field(foreign_key="student.student_id", index=True)
+    exam_batch_id: int = Field(foreign_key="exam_batch.batch_id", index=True)
+
+    # 32 次课堂参与槽位（值：是 / 否）
+    participation_1: Optional[str] = Field(default=None, max_length=8)
+    participation_2: Optional[str] = Field(default=None, max_length=8)
+    participation_3: Optional[str] = Field(default=None, max_length=8)
+    participation_4: Optional[str] = Field(default=None, max_length=8)
+    participation_5: Optional[str] = Field(default=None, max_length=8)
+    participation_6: Optional[str] = Field(default=None, max_length=8)
+    participation_7: Optional[str] = Field(default=None, max_length=8)
+    participation_8: Optional[str] = Field(default=None, max_length=8)
+    participation_9: Optional[str] = Field(default=None, max_length=8)
+    participation_10: Optional[str] = Field(default=None, max_length=8)
+    participation_11: Optional[str] = Field(default=None, max_length=8)
+    participation_12: Optional[str] = Field(default=None, max_length=8)
+    participation_13: Optional[str] = Field(default=None, max_length=8)
+    participation_14: Optional[str] = Field(default=None, max_length=8)
+    participation_15: Optional[str] = Field(default=None, max_length=8)
+    participation_16: Optional[str] = Field(default=None, max_length=8)
+    participation_17: Optional[str] = Field(default=None, max_length=8)
+    participation_18: Optional[str] = Field(default=None, max_length=8)
+    participation_19: Optional[str] = Field(default=None, max_length=8)
+    participation_20: Optional[str] = Field(default=None, max_length=8)
+    participation_21: Optional[str] = Field(default=None, max_length=8)
+    participation_22: Optional[str] = Field(default=None, max_length=8)
+    participation_23: Optional[str] = Field(default=None, max_length=8)
+    participation_24: Optional[str] = Field(default=None, max_length=8)
+    participation_25: Optional[str] = Field(default=None, max_length=8)
+    participation_26: Optional[str] = Field(default=None, max_length=8)
+    participation_27: Optional[str] = Field(default=None, max_length=8)
+    participation_28: Optional[str] = Field(default=None, max_length=8)
+    participation_29: Optional[str] = Field(default=None, max_length=8)
+    participation_30: Optional[str] = Field(default=None, max_length=8)
+    participation_31: Optional[str] = Field(default=None, max_length=8)
+    participation_32: Optional[str] = Field(default=None, max_length=8)
+
+    # 汇总列
+    total_count: Optional[int] = Field(default=None)       # 课堂总数
+    participation_rate: Optional[float] = Field(default=None)  # 课堂参与度（0-1）
 
     source_data: Optional[str] = Field(default=None, sa_type=Text)
     create_by: int = Field(foreign_key="sys_user.user_id")

@@ -24,7 +24,7 @@ const departmentOptions = ref<{ label: string; value: number; id?: number }[]>([
 const courseOptions = ref<{ label: string; value: number }[]>([])
 const courseId = ref<number | undefined>()
 const loading = ref(false)
-const dataTypeLabels: Record<string, string> = { score: '成绩', attendance: '考勤', assignment: '作业' }
+const dataTypeLabels: Record<string, string> = { score: '成绩', attendance: '考勤', participation: '课堂参与' }
 
 async function loadTeachingData(): Promise<void> {
   if (!courseId.value) {
@@ -37,7 +37,9 @@ async function loadTeachingData(): Promise<void> {
     const { list } = await fetchTeachingData(
       {
         courseId: courseId.value,
-        dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance'
+        dataType: query.value.dataType === 'score'
+          || query.value.dataType === 'attendance'
+          || query.value.dataType === 'participation'
           ? query.value.dataType
           : undefined,
         pageSize: 10000,  // 一次性加载全部数据，确保客户端学期筛选覆盖所有记录
@@ -74,7 +76,7 @@ onMounted(async () => {
 const query = ref({
   courseName: '',
   semester: '',
-  dataType: '' as '' | 'score' | 'attendance' | 'assignment',
+  dataType: '' as '' | 'score' | 'attendance' | 'participation',
   sourceFile: '',
 })
 
@@ -322,7 +324,7 @@ function handleDetail(row: TeachingDataRecord): void {
       { key: '学号', value: row.studentId },
       { key: '姓名', value: row.studentName },
       { key: '课程', value: row.courseName || String(row.courseId) },
-      { key: '数据类型', value: row.dataType === 'score' ? '成绩' : '考勤' },
+      { key: '数据类型', value: dataTypeLabels[row.dataType] || row.dataType },
       { key: '分数', value: row.score !== undefined ? String(row.score) : '-' },
       { key: '考勤', value: row.attendance || '-' },
       { key: '备注', value: row.remark || '-' },
@@ -344,7 +346,9 @@ async function handleExport(): Promise<void> {
       courseId: courseId.value,
       // 学生下拉选项的 id 即学号，交给后端做姓名/学号模糊匹配
       keyword: selectedStudentId.value !== undefined ? String(selectedStudentId.value) : undefined,
-      dataType: query.value.dataType === 'score' || query.value.dataType === 'attendance'
+      dataType: query.value.dataType === 'score'
+        || query.value.dataType === 'attendance'
+        || query.value.dataType === 'participation'
         ? query.value.dataType
         : undefined,
     })
@@ -393,7 +397,7 @@ function filterByCurrentFile(): void {
           <el-select v-model="query.dataType" placeholder="数据类型" clearable style="width: 120px">
             <el-option label="成绩" value="score" />
             <el-option label="考勤" value="attendance" />
-            <el-option label="作业" value="assignment" />
+            <el-option label="课堂参与" value="participation" />
           </el-select>
           <el-select v-model="deptId" placeholder="院系" clearable style="width: 140px">
             <el-option v-for="d in departmentOptions.filter(d => d.id)" :key="d.id" :label="d.label" :value="d.id!" />
@@ -443,6 +447,9 @@ function filterByCurrentFile(): void {
             <el-tag v-if="row.dataType === 'score'" size="small" type="success">
               {{ row.batchName || '成绩' }}
             </el-tag>
+            <el-tag v-else-if="row.dataType === 'participation'" size="small" type="warning">
+              {{ dataTypeLabels[row.dataType] }}
+            </el-tag>
             <el-tag v-else size="small">{{ dataTypeLabels[row.dataType] }}</el-tag>
           </template>
         </el-table-column>
@@ -464,8 +471,15 @@ function filterByCurrentFile(): void {
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column prop="homework" label="作业" width="90" align="center">
-          <template #default="{ row }">{{ row.homework || '-' }}</template>
+        <el-table-column label="课堂参与度" width="100" align="center">
+          <template #default="{ row }">
+            <template v-if="row.dataType === 'participation' && row.participationRate != null">
+              <span :style="{ color: row.participationRate >= 0.9 ? '#67c23a' : row.participationRate >= 0.7 ? '#e6a23c' : '#f56c6c' }">
+                {{ formatRate(row.participationRate) }}
+              </span>
+            </template>
+            <span v-else>-</span>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="180" align="center" fixed="right">
           <template #default="{ row }">

@@ -91,6 +91,57 @@ def _validate_dimension_weights(
     return round(total, 1), is_valid
 
 
+def _auto_fill_other_index_weight(session: Session, dimension_id: int) -> float:
+    """维度存在「其他」（academic_part/other）指标时，自动将其权重设为 100 − 其余指标权重和。
+
+    返回补足后的权重总和；其余指标之和超过 100 时抛 400。
+    """
+    indexes = session.exec(
+        select(EvalIndex).where(EvalIndex.dimension_id == dimension_id)
+    ).all()
+    other_index: EvalIndex | None = None
+    rest_sum = 0.0
+    for idx in indexes:
+        rule = _parse_score_rule(idx.score_rule)
+        if rule.get("type") == "academic_part" and rule.get("part") == "other":
+            other_index = idx
+        else:
+            rest_sum += float(idx.weight or 0)
+    if other_index is None:
+        return round(rest_sum, 1)
+    filled = round(100.0 - rest_sum, 1)
+    if filled < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"其余指标权重之和为 {round(rest_sum, 1)}%，超过 100%，无法自动补足「其他」占比，请调整",
+        )
+    other_index.weight = filled
+    other_index.update_time = datetime.now()
+    session.add(other_index)
+    return round(rest_sum + filled, 1)
+
+
+def _rest_weight_excluding_other(
+    session: Session,
+    dimension_id: int,
+    *,
+    exclude_index_id: int | None = None,
+    extra_weight: float = 0.0,
+) -> float:
+    """计算维度下除「其他」自动补足指标外的权重和（预校验用）。"""
+    rest_sum = 0.0
+    for idx in session.exec(
+        select(EvalIndex).where(EvalIndex.dimension_id == dimension_id)
+    ).all():
+        if exclude_index_id is not None and idx.index_id == exclude_index_id:
+            continue
+        rule = _parse_score_rule(idx.score_rule)
+        if rule.get("type") == "academic_part" and rule.get("part") == "other":
+            continue
+        rest_sum += float(idx.weight or 0)
+    return round(rest_sum + extra_weight, 1)
+
+
 # ============================================================================
 # 辅助序列化
 # ============================================================================
@@ -333,14 +384,12 @@ def create_index(
     _score_rule = _unwrap(score_rule, None)
     _description = _unwrap(description, None)
 
-    # 权重校验
-    total, is_valid = _validate_dimension_weights(
-        session, dimension_id, extra_weight=weight
-    )
-    if total > 100:
+    # 权重预校验（排除「其他」自动补足指标，其权重随其余指标自动调整）
+    rest_total = _rest_weight_excluding_other(session, dimension_id, extra_weight=weight)
+    if rest_total > 100:
         raise HTTPException(
             status_code=400,
-            detail=f"权重总和为 {total}%，超过 100%。当前维度已有指标权重之和加上新指标权重 ({weight}%) 超出上限，请调整",
+            detail=f"除「其他」外的指标权重之和为 {rest_total}%，超过 100%，请调整",
         )
 
     # 校验 score_rule JSON 格式
@@ -360,6 +409,8 @@ def create_index(
         description=_description,
     )
     session.add(idx)
+    # 「其他」指标自动补足：weight = 100 − 其余指标权重和（Eval.Config.Weight）
+    total = _auto_fill_other_index_weight(session, dimension_id)
     session.commit()
     session.refresh(idx)
 
@@ -371,7 +422,7 @@ def create_index(
         "scoreRule": _parse_score_rule(idx.score_rule),
         "description": idx.description,
         "weightSumAfterAdd": total,
-        "weightValid": is_valid or abs(total - 100.0) < 0.01,
+        "weightValid": abs(total - 100.0) < 0.01,
     }
 
 
@@ -407,20 +458,16 @@ def update_index(
 
     new_weight = _weight if _weight is not None else idx.weight
 
-    # 权重校验（排除自身旧权重）
-    if _weight is not None:
-        total, is_valid = _validate_dimension_weights(
-            session, idx.dimension_id,
-            exclude_index_id=index_id, extra_weight=new_weight,
-        )
-        if total > 100:
-            raise HTTPException(
-                status_code=400,
-                detail=f"修改后权重总和为 {total}%，超过 100%。当前维度其他指标权重之和为 {round(total - new_weight, 1)}%，加上新权重 {new_weight}% 超出上限，请调整",
-            )
-    else:
-        total, is_valid = _validate_dimension_weights(
-            session, idx.dimension_id, extra_weight=0,
+    # 权重预校验（排除自身旧权重与「其他」自动补足指标）
+    rest_total = _rest_weight_excluding_other(
+        session, idx.dimension_id,
+        exclude_index_id=index_id if _weight is not None else None,
+        extra_weight=new_weight if _weight is not None else 0.0,
+    )
+    if rest_total > 100:
+        raise HTTPException(
+            status_code=400,
+            detail=f"除「其他」外的指标权重之和为 {rest_total}%，超过 100%，请调整",
         )
 
     if _index_name is not None:
@@ -438,6 +485,8 @@ def update_index(
 
     idx.update_time = datetime.now()
     session.add(idx)
+    # 「其他」指标自动补足（自身权重以自动计算值为准）
+    total = _auto_fill_other_index_weight(session, idx.dimension_id)
     session.commit()
     session.refresh(idx)
 
@@ -477,12 +526,12 @@ def delete_index(
     index_name = idx.index_name
 
     session.delete(idx)
+    # 「其他」指标自动补足（删除指标后重新计算）
+    total = _auto_fill_other_index_weight(session, dimension_id)
     session.commit()
 
     # 返回删除后的权重状态
-    total, is_valid = _validate_dimension_weights(
-        session, dimension_id, extra_weight=0,
-    )
+    is_valid = abs(total - 100.0) < 0.01
 
     return {
         "message": f"指标「{index_name}」已删除",

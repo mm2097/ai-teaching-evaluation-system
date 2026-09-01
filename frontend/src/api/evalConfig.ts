@@ -63,14 +63,25 @@ export interface IndexMutationResult extends EvalIndexItem {
 
 /** 计分方式（映射后端 score_rule JSON） */
 export const SCORE_RULE_PRESETS = [
-  { value: 'score_daily', label: '平时成绩', rule: { type: 'direct', source: 'score_record', batch_type: 1 } },
-  { value: 'score_mid', label: '期中/测验成绩', rule: { type: 'direct', source: 'score_record', batch_type: 3 } },
-  { value: 'score_final', label: '期末成绩', rule: { type: 'direct', source: 'score_record', batch_type: 4 } },
+  { value: 'part_discussion', label: '小班讨论（单项成绩）', rule: { type: 'academic_part', part: 'discussion' } },
+  { value: 'part_midterm', label: '期中考试（各题得分）', rule: { type: 'academic_part', part: 'midterm' } },
+  { value: 'part_final', label: '期末考试（各题得分）', rule: { type: 'academic_part', part: 'final' } },
+  { value: 'part_attendance', label: '考勤（到课率）', rule: { type: 'academic_part', part: 'attendance' } },
+  { value: 'part_other', label: '其他（作业/实验，占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
   { value: 'attendance', label: '出勤率', rule: { type: 'attendance', full_score: 100 } },
-  // { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },  // 互动功能暂不展示
+  { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },
+  // 旧版直读批次（兼容存量配置展示）
+  { value: 'score_daily', label: '平时成绩（旧）', rule: { type: 'direct', source: 'score_record', batch_type: 1 } },
+  { value: 'score_mid', label: '期中/测验成绩（旧）', rule: { type: 'direct', source: 'score_record', batch_type: 3 } },
+  { value: 'score_final', label: '期末成绩（旧）', rule: { type: 'direct', source: 'score_record', batch_type: 4 } },
 ] as const
 
 export type ScoreRulePresetValue = (typeof SCORE_RULE_PRESETS)[number]['value']
+
+/** 是否为「其他」自动补足指标（占比 = 100 − 其余指标权重和） */
+export function isAutoFillOtherRule(rule: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(rule && rule.type === 'academic_part' && rule.part === 'other')
+}
 
 const BATCH_TYPE_LABELS: Record<number, string> = {
   1: '平时成绩',
@@ -141,16 +152,27 @@ export function formatScoreRule(rule: Record<string, unknown> | null | undefined
     return BATCH_TYPE_LABELS[batch] || '教学成绩'
   }
   if (type === 'attendance') return '出勤率'
-  // if (type === 'interaction') return '课堂参与度'  // 互动功能暂不展示
+  if (type === 'interaction') return '课堂参与度'
+  if (type === 'academic_part') {
+    const part = rule.part as string | undefined
+    const partLabels: Record<string, string> = {
+      discussion: '小班讨论',
+      midterm: '期中考试',
+      final: '期末考试',
+      attendance: '考勤',
+      other: '其他（占比自动补足）',
+    }
+    return partLabels[part ?? ''] || '学业水平组成部分'
+  }
 
   const preset = SCORE_RULE_PRESETS.find((p) => ruleEquals(p.rule, rule))
   return preset?.label || '—'
 }
 
 export function detectRulePreset(rule: Record<string, unknown> | null | undefined): ScoreRulePresetValue {
-  if (!rule || Object.keys(rule).length === 0) return 'score_daily'
+  if (!rule || Object.keys(rule).length === 0) return 'part_midterm'
   const matched = SCORE_RULE_PRESETS.find((p) => ruleEquals(p.rule, rule))
-  return matched?.value || 'score_daily'
+  return matched?.value || 'part_midterm'
 }
 
 export function buildScoreRuleJson(preset: ScoreRulePresetValue): string {
@@ -240,16 +262,28 @@ export async function saveDimensionWeights(
   draftWeights: Record<number, number>,
 ): Promise<{ weightSum: number; weightValid: boolean }> {
   return runEvalConfigTask(async () => {
+    const otherIdx = dimension.indexes.find((idx) => isAutoFillOtherRule(idx.scoreRule))
+    // 「其他」指标为自动补足值：其余指标草稿权重和 + 自动值 = 100
+    const restSum = calcWeightSum(
+      dimension.indexes
+        .filter((idx) => idx !== otherIdx)
+        .map((i) => draftWeights[i.indexId] ?? i.weight),
+    )
+    const finalSum = otherIdx ? Math.min(100, restSum + Math.max(0, 100 - restSum)) : restSum
+
     const tasks: { indexId: number; weight: number; oldWeight: number }[] = []
     for (const idx of dimension.indexes) {
       const next = draftWeights[idx.indexId]
       if (next === undefined || next === idx.weight) continue
       tasks.push({ indexId: idx.indexId, weight: next, oldWeight: idx.weight })
     }
-
-    const finalSum = calcWeightSum(
-      dimension.indexes.map((i) => draftWeights[i.indexId] ?? i.weight),
-    )
+    // 「其他」自动值变化时一并提交（后端亦会自动补足，双保险）
+    if (otherIdx) {
+      const autoWeight = Math.max(0, 100 - restSum)
+      if (autoWeight !== otherIdx.weight && !tasks.some((t) => t.indexId === otherIdx.indexId)) {
+        tasks.push({ indexId: otherIdx.indexId, weight: autoWeight, oldWeight: otherIdx.weight })
+      }
+    }
 
     if (!tasks.length) {
       return { weightSum: finalSum, weightValid: Math.abs(finalSum - 100) < 0.01 }

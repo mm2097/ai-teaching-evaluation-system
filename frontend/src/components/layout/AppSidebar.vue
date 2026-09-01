@@ -3,11 +3,13 @@
   根据用户角色动态渲染可见菜单，支持折叠模式
 -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import * as Icons from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
+import PersonalSettingsDialog from './PersonalSettingsDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -27,6 +29,35 @@ function handleSelect(index: string) {
  */
 function getIcon(iconName: string) {
   return (Icons as Record<string, unknown>)[iconName] || Icons.Menu
+}
+
+/* ============================================================
+ * 底部"设置"入口：修改个人信息 / 退出登录
+ * 与右上角头像下拉的退出登录并存，两处入口均保留
+ * ============================================================ */
+/** 设置弹层显隐 */
+const settingsPopVisible = ref(false)
+/** 个人设置弹窗显隐 */
+const settingsVisible = ref(false)
+
+/** 打开个人设置弹窗（修改个人信息/密码） */
+function openSettings(): void {
+  settingsPopVisible.value = false
+  settingsVisible.value = true
+}
+
+/**
+ * 退出登录确认（与顶部头像下拉交互一致）
+ */
+async function handleLogout(): Promise<void> {
+  settingsPopVisible.value = false
+  await ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+  userStore.logout()
+  router.push('/login')
 }
 </script>
 
@@ -80,6 +111,37 @@ function getIcon(iconName: string) {
         </template>
       </el-menu>
     </el-scrollbar>
+
+    <!-- 底部设置区：修改个人信息 / 退出登录 -->
+    <div class="sidebar-settings">
+      <el-popover
+        v-model:visible="settingsPopVisible"
+        placement="right-end"
+        :width="180"
+        trigger="click"
+        :show-arrow="false"
+      >
+        <template #reference>
+          <div class="settings-btn">
+            <el-icon :size="18"><component :is="Icons.Setting" /></el-icon>
+            <span v-show="!appStore.sidebarCollapsed">设置</span>
+          </div>
+        </template>
+        <div class="settings-menu">
+          <div class="settings-menu__item" @click="openSettings">
+            <el-icon :size="16"><component :is="Icons.User" /></el-icon>
+            <span>修改个人信息</span>
+          </div>
+          <div class="settings-menu__item settings-menu__item--danger" @click="handleLogout">
+            <el-icon :size="16"><component :is="Icons.SwitchButton" /></el-icon>
+            <span>退出登录</span>
+          </div>
+        </div>
+      </el-popover>
+    </div>
+
+    <!-- 个人设置弹窗（基本信息 + 修改密码） -->
+    <PersonalSettingsDialog v-model="settingsVisible" />
   </aside>
 </template>
 
@@ -135,6 +197,33 @@ function getIcon(iconName: string) {
     overflow: hidden;
   }
 
+  .sidebar-settings {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+
+    .settings-btn {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      font-size: 14px;
+      color: #cbd5e1;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: #fff;
+      }
+    }
+  }
+
+  &.collapsed .sidebar-settings .settings-btn {
+    padding: 0;
+    justify-content: center;
+  }
+
   :deep(.el-menu) {
     border-right: none;
 
@@ -158,5 +247,34 @@ function getIcon(iconName: string) {
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* 设置弹层菜单（el-popover 内容，teleport 后 scoped 属性仍生效） */
+.settings-menu {
+  margin: -12px;
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: #334155;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+
+    &:hover {
+      background: #f1f5f9;
+    }
+
+    &--danger {
+      color: #dc2626;
+
+      &:hover {
+        background: #fef2f2;
+      }
+    }
+  }
 }
 </style>

@@ -6,25 +6,12 @@
 import { ref, computed, onMounted } from 'vue'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
-import { useUserStore } from '@/stores/user'
-import { fetchStudentScores } from '@/api/scores'
+import { fetchStudentScoreArchive, type ScoreArchiveRecord } from '@/api/studentDashboard'
 
-interface GradeRecord {
-  id: number
-  courseName: string
-  semester: string
-  type: string
-  score: number
-  total: number
-  classAvg?: number
-  rank?: number
-  date?: string
-}
-
-const userStore = useUserStore()
 const loading = ref(true)
 
-const records = ref<GradeRecord[]>([])
+/** 历史成绩记录（来自后端真实接口） */
+const records = ref<ScoreArchiveRecord[]>([])
 
 const courseFilter = ref('')
 const courseOptions = computed(() =>
@@ -81,22 +68,9 @@ const stats = computed(() => {
 
 onMounted(async () => {
   try {
-    const studentId = userStore.userInfo?.studentId
-    if (!studentId) return
-    const courses = await fetchStudentScores(studentId)
-    records.value = courses.flatMap((course) =>
-      course.details.map((detail, index) => ({
-        id: course.courseId * 1000 + index,
-        courseName: course.courseName,
-        semester: '—',
-        type: detail.batchName,
-        score: detail.score,
-        total: 100,
-        classAvg: undefined,
-        rank: undefined,
-        date: undefined,
-      })),
-    )
+    records.value = await fetchStudentScoreArchive()
+  } catch {
+    records.value = []
   } finally {
     loading.value = false
   }

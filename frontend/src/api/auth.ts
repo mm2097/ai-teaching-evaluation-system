@@ -22,7 +22,19 @@ export const authApi = {
         studentNo: data.user.student_no ?? undefined,
         classId: data.user.class_id ?? undefined,
         teacherId: data.user.teacher_id ?? undefined,
+        phone: data.user.student_phone ?? '',
+        email: data.user.student_email ?? '',
       },
     }
+  },
+
+  /** 修改本人登录密码（校验原密码后更新） */
+  async changePassword(oldPassword: string, newPassword: string): Promise<void> {
+    await request.post('/password/change', { old_password: oldPassword, new_password: newPassword })
+  },
+
+  /** 学生修改本人联系方式（手机号/邮箱，空串表示清空） */
+  async updateContact(phone: string, email: string): Promise<void> {
+    await request.put('/profile/contact', { phone, email })
   },
 }

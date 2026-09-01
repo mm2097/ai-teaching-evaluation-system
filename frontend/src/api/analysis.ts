@@ -9,6 +9,8 @@ export interface KnowledgeHeatmapResult {
   students: string[]
   data: number[][]
   classAvgByKp?: number[]
+  lossRateByKp?: number[]
+  classLossRateByKp?: number[]
 }
 
 /** 从热力图数据计算班级统计 */
@@ -111,19 +113,31 @@ export async function fetchWarnings(query: AnalysisQuery & {
   }
 }
 
-
-export async function updateWarningStatus(warningId: number, status: 0 | 1): Promise<WarningRecord> {
+/** 更新预警处理状态（标记已处理：status=1 / 恢复待处理：status=0） */
+export async function updateWarningStatus(
+  warningId: number,
+  status: number,
+): Promise<WarningRecord> {
   const res = await request.put(`/v1/analysis/warnings/${warningId}/status`, null, {
     params: { status },
   })
   return res.data as WarningRecord
 }
 
+/** 手动刷新课程预警列表 */
 export async function refreshWarnings(params: { courseId: number; classId?: number }): Promise<{ message: string }> {
   const res = await request.post('/v1/analysis/warnings/refresh', null, {
     params: { course_id: params.courseId, class_id: params.classId },
   })
   return res.data as { message: string }
+}
+
+/** 向预警学生发送站内通知（学生端铃铛可见） */
+export async function sendWarningNotice(
+  warningId: number,
+): Promise<{ notificationId: number; studentName: string; message: string }> {
+  const res = await request.post(`/v1/analysis/warnings/${warningId}/notify`)
+  return res.data as { notificationId: number; studentName: string; message: string }
 }
 
 /** 获取成绩预测列表 */
@@ -135,6 +149,45 @@ export async function fetchGradePredictions(query: AnalysisQuery) {
     return res.data
   } catch {
     return []
+  }
+}
+
+export interface GradeDistributionBucket {
+  range: string
+  low: number
+  high: number
+  count: number
+  ratio: number
+}
+
+export interface GradeDistributionStats {
+  count?: number
+  mean?: number
+  median?: number
+  stdDev?: number
+  maxScore?: number
+  minScore?: number
+  passRate?: number
+  excellentRate?: number
+  failRate?: number
+  skewness?: number
+}
+
+export interface GradeDistributionResult {
+  distribution: GradeDistributionBucket[]
+  statistics: GradeDistributionStats
+  characteristic: string
+}
+
+/** 成绩分布与班级特征（Analysis.ScoreTrend.Distribute） */
+export async function fetchGradeDistribution(query: AnalysisQuery): Promise<GradeDistributionResult> {
+  try {
+    const res = await request.get('/v1/analysis/grade-distribution', {
+      params: { course_id: query.courseId, class_id: query.classId },
+    })
+    return res.data as GradeDistributionResult
+  } catch {
+    return { distribution: [], statistics: {}, characteristic: '暂无成绩数据' }
   }
 }
 

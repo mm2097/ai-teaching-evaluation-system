@@ -4,7 +4,7 @@
   未查询时仅展示欢迎区与筛选栏
 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import { DataAnalysis, Search } from '@element-plus/icons-vue'
@@ -31,7 +31,8 @@ async function loadDashboardData(courseId?: number, classId?: number) {
     if (classId) params.class_id = classId
     const [statsRes, warnRes] = await Promise.all([
       request.get('/v1/dashboard/stats', { params }),
-      request.get('/v1/analysis/warnings', { params: { class_id: classId } }),
+      // 预警人数与"异常学情预警"页保持同一筛选口径（课程 + 班级）
+      request.get('/v1/analysis/warnings', { params: { course_id: courseId, class_id: classId } }),
     ])
     dashboardStats.value = statsRes.data
     warnings.value = warnRes.data
@@ -109,7 +110,6 @@ const statCards = computed(() => {
     { title: '平均出勤率', value: +(dashboardStats.value.attendanceRate * (0.98 + f * 0.02)).toFixed(1), unit: '%', icon: 'Calendar', color: '#06b6d4', trend: -0.5 },
     { title: '预警学生', value: classWarningCount.value, icon: 'Bell', color: '#ef4444', trend: -12, link: '/analysis/warning' },
     { title: '知识点薄弱项', value: knowledgeStats.value.weakPoints.length, icon: 'Grid', color: '#8b5cf6', link: '/analysis/knowledge' },
-    { title: 'AI 智能辅助教学完成率', value: dashboardStats.value.aiCompletionRate, unit: '%', icon: 'EditPen', color: '#ec4899', link: '/quiz/manage' },
   ]
 })
 
@@ -223,7 +223,15 @@ const trendLineOption = computed<EChartsOption>(() => {
 })
 
 function handleStatClick(item: { link?: string }): void {
-  if (item.link) router.push(item.link)
+  if (!item.link) return
+  // 分析类下钻（预警/知识点）携带当前筛选条件，目标页自动按同一口径过滤
+  const query: Record<string, string> = {}
+  if (item.link.startsWith('/analysis/')) {
+    if (applied.value.courseId != null) query.courseId = String(applied.value.courseId)
+    if (applied.value.classId != null) query.classId = String(applied.value.classId)
+    if (applied.value.semester) query.semester = applied.value.semester
+  }
+  router.push({ path: item.link, query })
 }
 
 // 查询计数器，避免 showDashboard 不变时跳过刷新
@@ -238,6 +246,17 @@ function applyFiltersWrapper() {
 watch(queryCount, async () => {
   if (showDashboard.value) {
     await Promise.all([
+      loadDashboardData(applied.value.courseId, applied.value.classId),
+      loadHeatmap(applied.value.courseId, applied.value.classId),
+      loadTrendData(applied.value.courseId, applied.value.classId),
+    ])
+  }
+})
+
+// 从其他页面返回时（筛选状态已恢复），自动按上次筛选条件重新加载数据
+onMounted(() => {
+  if (showDashboard.value) {
+    void Promise.all([
       loadDashboardData(applied.value.courseId, applied.value.classId),
       loadHeatmap(applied.value.courseId, applied.value.classId),
       loadTrendData(applied.value.courseId, applied.value.classId),

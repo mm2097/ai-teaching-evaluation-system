@@ -37,13 +37,7 @@ const accuracy = computed(() =>
   totalScore.value > 0 ? Math.round((score.value / totalScore.value) * 100) : 0,
 )
 
-/** 需要复习的题目：答错 + 部分得分 + 待批改 */
-const reviewQuestions = computed(() =>
-  questionResults.value.filter((q) =>
-    !q.isCorrect || q.manualRequired || (q.aiScore !== null && q.aiScore !== undefined && q.aiScore < 10),
-  ),
-)
-
+/** 错题（不含待批改简答题），用于知识点统计 */
 const wrongQuestions = computed(() =>
   questionResults.value.filter((q) => !q.isCorrect && !q.manualRequired),
 )
@@ -83,10 +77,11 @@ function isPartialScore(item: QuestionResult): boolean {
     && item.aiScore < 10
 }
 
-function reviewLabel(item: QuestionResult, idx: number): string {
+/** 单题状态文案：正确 / 错误 / 部分得分 / 待批改 */
+function questionStatus(item: QuestionResult): string {
   if (item.manualRequired) return '待批改'
   if (isPartialScore(item)) return '部分得分'
-  return `错题 ${idx + 1}`
+  return item.isCorrect ? '正确' : '错误'
 }
 
 onMounted(async () => {
@@ -170,18 +165,29 @@ function backToQuiz(): void {
       </div>
     </div>
 
-    <!-- 错题与未得满分详情 -->
-    <div v-if="reviewQuestions.length" class="content-card">
+    <!-- 全部题目详情（答对、答错、部分得分、待批改均展示） -->
+    <div v-if="questionResults.length" class="content-card">
       <div class="content-card__title">
-        {{ pendingCount ? '错题、部分得分与待批改题目' : (partialCount ? '错题与部分得分回顾' : '错题回顾') }}
-        <span class="wrong-count">共 {{ reviewQuestions.length }} 题</span>
+        答题详情
+        <span class="total-count">共 {{ questionResults.length }} 题（答对 {{ correctCount }} 题）</span>
       </div>
-      <div v-for="(item, idx) in reviewQuestions" :key="item.question.id" class="error-question" :class="{ partial: isPartialScore(item) }">
+      <div
+        v-for="(item, idx) in questionResults"
+        :key="item.question.id"
+        class="question-item"
+        :class="{
+          correct: item.isCorrect && !item.manualRequired && !isPartialScore(item),
+          partial: isPartialScore(item),
+          pending: item.manualRequired,
+        }"
+      >
         <div class="eq-header">
-          <span class="eq-num">{{ reviewLabel(item, idx + 1) }}</span>
+          <span class="eq-num">第 {{ idx + 1 }} 题</span>
           <el-tag size="small">{{ typeLabel[item.question.type] }}</el-tag>
-          <el-tag v-if="isPartialScore(item)" size="small" type="warning">未得满分</el-tag>
-          <el-tag v-else-if="!item.manualRequired" size="small" type="danger">错误</el-tag>
+          <el-tag v-if="item.manualRequired" size="small" type="info">{{ questionStatus(item) }}</el-tag>
+          <el-tag v-else-if="isPartialScore(item)" size="small" type="warning">{{ questionStatus(item) }}</el-tag>
+          <el-tag v-else-if="item.isCorrect" size="small" type="success">{{ questionStatus(item) }}</el-tag>
+          <el-tag v-else size="small" type="danger">{{ questionStatus(item) }}</el-tag>
           <el-tag size="small" type="info">{{ item.question.knowledgePoint }}</el-tag>
         </div>
         <p class="eq-content">{{ item.question.stem }}</p>
@@ -208,7 +214,7 @@ function backToQuiz(): void {
         <div class="eq-answers">
           <div class="eq-my-answer">
             <span class="label">你的答案：</span>
-            <span class="value" :class="{ wrong: !item.manualRequired }">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
+            <span class="value" :class="{ wrong: !item.isCorrect && !item.manualRequired }">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
           </div>
           <div v-if="!item.manualRequired" class="eq-correct-answer">
             <span class="label">{{ item.question.type === 'short_answer' ? '参考答案' : '正确答案' }}：</span>
@@ -283,7 +289,7 @@ function backToQuiz(): void {
   gap: 10px;
 }
 
-.error-question {
+.question-item {
   padding: 20px;
   border: 1px solid #fee2e2;
   border-radius: 10px;
@@ -295,6 +301,20 @@ function backToQuiz(): void {
     background: #fffbeb;
 
     .eq-num { color: #d97706; }
+  }
+
+  &.correct {
+    border-color: #a7f3d0;
+    background: #ecfdf5;
+
+    .eq-num { color: #059669; }
+  }
+
+  &.pending {
+    border-color: #bfdbfe;
+    background: #eff6ff;
+
+    .eq-num { color: #2563eb; }
   }
 
   .eq-header {
@@ -376,9 +396,9 @@ function backToQuiz(): void {
   }
 }
 
-.wrong-count {
+.total-count {
   font-size: 13px;
-  color: #ef4444;
+  color: #64748b;
   font-weight: normal;
   margin-left: 8px;
 }

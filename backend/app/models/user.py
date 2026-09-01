@@ -30,6 +30,7 @@ class SysUser(SQLModel, table=True):
     real_name: str = Field(max_length=32)
     role_id: int = Field(foreign_key="sys_role.role_id", index=True)
     status: int = Field(default=1)  # 0=禁用, 1=启用
+    college: Optional[str] = Field(default=None, max_length=64)  # 所属学院
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)
 
@@ -50,6 +51,14 @@ class UserCreate(SQLModel):
     real_name: str
     role_id: int
     status: int = 1
+    college: Optional[str] = Field(default=None, max_length=64)
+    class_id: Optional[int] = None  # 仅学生：写入 student 表
+    student_no: Optional[str] = Field(default=None, max_length=32)  # 仅学生：学号，默认与账号相同
+    gender: Optional[int] = Field(default=None, ge=0, le=1)  # 仅学生：0=女, 1=男，默认男
+    teacher_no: Optional[str] = Field(default=None, max_length=32)  # 仅教师：教工号，默认与账号相同
+    title: Optional[str] = Field(default=None, max_length=32)  # 仅教师：职称，可空
+    phone: Optional[str] = Field(default=None, max_length=20)  # 学生/教师档案：手机号，可空
+    email: Optional[str] = Field(default=None, max_length=64)  # 学生/教师档案：邮箱，可空
 
 
 class UserUpdate(SQLModel):
@@ -58,6 +67,14 @@ class UserUpdate(SQLModel):
     real_name: Optional[str] = None
     role_id: Optional[int] = None
     status: Optional[int] = None
+    college: Optional[str] = Field(default=None, max_length=64)
+    class_id: Optional[int] = None
+    student_no: Optional[str] = Field(default=None, max_length=32)
+    gender: Optional[int] = Field(default=None, ge=0, le=1)
+    teacher_no: Optional[str] = Field(default=None, max_length=32)
+    title: Optional[str] = Field(default=None, max_length=32)
+    phone: Optional[str] = Field(default=None, max_length=20)
+    email: Optional[str] = Field(default=None, max_length=64)
 
 
 class UserRead(SQLModel):

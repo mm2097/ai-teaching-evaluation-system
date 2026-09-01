@@ -24,6 +24,9 @@ export interface UserInfo {
   teacherId?: number
   classId?: number
   avatar?: string
+  /** 学生联系方式（可空） */
+  phone?: string
+  email?: string
 }
 
 /** 系统用户(用户管理页面用) */
@@ -33,6 +36,20 @@ export interface SystemUser {
   name: string
   role: UserRole
   department: string
+  classId?: number | null
+  className?: string
+  /** 学号（学生角色，存于学生表） */
+  studentNo?: string
+  /** 性别：0=女, 1=男（学生角色） */
+  gender?: number | null
+  /** 教工号（教师角色，存于教师表） */
+  teacherNo?: string
+  /** 职称（教师角色，可空） */
+  title?: string
+  /** 手机号（学生/教师档案，可空） */
+  phone?: string
+  /** 邮箱（学生/教师档案，可空） */
+  email?: string
   status: boolean
   createTime: string
 }
@@ -139,6 +156,8 @@ export interface TeachingDataRecord {
   attendance?: string
   homework?: string
   dataType: 'score' | 'attendance' | 'assignment'
+  /** 子类型：individual_score / course_test_detail / attendance_sheet（旧表无此字段） */
+  subType?: string
   /** 成绩数据的批次名称（如"期中考试""期末考试"），考勤数据的状态文本 */
   batchName?: string
   /** 知识点/备注信息 */
@@ -510,7 +529,20 @@ export interface WarningRecord {
   level: '高' | '中' | '低'
   reason: string
   warningTime: string
-  status: 0 | 1 | 2 | 3
+  status: 0 | 1 // 0=待处理, 1=已处理
+  notified?: boolean // 是否已向学生发送过站内通知
+}
+
+/** 站内通知（教师 → 学生） */
+export interface NotificationItem {
+  id: number
+  title: string
+  content: string
+  courseId?: number
+  courseName?: string
+  warningId?: number
+  isRead: boolean
+  createTime: string
 }
 
 /** 评价等级 */

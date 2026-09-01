@@ -4,14 +4,16 @@
 -->
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchWarnings, refreshWarnings, updateWarningStatus } from '@/api/analysis'
+import { fetchWarnings, refreshWarnings, updateWarningStatus, sendWarningNotice } from '@/api/analysis'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
 import type { LinkedStudentOption, WarningRecord } from '@/types'
 
+const route = useRoute()
 const userStore = useUserStore()
 const role = computed(() => userStore.userInfo?.role || 'student')
 
@@ -97,7 +99,39 @@ async function handleQuery(): Promise<void> {
   await loadWarnings()
 }
 
-onMounted(handleQuery)
+/**
+ * 从路由 query 读取看板下钻携带的筛选条件并应用
+ * 支持 courseId / classId / semester（学期编码）
+ */
+function applyQueryFilters(): void {
+  const qSemester = route.query.semester
+  if (typeof qSemester === 'string' && qSemester) {
+    const sem = semesterOptions.value.find((s) => s.value === qSemester)
+    if (sem?.id) semesterId.value = sem.id
+  }
+  const qCourse = Number(route.query.courseId)
+  if (Number.isFinite(qCourse) && qCourse > 0) courseId.value = qCourse
+  const qClass = Number(route.query.classId)
+  if (Number.isFinite(qClass) && qClass > 0) classId.value = qClass
+}
+
+onMounted(async () => {
+  // 先加载学期选项，才能把 semester 编码映射为学期 id
+  await loadSemesters()
+  applyQueryFilters()
+  await handleQuery()
+})
+
+// 从看板再次下钻时（同一组件复用），重新应用筛选并刷新
+watch(
+  () => route.query,
+  async () => {
+    if (!route.query.courseId && !route.query.classId) return
+    await loadSemesters()
+    applyQueryFilters()
+    await handleQuery()
+  },
+)
 
 let _inited = false
 watch([courseId, classId, levelFilter, typeFilter, statusFilter, selectedStudentNo], async () => {
@@ -121,15 +155,24 @@ function viewDetail(row: WarningRecord): void {
   drawerVisible.value = true
 }
 
+const markingResolved = ref(false)
+
 async function markResolved(): Promise<void> {
-  if (!currentWarning.value) return
-  const updated = await updateWarningStatus(currentWarning.value.id, 1)
-  const idx = warningList.value.findIndex((w) => w.id === updated.id)
-  if (idx !== -1) {
-    warningList.value[idx] = updated
+  if (!currentWarning.value || markingResolved.value) return
+  markingResolved.value = true
+  try {
+    await updateWarningStatus(currentWarning.value.id, 1)
+    const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+    if (idx !== -1) {
+      warningList.value[idx] = { ...warningList.value[idx]!, status: 1 }
+      currentWarning.value = warningList.value[idx]
+    }
+    ElMessage.success('已标记为已处理')
+  } catch {
+    // 错误提示由 request 拦截器统一处理
+  } finally {
+    markingResolved.value = false
   }
-  currentWarning.value = updated
-  ElMessage.success('已标记为已处理')
 }
 
 async function handleRefreshWarnings(): Promise<void> {
@@ -147,9 +190,24 @@ async function handleRefreshWarnings(): Promise<void> {
   }
 }
 
-function sendNotice(): void {
-  if (!currentWarning.value) return
-  ElMessage.success(`已向 ${currentWarning.value.studentName} 发送预警通知（模拟）`)
+const sendingNotice = ref(false)
+
+async function sendNotice(): Promise<void> {
+  if (!currentWarning.value || sendingNotice.value) return
+  sendingNotice.value = true
+  try {
+    await sendWarningNotice(currentWarning.value.id)
+    const idx = warningList.value.findIndex((w) => w.id === currentWarning.value!.id)
+    if (idx !== -1) {
+      warningList.value[idx] = { ...warningList.value[idx]!, notified: true }
+      currentWarning.value = warningList.value[idx]
+    }
+    ElMessage.success(`预警通知已发送给 ${currentWarning.value.studentName}，学生可在消息通知中查看`)
+  } catch {
+    // 错误提示（含重复发送 409）由 request 拦截器统一处理
+  } finally {
+    sendingNotice.value = false
+  }
 }
 
 const statusOptions = [
@@ -259,8 +317,17 @@ const statusOptions = [
         <el-descriptions-item label="预警时间">{{ currentWarning?.warningTime }}</el-descriptions-item>
       </el-descriptions>
       <div style="margin-top: 20px">
-        <el-button type="primary" @click="markResolved">标记已处理</el-button>
-        <el-button @click="sendNotice">发送通知</el-button>
+        <el-button
+          type="primary"
+          :loading="markingResolved"
+          :disabled="currentWarning?.status === 1"
+          @click="markResolved"
+        >{{ currentWarning?.status === 1 ? '已处理' : '标记已处理' }}</el-button>
+        <el-button
+          :loading="sendingNotice"
+          :disabled="currentWarning?.notified === true"
+          @click="sendNotice"
+        >{{ currentWarning?.notified ? '已通知' : '发送通知' }}</el-button>
       </div>
     </el-drawer>
   </div>

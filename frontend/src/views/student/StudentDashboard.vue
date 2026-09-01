@@ -9,37 +9,72 @@ import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
-import { countPendingStudentQuizzes } from '@/api/quiz'
-import { fetchStudentScores } from '@/api/scores'
+import {
+  fetchStudentDashboardOverview,
+  type StudentDashboardCourse,
+  type StudentDashboardOverview,
+} from '@/api/studentDashboard'
 
 const userStore = useUserStore()
 const loading = ref(true)
-
-interface StudentCourseOverview {
-  id: number
-  name: string
-  teacher: string
-  progress: number
-  score: number
-  rank: string
-}
+const overview = ref<StudentDashboardOverview | null>(null)
 
 /** 学生个人课程概览 */
-const courses = ref<StudentCourseOverview[]>([])
+const courses = computed<StudentDashboardCourse[]>(() => overview.value?.courses ?? [])
+const trendMonths = ref<string[]>([])
+const trendAvgScore = ref<number[]>([])
 
-const pendingQuizCount = ref(0)
-
-const statCards = computed(() => {
-  const average = courses.value.length
-    ? +(courses.value.reduce((s, c) => s + c.score, 0) / courses.value.length).toFixed(1)
-    : '—'
+const welcomeMeta = computed(() => {
+  const student = overview.value?.student
   return [
-    { title: '课程数', value: courses.value.length, icon: 'Notebook', color: '#2563eb' },
-    { title: '平均成绩', value: average, unit: average === '—' ? undefined : '分', icon: 'DataLine', color: '#10b981' },
-    { title: '总出勤率', value: '—', icon: 'Calendar', color: '#06b6d4' },
-    { title: '待完成练习', value: pendingQuizCount.value, icon: 'EditPen', color: '#f59e0b', link: '/quiz/answer?tab=assigned' },
-    { title: '薄弱知识点', value: '—', icon: 'Grid', color: '#ef4444', link: '/student/knowledge' },
-    { title: '班级排名', value: '—', icon: 'Trophy', color: '#8b5cf6' },
+    student?.college || userStore.userInfo?.department,
+    student?.className,
+    `学号 ${student?.studentNo || userStore.userInfo?.studentNo || '—'}`,
+  ].filter(Boolean).join(' · ')
+})
+
+/** 最近两次成绩的相对变化率 */
+const scoreTrend = computed<number | undefined>(() => {
+  if (trendAvgScore.value.length < 2) return undefined
+  const previous = trendAvgScore.value.at(-2)
+  const current = trendAvgScore.value.at(-1)
+  if (previous === undefined || current === undefined || previous === 0) return undefined
+  return +(((current - previous) / previous) * 100).toFixed(1)
+})
+
+interface StatCardItem {
+  title: string
+  value: number | string
+  unit?: string
+  icon: string
+  color: string
+  trend?: number
+}
+
+const statCards = computed<StatCardItem[]>(() => {
+  const summary = overview.value?.summary
+  const hasAverage = summary?.averageScore != null
+  const hasAttendance = summary?.attendanceRate != null
+  return [
+    { title: '课程数', value: summary?.courseCount ?? 0, icon: 'Notebook', color: '#2563eb' },
+    {
+      title: '平均成绩',
+      value: summary?.averageScore ?? '—',
+      unit: hasAverage ? '分' : undefined,
+      icon: 'DataLine',
+      color: '#10b981',
+      trend: scoreTrend.value,
+    },
+    {
+      title: '总出勤率',
+      value: summary?.attendanceRate ?? '—',
+      unit: hasAttendance ? '%' : undefined,
+      icon: 'Calendar',
+      color: '#06b6d4',
+    },
+    { title: '待完成练习', value: summary?.pendingQuizCount ?? 0, icon: 'EditPen', color: '#f59e0b' },
+    { title: '薄弱知识点', value: summary?.weakKnowledgeCount ?? 0, icon: 'Grid', color: '#ef4444' },
+    { title: '班级排名', value: summary?.classRankText ?? '暂无', icon: 'Trophy', color: '#8b5cf6' },
   ]
 })
 
@@ -65,9 +100,14 @@ const scoreBarOption = computed<EChartsOption>(() => ({
   grid: { left: 50, right: 20, top: 40, bottom: 30 },
 }))
 
-/** 成绩趋势数据 */
-const trendMonths = ref<string[]>([])
-const trendAvgScore = ref<number[]>([])
+const hasCourseScores = computed(() => courses.value.some(
+  (course) => course.score !== null || course.avgScore !== null,
+))
+const hasTrendScores = computed(() => trendAvgScore.value.length > 0)
+
+function formatScore(score: number | null): string {
+  return score === null ? '暂无' : `${score} 分`
+}
 
 /** 成绩趋势 */
 const trendOption = computed<EChartsOption>(() => ({
@@ -86,26 +126,22 @@ const trendOption = computed<EChartsOption>(() => ({
 }))
 
 onMounted(async () => {
-  try {
-    const studentId = userStore.userInfo?.studentId
-    if (studentId) {
-      const [pending, scoreCourses] = await Promise.all([
-        countPendingStudentQuizzes(studentId),
-        fetchStudentScores(studentId),
-      ])
-      pendingQuizCount.value = pending
-      courses.value = scoreCourses.map((course) => ({
-        id: course.courseId,
-        name: course.courseName,
-        teacher: '—',
-        progress: course.details.length ? Math.round(course.details.filter((d) => d.isPass).length / course.details.length * 100) : 0,
-        score: course.totalScore,
-        rank: '—',
-      }))
-    }
-    const trendRes = await request.get('/v1/dashboard/grade-trend', {
-      params: { student_id: studentId },
-    })
+  const studentId = userStore.userInfo?.studentId
+  const overviewPromise = fetchStudentDashboardOverview()
+  const trendPromise = studentId
+    ? request.get('/v1/dashboard/grade-trend', { params: { student_id: studentId } })
+    : Promise.resolve(null)
+
+  const [overviewResult, trendResult] = await Promise.allSettled([
+    overviewPromise,
+    trendPromise,
+  ])
+
+  if (overviewResult.status === 'fulfilled') {
+    overview.value = overviewResult.value
+  }
+  if (trendResult.status === 'fulfilled' && trendResult.value) {
+    const trendRes = trendResult.value
     if (trendRes.data?.months) {
       trendMonths.value = trendRes.data.months
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
@@ -113,7 +149,7 @@ onMounted(async () => {
       trendMonths.value = trendRes.data.labels
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     }
-  } catch { /* empty */ }
+  }
   loading.value = false
 })
 </script>
@@ -123,8 +159,8 @@ onMounted(async () => {
     <!-- 欢迎区 -->
     <div class="content-card welcome-card">
       <div class="welcome-info">
-        <h2>欢迎回来，{{ userStore.userInfo?.name || '同学' }}</h2>
-        <p>{{ userStore.userInfo?.department || '计算机学院' }} · 学号 {{ userStore.userInfo?.studentNo || '—' }}</p>
+        <h2>欢迎回来，{{ overview?.student.name || userStore.userInfo?.name || '同学' }}</h2>
+        <p>{{ welcomeMeta }}</p>
       </div>
     </div>
 
@@ -140,37 +176,48 @@ onMounted(async () => {
     <!-- 课程列表 -->
     <div class="content-card">
       <div class="content-card__title">我的课程</div>
-      <div class="course-grid">
+      <div v-if="courses.length" class="course-grid">
         <div v-for="course in courses" :key="course.id" class="course-card">
           <div class="course-header">
             <h3>{{ course.name }}</h3>
-            <el-tag size="small" type="success">{{ course.rank }}</el-tag>
+            <el-tag v-if="course.rank !== null" size="small" type="success">{{ course.rankText }}</el-tag>
           </div>
           <p class="course-teacher">任课教师：{{ course.teacher }}</p>
           <div class="course-score">
             <span class="score-label">我的成绩</span>
-            <span class="score-value">{{ course.score }} 分</span>
+            <span class="score-value" :class="{ 'score-value--empty': course.score === null }">
+              {{ formatScore(course.score) }}
+            </span>
           </div>
           <div class="course-progress">
-            <span class="progress-label">课程进度</span>
-            <el-progress :percentage="course.progress" :stroke-width="8" :color="course.progress >= 70 ? '#10b981' : '#f59e0b'" />
+            <span class="progress-label">练习完成度</span>
+            <el-progress
+              v-if="course.progress !== null"
+              :percentage="course.progress"
+              :stroke-width="8"
+              :color="course.progress >= 70 ? '#10b981' : '#f59e0b'"
+            />
+            <span v-else class="no-progress">暂无练习数据</span>
           </div>
         </div>
       </div>
+      <el-empty v-else description="暂无已选课程" />
     </div>
 
     <!-- 图表区 -->
     <el-row :gutter="16">
-      <el-col :span="12">
+      <el-col :xs="24" :md="12">
         <div class="content-card">
           <div class="content-card__title">各课程成绩对比</div>
-          <BaseChart :option="scoreBarOption" height="300px" />
+          <BaseChart v-if="hasCourseScores" :option="scoreBarOption" height="300px" />
+          <el-empty v-else class="chart-empty" description="暂无课程成绩" />
         </div>
       </el-col>
-      <el-col :span="12">
+      <el-col :xs="24" :md="12">
         <div class="content-card">
           <div class="content-card__title">成绩变化趋势</div>
-          <BaseChart :option="trendOption" height="300px" />
+          <BaseChart v-if="hasTrendScores" :option="trendOption" height="300px" />
+          <el-empty v-else class="chart-empty" description="暂无成绩趋势" />
         </div>
       </el-col>
     </el-row>
@@ -224,10 +271,16 @@ onMounted(async () => {
 
     .score-label { font-size: 13px; color: #64748b; }
     .score-value { font-size: 20px; font-weight: 700; color: #2563eb; }
+    .score-value--empty { font-size: 14px; font-weight: 500; color: #94a3b8; }
   }
 
   .course-progress {
     .progress-label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 6px; }
+    .no-progress { font-size: 12px; color: #94a3b8; line-height: 16px; }
   }
+}
+
+.chart-empty {
+  min-height: 300px;
 }
 </style>

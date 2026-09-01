@@ -15,6 +15,8 @@ export interface MockUser {
   real_name: string
   role_id: number // 1=admin, 2=teacher, 3=student
   status: number // 1=启用, 0=禁用
+  college?: string
+  class_id?: number
   create_time: string
 }
 
@@ -31,6 +33,7 @@ export const users: MockUser[] = [
     real_name: s.real_name,
     role_id: 3,
     status: 1,
+    class_id: s.class_id,
     create_time: '2025-09-01 08:00:00',
   })),
 ]

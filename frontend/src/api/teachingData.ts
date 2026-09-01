@@ -26,6 +26,22 @@ export async function fetchTemplateList(): Promise<TemplateMeta[]> {
 }
 
 /**
+ * 从 Content-Disposition 响应头解析下载文件名。
+ * 后端返回格式：
+ *   attachment; filename="ascii-name.xlsx";
+ *                filename*=UTF-8''%E6%A8%A1%E6%9D%BF-...xlsx
+ * 优先取 RFC 5987 编码文件名（含中文），ASCII 名兜底。
+ */
+function parseFilenameFromDisposition(disposition: string, fallback: string): string {
+  const rfc5987 = disposition.match(/filename\*=UTF-8''([^;]+)/)
+  if (rfc5987) {
+    return decodeURIComponent(rfc5987[1]!)
+  }
+  const ascii = disposition.match(/filename="?([^";\s]+)"?/)
+  return ascii ? ascii[1]! : fallback
+}
+
+/**
  * 从后端下载模板文件（blob）。
  *
  * @param templateId 后端模板 ID（如 exam_deduction / score_summary / attendance）
@@ -42,22 +58,8 @@ export async function downloadTemplateFromServer(
   })
 
   const blob = res.data as Blob
-
-  // 从 Content-Disposition 解析文件名
-  // 后端返回格式：
-  //   attachment; filename="template-score_summary.xlsx";
-  //                filename*=UTF-8''%E6%A8%A1%E6%9D%BF-...xlsx
   const disposition = (res.headers as Record<string, string>)['content-disposition'] ?? ''
-
-  // 优先取 RFC 5987 编码文件名（含中文），再用 ASCII 兜底
-  let filename: string
-  const rfc5987 = disposition.match(/filename\*=UTF-8''([^;]+)/)
-  if (rfc5987) {
-    filename = decodeURIComponent(rfc5987[1]!)
-  } else {
-    const ascii = disposition.match(/filename="?([^";\s]+)"?/)
-    filename = ascii ? ascii[1]! : `${templateId}.${format}`
-  }
+  const filename = parseFilenameFromDisposition(disposition, `${templateId}.${format}`)
 
   return { blob, filename }
 }
@@ -76,6 +78,7 @@ interface TeachingDataApiRow {
   recordId: number
   dataType: 'score' | 'attendance'
   recordType?: TeachingRecordType
+  subType?: string
   studentId: string
   studentName: string
   courseId: number
@@ -104,6 +107,7 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     majorId: 0,
     classId: 0,
     dataType: row.dataType,
+    subType: row.subType,
     score: row.dataType === 'score' ? row.score : undefined,
     attendance: row.dataType === 'attendance' ? row.status : undefined,
     batchName: row.batchName,
@@ -143,6 +147,20 @@ export async function updateRowData(
   await request.put(`/v1/teaching-data/${recordId}/row`, { source_data: sourceData })
 }
 
+/**
+ * 删除单条教学数据（Data.Query.Delete，后端写入操作日志 BR4）。
+ *
+ * @param recordType 记录类型：score / individual_score / course_test_detail / attendance / attendance_sheet
+ * @param recordId   后端返回的记录主键
+ */
+export async function deleteTeachingData(
+  recordType: string,
+  recordId: number,
+): Promise<void> {
+  await request.delete(`/v1/teaching-data/${recordType}/${recordId}`)
+}
+
+/** @deprecated 旧名，等价于 deleteTeachingData，保留以兼容调用方。 */
 export async function deleteTeachingDataRecord(
   recordType: TeachingRecordType,
   recordId: number,
@@ -157,14 +175,16 @@ export async function batchDeleteTeachingDataRecords(
   return res.data as { deleted: number }
 }
 
-function parseDownloadFilename(disposition: string, fallback: string): string {
-  const rfc5987 = disposition.match(/filename\*=UTF-8''([^;]+)/)
-  if (rfc5987) return decodeURIComponent(rfc5987[1]!)
-  const ascii = disposition.match(/filename="?([^";\s]+)"?/)
-  return ascii ? ascii[1]! : fallback
-}
-
-export async function exportTeachingData(params: TeachingDataQuery): Promise<{ blob: Blob; filename: string }> {
+/**
+ * 导出教学数据为 Excel 文件（Data.Query.Export，后端生成）。
+ *
+ * @param params 与查询一致的筛选条件；后端支持 courseId / keyword（姓名学号模糊）/
+ *               dataType（score | attendance）/ batchId
+ * @returns blob + 后端 Content-Disposition 中建议的文件名
+ */
+export async function exportTeachingData(
+  params: Pick<TeachingDataQuery, 'courseId' | 'keyword' | 'dataType' | 'batchId'>,
+): Promise<{ blob: Blob; filename: string }> {
   const res = await request.get('/v1/teaching-data/export', {
     params: {
       course_id: params.courseId,
@@ -174,9 +194,10 @@ export async function exportTeachingData(params: TeachingDataQuery): Promise<{ b
     },
     responseType: 'blob',
   })
+
+  const blob = res.data as Blob
   const disposition = (res.headers as Record<string, string>)['content-disposition'] ?? ''
-  return {
-    blob: res.data as Blob,
-    filename: parseDownloadFilename(disposition, 'teaching_data_export.xlsx'),
-  }
+  const filename = parseFilenameFromDisposition(disposition, '教学数据导出.xlsx')
+
+  return { blob, filename }
 }

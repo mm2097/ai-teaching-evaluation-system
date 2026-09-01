@@ -8,7 +8,7 @@
 
 from app.models.user import SysUser, SysRole, LoginRequest, UserCreate, UserRead, UserUpdate
 from app.models.teacher import Teacher
-from app.models.student import Student
+from app.models.student import Student, StudentCreate, StudentUpdate
 from app.models.class_info import ClassInfo
 from app.models.course import Course, CourseStudent
 from app.models.knowledge import KnowledgeModule, KnowledgePoint
@@ -25,11 +25,13 @@ from app.models.question import (
 )
 from app.models.evaluation import EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore
 from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
+from app.models.notification import Notification
 from app.models.log import AiGenerationLog, SysOperationLog
+from app.models.report import ReportHistory
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
-    "Teacher", "Student", "ClassInfo",
+    "Teacher", "Student", "StudentCreate", "StudentUpdate", "ClassInfo",
     "Course", "CourseStudent",
     "KnowledgeModule", "KnowledgePoint",
     "AttendanceRecord", "InteractionRecord",
@@ -38,5 +40,7 @@ __all__ = [
     "AiQuestion", "AnswerTask", "AnswerTaskClass", "TaskQuestion", "StudentAnswerRecord",
     "EvalDimension", "EvalIndex", "StudentEvaluationResult", "EvalDimensionScore",
     "KnowledgeMastery", "StudyWarning", "StudentProfile",
+    "Notification",
     "AiGenerationLog", "SysOperationLog",
+    "ReportHistory",
 ]

@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import openpyxl
 from typing import Any
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import Response
 from sqlmodel import Session, select
 from sqlalchemy import or_
@@ -24,7 +24,7 @@ from sqlalchemy import or_
 import logging
 
 from app.core.database import get_session, engine
-from app.core.operation_log import get_current_user
+from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole, SysOperationLog,
@@ -631,64 +631,148 @@ def edit_teaching_data(
         raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance")
 
 
-
 # ============================================================================
-# 删除接口（3.2.6 / 3.2.7 节：Data.Query.Delete）
+# 删除接口（3.2.6 / 3.2.7 节：Data.Query.Delete + BR4 操作留痕）
 # ============================================================================
 
-_RECORD_MODEL_BY_TYPE = {
-    "score": ScoreRecord,
-    "attendance": AttendanceRecord,
-    "individual_score": IndividualScore,
-    "course_test_detail": CourseTestDetail,
-    "attendance_sheet": AttendanceSheet,
-}
+def _delete_teaching_record(
+    record_type: str,
+    record_id: int,
+    session: Session,
+    current_user: SysUser,
+) -> tuple[str, str, str, int]:
+    """删除单条教学数据并返回 (label, student_no, student_name, course_id)。
 
+    仅授课教师可删除自己课程的数据。支持旧表（ScoreRecord/AttendanceRecord）
+    与新表（IndividualScore/AttendanceSheet/CourseTestDetail）。调用方负责写操作日志。
+    """
+    if record_type == "score":
+        record = session.get(ScoreRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="成绩记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        student_no, student_name = (student.student_no, student.real_name) if student else ("", "")
+        # 级联删除该学生在本主批次下的各题扣分子记录（batch_name 形如 "{主批次}-第N大题"）
+        batch = session.get(ExamBatch, record.batch_id)
+        if batch:
+            sub_batches = session.exec(
+                select(ExamBatch).where(
+                    ExamBatch.course_id == course_id,
+                    ExamBatch.batch_name.like(f"{batch.batch_name}-第%"),
+                )
+            ).all()
+            for sub_batch in sub_batches:
+                for sub in session.exec(
+                    select(ScoreRecord).where(
+                        ScoreRecord.student_id == record.student_id,
+                        ScoreRecord.batch_id == sub_batch.batch_id,
+                    )
+                ).all():
+                    session.delete(sub)
+        session.delete(record)
+        session.commit()
+        return "成绩记录", student_no, student_name, course_id
 
-def _get_record_course_id(record: Any, session: Session) -> int:
-    if isinstance(record, (ScoreRecord, AttendanceRecord)):
-        return record.course_id
-    batch_id = getattr(record, "exam_batch_id", None)
-    batch = session.get(ExamBatch, batch_id) if batch_id is not None else None
-    if not batch:
-        raise HTTPException(status_code=404, detail="关联考试批次不存在")
-    return batch.course_id
+    if record_type == "individual_score":
+        record = session.get(IndividualScore, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="单项成绩记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        student_no, student_name = (student.student_no, student.real_name) if student else ("", "")
+        session.delete(record)
+        session.commit()
+        return "单项成绩记录", student_no, student_name, course_id
 
+    if record_type == "course_test_detail":
+        record = session.get(CourseTestDetail, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="课程测试记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        student_no, student_name = (student.student_no, student.real_name) if student else ("", "")
+        session.delete(record)
+        session.commit()
+        return "课程测试记录", student_no, student_name, course_id
 
-def _delete_teaching_record(record_type: str, record_id: int, session: Session, current_user: SysUser) -> None:
-    model = _RECORD_MODEL_BY_TYPE.get(record_type)
-    if model is None:
-        supported = ", ".join(_RECORD_MODEL_BY_TYPE)
-        raise HTTPException(status_code=400, detail=f"不支持的数据类型: {record_type}，支持: {supported}")
+    if record_type == "attendance":
+        record = session.get(AttendanceRecord, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤记录不存在")
+        course_id = record.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        student_no, student_name = (student.student_no, student.real_name) if student else ("", "")
+        session.delete(record)
+        session.commit()
+        return "考勤记录", student_no, student_name, course_id
 
-    record = session.get(model, record_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="记录不存在")
+    if record_type == "attendance_sheet":
+        record = session.get(AttendanceSheet, record_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="考勤情况记录不存在")
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        course_id = batch.course_id
+        _require_teacher_for_course(current_user, course_id, session)
+        student = session.get(Student, record.student_id)
+        student_no, student_name = (student.student_no, student.real_name) if student else ("", "")
+        session.delete(record)
+        session.commit()
+        return "考勤情况记录", student_no, student_name, course_id
 
-    _require_teacher_for_course(current_user, _get_record_course_id(record, session), session)
-    session.delete(record)
+    raise HTTPException(
+        status_code=400,
+        detail=f"不支持的数据类型: {record_type}，支持: score, individual_score, course_test_detail, attendance, attendance_sheet",
+    )
 
 
 @router.delete("/teaching-data/{record_type}/{record_id}", tags=["教学数据"])
 def delete_teaching_data(
     record_type: str,
     record_id: int,
+    request: Request = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """删除单条教学数据。仅授课教师可删除自己课程的数据。"""
-    _delete_teaching_record(record_type, record_id, session, current_user)
-    session.commit()
+    """删除单条教学数据（Data.Query.Delete + BR4 操作留痕）。
+
+    仅授课教师可删除自己课程的数据；每次删除都会写入操作日志。
+    """
+    label, student_no, student_name, course_id = _delete_teaching_record(
+        record_type, record_id, session, current_user
+    )
+    if request is not None:
+        save_operation_log(
+            session,
+            current_user.user_id,
+            "教学数据",
+            "删除数据",
+            f"删除{label}（学生：{student_name}，学号：{student_no}，课程ID：{course_id}）",
+            get_client_ip(request),
+        )
     return {"recordType": record_type, "recordId": record_id, "deleted": True}
 
 
 @router.post("/teaching-data/batch-delete", tags=["教学数据"])
 def batch_delete_teaching_data(
     payload: dict = Body(...),
+    request: Request = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """批量删除教学数据；任一记录无权限或不存在时整体失败。"""
+    """批量删除教学数据；任一记录无权限或不存在时整体失败，每条均写入操作日志。"""
     records = payload.get("records") if isinstance(payload, dict) else None
     if not isinstance(records, list) or not records:
         raise HTTPException(status_code=422, detail="records 不能为空")
@@ -703,10 +787,21 @@ def batch_delete_teaching_data(
             raise HTTPException(status_code=422, detail="recordType 和 recordId 必填")
         normalized.append((record_type, record_id))
 
+    client_ip = get_client_ip(request) if request else ""
     for record_type, record_id in normalized:
-        _delete_teaching_record(record_type, record_id, session, current_user)
-    session.commit()
+        label, student_no, student_name, course_id = _delete_teaching_record(
+            record_type, record_id, session, current_user
+        )
+        save_operation_log(
+            session,
+            current_user.user_id,
+            "教学数据",
+            "删除数据",
+            f"删除{label}（学生：{student_name}，学号：{student_no}，课程ID：{course_id}）",
+            client_ip,
+        )
     return {"deleted": len(normalized)}
+
 
 @router.get("/teaching-data/export", tags=["教学数据"])
 def export_teaching_data(

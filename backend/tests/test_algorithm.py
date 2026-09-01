@@ -209,31 +209,45 @@ class TestEvaluation:
 
 
     def test_eval_index_weights_affect_total_score(self, session):
-        """课程评价指标权重应接入综合评价总分。"""
+        """课程评价指标权重应接入综合评价总分。
+
+        新设计（_configured_dimension_scores）：每个维度下指标权重和需为 100，
+        指标按 score_rule 解析为 0-100 分后加权得到维度分；改指标权重会改变
+        维度分进而改变总分。load_dimension_weights 仍按维度汇总归一化为四维
+        权重，供评价配置页展示。
+        """
         from app.models import EvalDimension, EvalIndex
         from app.services.evaluation import compute_evaluation, load_dimension_weights
 
-        dim_academic = EvalDimension(course_id=1, dimension_name="学业成绩", sort_num=1)
-        dim_attitude = EvalDimension(course_id=1, dimension_name="学习态度", sort_num=2)
-        session.add_all([dim_academic, dim_attitude])
+        dim_attitude = EvalDimension(course_id=1, dimension_name="学习态度", sort_num=1)
+        session.add(dim_attitude)
         session.flush()
-        idx_academic = EvalIndex(dimension_id=dim_academic.dimension_id, index_name="考试成绩", weight=90, score_rule="{}")
-        idx_attitude = EvalIndex(dimension_id=dim_attitude.dimension_id, index_name="课堂参与", weight=10, score_rule="{}")
-        session.add_all([idx_academic, idx_attitude])
+        # 学习态度维度：出勤率 vs 课堂互动，权重和 = 100，规则生效
+        idx_attendance = EvalIndex(
+            dimension_id=dim_attitude.dimension_id, index_name="出勤率",
+            weight=90, score_rule='{"type":"attendance"}',
+        )
+        idx_interaction = EvalIndex(
+            dimension_id=dim_attitude.dimension_id, index_name="课堂互动",
+            weight=10, score_rule='{"type":"interaction"}',
+        )
+        session.add_all([idx_attendance, idx_interaction])
         session.commit()
 
-        academic_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        attendance_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        # 维度权重归一化：仅学习态度维度配置了指标，其汇总权重归一化后 attitude=1.0
         weights = load_dimension_weights(session, course_id=1)
-        assert round(weights["academic"], 2) == 0.9
-        assert round(weights["attitude"], 2) == 0.1
+        assert round(weights["attitude"], 2) == 1.0
 
-        idx_academic.weight = 10
-        idx_attitude.weight = 90
-        session.add_all([idx_academic, idx_attitude])
+        # 调换指标权重（10/90），维度分会因出勤率与互动分不同而变化，总分随之变化
+        idx_attendance.weight = 10
+        idx_interaction.weight = 90
+        session.add_all([idx_attendance, idx_interaction])
         session.commit()
 
-        attitude_heavy = compute_evaluation(session, student_id=2, course_id=1)
-        assert academic_heavy.total_score != attitude_heavy.total_score
+        interaction_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        assert attendance_heavy.dimensions["attitude"] != interaction_heavy.dimensions["attitude"]
+        assert attendance_heavy.total_score != interaction_heavy.total_score
     def test_interaction_records_feed_attitude_score(self, session):
         """学习态度互动项应使用 InteractionRecord，而不是固定常量。"""
         from datetime import date

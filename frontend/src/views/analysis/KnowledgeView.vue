@@ -4,12 +4,16 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
 import { fetchKnowledgeHeatmap, computeClassKnowledgeStats, type KnowledgeHeatmapResult } from '@/api/analysis'
+import { fetchSemesters } from '@/api/dict'
 import { useAnalysisScope } from '@/composables/useAnalysisScope'
 import { useUserStore } from '@/stores/user'
+
+const route = useRoute()
 
 type ViewMode = 'class' | 'student'
 
@@ -176,14 +180,63 @@ const weakPoints = computed(() => {
   return classStats.value?.weakPoints ?? []
 })
 
+const lossRateRows = computed(() => heatmapData.value.knowledgePoints.map((name, index) => ({
+  name,
+  masteryRate: viewMode.value === 'student'
+    ? (heatmapData.value.data.find((item) => item[0] === index)?.[2] ?? 0)
+    : (heatmapData.value.classAvgByKp?.[index] ?? classStats.value?.classAvgByKp[index] ?? 0),
+  lossRate: heatmapData.value.lossRateByKp?.[index] ?? 0,
+  classLossRate: heatmapData.value.classLossRateByKp?.[index] ?? 0,
+})))
+
 function handleViewModeChange(mode: ViewMode): void {
   viewMode.value = mode
 }
 
+/**
+ * 从路由 query 读取看板下钻携带的筛选条件并应用
+ * 支持 semester（学期编码）/ courseId / classId
+ * 注意：需按"学期 → 课程 → 班级"顺序设置并等待级联刷新，
+ * 保证 loadHeatmap 使用最终筛选值
+ */
+async function applyQueryFilters(): Promise<void> {
+  const qSemester = route.query.semester
+  if (typeof qSemester === 'string' && qSemester) {
+    const sems = await fetchSemesters()
+    const sem = sems.find((s) => s.semesterCode === qSemester)
+    if (sem && sem.id !== semesterId.value) {
+      semesterId.value = sem.id
+      // 学期变化会级联刷新课程/班级选项，等待完成后再设置下游筛选
+      await scope.loadOptions(true)
+    }
+  }
+  const qCourse = Number(route.query.courseId)
+  if (Number.isFinite(qCourse) && qCourse > 0 && qCourse !== courseId.value) {
+    courseId.value = qCourse
+  }
+  const qClass = Number(route.query.classId)
+  if (Number.isFinite(qClass) && qClass > 0 && qClass !== classId.value) {
+    classId.value = qClass
+  }
+  // 等待课程/班级变更触发的级联刷新完成，最终值收敛后再查询
+  await scope.loadOptions(true)
+}
+
 onMounted(async () => {
   await scope.loadOptions()
+  await applyQueryFilters()
   await loadHeatmap()
 })
+
+// 从看板再次下钻时（同一组件复用），重新应用筛选并刷新热力图
+watch(
+  () => route.query,
+  async () => {
+    if (!route.query.courseId && !route.query.classId) return
+    await applyQueryFilters()
+    await loadHeatmap()
+  },
+)
 </script>
 
 <template>
@@ -228,6 +281,32 @@ onMounted(async () => {
         :option="heatmapOption"
         :height="viewMode === 'student' ? '240px' : '400px'"
       />
+    </div>
+
+    <div class="content-card">
+      <div class="content-card__title">知识点失分率</div>
+      <p class="hint-text">失分率按当前筛选范围内该知识点累计扣分占课程测试累计可得分的比例计算。</p>
+      <el-empty v-if="!lossRateRows.length" description="暂无课程测试扣分数据" :image-size="64" />
+      <el-table v-else :data="lossRateRows" stripe border>
+        <el-table-column prop="name" label="知识点" min-width="160" />
+        <el-table-column prop="masteryRate" label="掌握率" width="120" align="center">
+          <template #default="{ row }">{{ row.masteryRate }}%</template>
+        </el-table-column>
+        <el-table-column prop="lossRate" label="失分率" width="120" align="center">
+          <template #default="{ row }">
+            <span :class="{ 'loss-rate--high': row.lossRate >= 10 }">{{ row.lossRate }}%</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-if="viewMode === 'student'"
+          prop="classLossRate"
+          label="班级失分率"
+          width="130"
+          align="center"
+        >
+          <template #default="{ row }">{{ row.classLossRate }}%</template>
+        </el-table-column>
+      </el-table>
     </div>
 
     <el-row :gutter="16">
@@ -301,5 +380,10 @@ onMounted(async () => {
   color: #64748b;
   line-height: 1.6;
   margin: 0 0 8px;
+}
+
+.loss-rate--high {
+  color: #ef4444;
+  font-weight: 600;
 }
 </style>

@@ -12,6 +12,7 @@ from app.api.v1.scores import router as scores_router
 from app.api.v1.dicts import router as dicts_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.analysis import router as analysis_router
+from app.api.v1.notifications import router as notifications_router
 from app.api.v1.logs import router as logs_router
 from app.api.v1.eval_config import router as eval_config_router
 from app.api.v1.evaluations import router as eval_router
@@ -71,6 +72,7 @@ app.include_router(scores_router, prefix="/api/v1", tags=["成绩管理"])
 app.include_router(dicts_router, prefix="/api/v1", tags=["字典"])
 app.include_router(dashboard_router, prefix="/api/v1", tags=["看板"])
 app.include_router(analysis_router, prefix="/api/v1", tags=["学情分析"])
+app.include_router(notifications_router, prefix="/api/v1", tags=["消息通知"])
 app.include_router(logs_router, prefix="/api/v1", tags=["系统日志"])
 app.include_router(eval_config_router, prefix="/api/v1", tags=["评价配置"])
 app.include_router(eval_router, prefix="/api/v1", tags=["评价管理"])

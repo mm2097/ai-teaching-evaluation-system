@@ -149,7 +149,7 @@ export function warnings(_params: Record<string, unknown>) {
       classId: 3, deptId: 2, courseId: 1, courseName: '数据结构与算法',
       semesterId: 2, type: '综合预警', level: '高',
       reason: '成绩下滑 + 出勤不足 + 作业缺交，多维度预警',
-      warningTime: '2026-03-14 14:00:00', status: 2,
+      warningTime: '2026-03-14 14:00:00', status: 1,
     },
   ]
 }
@@ -157,6 +157,37 @@ export function warnings(_params: Record<string, unknown>) {
 /* ============================================================ */
 /* 成绩预测                                                      */
 /* ============================================================ */
+
+export function gradeDistribution(_params: Record<string, unknown>) {
+  const buckets = [
+    { range: '0-9', low: 0, high: 9, count: 0, ratio: 0 },
+    { range: '10-19', low: 10, high: 19, count: 0, ratio: 0 },
+    { range: '20-29', low: 20, high: 29, count: 0, ratio: 0 },
+    { range: '30-39', low: 30, high: 39, count: 0, ratio: 0 },
+    { range: '40-49', low: 40, high: 49, count: 1, ratio: 3.3 },
+    { range: '50-59', low: 50, high: 59, count: 2, ratio: 6.7 },
+    { range: '60-69', low: 60, high: 69, count: 6, ratio: 20 },
+    { range: '70-79', low: 70, high: 79, count: 10, ratio: 33.3 },
+    { range: '80-89', low: 80, high: 89, count: 8, ratio: 26.7 },
+    { range: '90-100', low: 90, high: 100, count: 3, ratio: 10 },
+  ]
+  return {
+    distribution: buckets,
+    statistics: {
+      count: 30,
+      mean: 78.5,
+      median: 79,
+      stdDev: 12.4,
+      maxScore: 98,
+      minScore: 52,
+      passRate: 90,
+      excellentRate: 10,
+      failRate: 10,
+      skewness: -0.32,
+    },
+    characteristic: '近似正态分布，离散度适中',
+  }
+}
 
 export function gradePredictions(_courseId?: number, _classId?: number) {
   const sample = students.slice(0, 8)

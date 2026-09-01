@@ -2,6 +2,10 @@
 
 接口：
     GET  /api/v1/report           生成报告 JSON
+    POST /api/v1/report/history   生成并保存报告快照
+    GET  /api/v1/report/history   查询当前用户的报告历史
+    GET  /api/v1/report/history/{id} 读取历史快照
+    GET  /api/v1/report/history/{id}/download 下载历史快照
     GET  /api/v1/report/preview   在线预览 HTML
     GET  /api/v1/report/export    导出 Excel（format=xlsx）
 
@@ -11,6 +15,9 @@
 from __future__ import annotations
 
 import io as _io
+import json
+from datetime import datetime
+from html import escape
 from urllib.parse import quote
 
 import httpx
@@ -19,11 +26,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Query as QueryParam
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
+from pydantic import BaseModel, Field
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
-from app.models import SysUser, SysRole, Student, Teacher, Course
+from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser
 from app.api.v1.analysis import _check_course_access
 from app.services.report_template import (
     build_class_context,
@@ -51,6 +67,17 @@ _REPORT_TYPE_NAMES: dict[int, str] = {
 
 # 学生可访问的报告类型（仅限查看本人数据）
 _STUDENT_REPORT_TYPES = {2, 3, 4}
+
+
+class GenerateSavedReportRequest(BaseModel):
+    course_id: int
+    report_type: int = Field(ge=1, le=4)
+    class_id: int | None = None
+    student_id: int | None = None
+    semester: str | None = Field(default=None, max_length=32)
+    export_format: str = Field(default="pdf", pattern="^(pdf|xlsx)$")
+    use_llm: bool = True
+    dashboard_stats: dict = Field(default_factory=dict)
 
 
 # ============================================================================
@@ -206,6 +233,200 @@ def _assemble_report(
     return _enhance_with_llm(scope, report_type, ctx_dict, template), ctx
 
 
+def _history_to_dict(history: ReportHistory, include_snapshot: bool = False) -> dict:
+    """Return the stable API representation of a persisted report."""
+    result = {
+        "id": history.report_id,
+        "name": history.report_name,
+        "type": _REPORT_TYPE_NAMES.get(history.report_type, "报告"),
+        "report_type": history.report_type,
+        "scope": history.scope,
+        "format": history.export_format.upper(),
+        "time": history.created_at.strftime("%Y-%m-%d %H:%M"),
+        "created_at": history.created_at.isoformat(),
+        "course_id": history.course_id,
+        "course_name": history.course_name,
+        "class_id": history.class_id,
+        "class_name": history.class_name,
+        "student_id": history.student_id,
+        "student_name": history.student_name,
+    }
+    if include_snapshot:
+        result["parameters"] = json.loads(history.parameter_snapshot)
+        result["data"] = json.loads(history.report_snapshot)
+        result["stats"] = json.loads(history.stats_snapshot)
+    return result
+
+
+def _get_owned_history(
+    session: Session,
+    report_id: int,
+    current_user: SysUser,
+) -> ReportHistory:
+    history = session.get(ReportHistory, report_id)
+    if not history:
+        raise HTTPException(status_code=404, detail="报告不存在")
+    if history.creator_user_id != current_user.user_id:
+        raise HTTPException(status_code=403, detail="无权访问该报告")
+    _check_report_access(
+        session,
+        current_user,
+        history.course_id,
+        history.report_type,
+        history.student_id,
+    )
+    return history
+
+
+def _snapshot_workbook(history: ReportHistory) -> bytes:
+    """Build a readable xlsx from the immutable history snapshot."""
+    report = json.loads(history.report_snapshot)
+    stats = json.loads(history.stats_snapshot)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "报告正文"
+
+    title_fill = openpyxl.styles.PatternFill(
+        start_color="2563EB", end_color="2563EB", fill_type="solid"
+    )
+    title_font = openpyxl.styles.Font(bold=True, color="FFFFFF", size=12)
+    wrap = openpyxl.styles.Alignment(wrap_text=True, vertical="top")
+
+    ws.merge_cells("A1:B1")
+    ws["A1"] = history.report_name
+    ws["A1"].font = openpyxl.styles.Font(bold=True, size=16)
+    ws["A2"] = "课程"
+    ws["B2"] = history.course_name
+    ws["A3"] = "生成时间"
+    ws["B3"] = history.created_at.strftime("%Y-%m-%d %H:%M")
+    rows = [
+        ("总体概述", report.get("summary", "")),
+        ("关键结论", report.get("conclusion", "")),
+        ("建议措施", report.get("suggestion", "")),
+    ]
+    for row_index, (label, value) in enumerate(rows, start=5):
+        ws.cell(row=row_index, column=1, value=label)
+        ws.cell(row=row_index, column=2, value=value)
+        ws.cell(row=row_index, column=1).font = title_font
+        ws.cell(row=row_index, column=1).fill = title_fill
+        ws.cell(row=row_index, column=2).alignment = wrap
+        ws.row_dimensions[row_index].height = 72
+    ws.column_dimensions["A"].width = 16
+    ws.column_dimensions["B"].width = 90
+
+    if stats:
+        stats_ws = wb.create_sheet("指标快照")
+        stats_ws.append(["指标", "数值"])
+        for cell in stats_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for key, value in stats.items():
+            stats_ws.append([key, value])
+        stats_ws.column_dimensions["A"].width = 24
+        stats_ws.column_dimensions["B"].width = 24
+
+    output = _io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+def _snapshot_pdf(history: ReportHistory) -> bytes:
+    """Build a paginated, Chinese-readable PDF from an immutable snapshot."""
+    report = json.loads(history.report_snapshot)
+    stats = json.loads(history.stats_snapshot)
+    output = _io.BytesIO()
+
+    font_name = "STSong-Light"
+    if font_name not in pdfmetrics.getRegisteredFontNames():
+        pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ReportTitle", parent=styles["Title"], fontName=font_name,
+        fontSize=20, leading=28, alignment=TA_CENTER, textColor=colors.HexColor("#0f172a"),
+        spaceAfter=8 * mm,
+    )
+    meta_style = ParagraphStyle(
+        "ReportMeta", parent=styles["Normal"], fontName=font_name,
+        fontSize=10, leading=16, alignment=TA_CENTER, textColor=colors.HexColor("#64748b"),
+        spaceAfter=8 * mm,
+    )
+    heading_style = ParagraphStyle(
+        "ReportHeading", parent=styles["Heading2"], fontName=font_name,
+        fontSize=14, leading=20, textColor=colors.HexColor("#1e40af"),
+        spaceBefore=5 * mm, spaceAfter=3 * mm, keepWithNext=True,
+    )
+    body_style = ParagraphStyle(
+        "ReportBody", parent=styles["BodyText"], fontName=font_name,
+        fontSize=11, leading=20, textColor=colors.HexColor("#1f2937"),
+        wordWrap="CJK", spaceAfter=3 * mm,
+    )
+
+    def _paragraph(value: object, style: ParagraphStyle) -> Paragraph:
+        text = escape(str(value or "-")).replace("\n", "<br/>")
+        return Paragraph(text, style)
+
+    story = [
+        _paragraph(history.report_name, title_style),
+        _paragraph(
+            f"课程：{history.course_name}　生成时间：{history.created_at:%Y-%m-%d %H:%M}",
+            meta_style,
+        ),
+    ]
+
+    stat_labels = {
+        "studentCount": "学生总数", "courseCount": "课程数量",
+        "passRate": "及格率", "excellentRate": "优秀率",
+        "attendanceRate": "平均出勤率", "warningCount": "预警学生",
+    }
+    if stats:
+        story.append(_paragraph("一、核心指标概览", heading_style))
+        table_data = [["指标", "数值"]]
+        for key, label in stat_labels.items():
+            if key in stats:
+                suffix = "%" if key in {"passRate", "excellentRate", "attendanceRate"} else ""
+                table_data.append([label, f"{stats[key]}{suffix}"])
+        table = Table(table_data, colWidths=[55 * mm, 90 * mm], repeatRows=1)
+        table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563eb")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#f8fafc")),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.extend([table, Spacer(1, 3 * mm)])
+
+    offset = 1 if stats else 0
+    section_numbers = ("二", "三", "四") if offset else ("一", "二", "三")
+    for number, label, key in zip(
+        section_numbers,
+        ("总体概述", "关键结论", "建议措施"),
+        ("summary", "conclusion", "suggestion"),
+    ):
+        story.append(_paragraph(f"{number}、{label}", heading_style))
+        story.append(_paragraph(report.get(key, ""), body_style))
+
+    def _draw_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont(font_name, 9)
+        canvas.setFillColor(colors.HexColor("#94a3b8"))
+        canvas.drawCentredString(A4[0] / 2, 12 * mm, f"第 {doc.page} 页")
+        canvas.restoreState()
+
+    document = SimpleDocTemplate(
+        output, pagesize=A4, leftMargin=22 * mm, rightMargin=22 * mm,
+        topMargin=20 * mm, bottomMargin=20 * mm,
+        title=history.report_name, author="AI 辅助教学评价系统",
+    )
+    document.build(story, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
+    return output.getvalue()
+
+
 # ============================================================================
 # 1. 报告生成（JSON）—— Report.Generate
 # ============================================================================
@@ -231,6 +452,135 @@ def get_report(
 
     report, _ = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
     return report
+
+
+@router.post("/report/history", tags=["报告生成"])
+def generate_and_save_report(
+    payload: GenerateSavedReportRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """Generate a report and persist an immutable content/parameter snapshot."""
+    _check_report_access(
+        session,
+        current_user,
+        payload.course_id,
+        payload.report_type,
+        payload.student_id,
+    )
+    report, ctx = _assemble_report(
+        session,
+        payload.course_id,
+        payload.report_type,
+        payload.class_id,
+        payload.student_id,
+        payload.use_llm,
+        current_user,
+    )
+    report = {
+        **report,
+        "scope": ctx.scope,
+        "report_type": payload.report_type,
+        "report_type_name": _REPORT_TYPE_NAMES[payload.report_type],
+    }
+
+    course = session.get(Course, payload.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    class_info = session.get(ClassInfo, payload.class_id) if payload.class_id else None
+    student = session.get(Student, ctx.student_id) if ctx.student_id else None
+    subject_name = (
+        student.real_name if student else class_info.class_name if class_info else ctx.class_name
+    )
+    type_name = _REPORT_TYPE_NAMES[payload.report_type]
+    report_name = " - ".join(part for part in (subject_name, course.course_name, type_name) if part)
+
+    parameters = {
+        "course_id": payload.course_id,
+        "report_type": payload.report_type,
+        "class_id": payload.class_id,
+        "student_id": ctx.student_id,
+        "semester": payload.semester,
+        "use_llm": payload.use_llm,
+        "export_format": payload.export_format,
+    }
+    history = ReportHistory(
+        creator_user_id=current_user.user_id,
+        course_id=payload.course_id,
+        report_type=payload.report_type,
+        scope=ctx.scope,
+        class_id=payload.class_id,
+        student_id=ctx.student_id,
+        export_format=payload.export_format,
+        report_name=report_name,
+        course_name=course.course_name,
+        class_name=class_info.class_name if class_info else ctx.class_name,
+        student_name=student.real_name if student else ctx.student_name,
+        parameter_snapshot=json.dumps(parameters, ensure_ascii=False),
+        report_snapshot=json.dumps(report, ensure_ascii=False),
+        stats_snapshot=json.dumps(payload.dashboard_stats, ensure_ascii=False),
+        created_at=datetime.now(),
+    )
+    session.add(history)
+    session.commit()
+    session.refresh(history)
+    return _history_to_dict(history, include_snapshot=True)
+
+
+@router.get("/report/history", tags=["报告生成"])
+def list_report_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """List reports created by the current user, newest first."""
+    histories = session.exec(
+        select(ReportHistory)
+        .where(ReportHistory.creator_user_id == current_user.user_id)
+        .order_by(ReportHistory.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [_history_to_dict(history) for history in histories]
+
+
+@router.get("/report/history/{report_id}", tags=["报告生成"])
+def get_report_history(
+    report_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """Read one persisted report after ownership and course checks."""
+    history = _get_owned_history(session, report_id, current_user)
+    return _history_to_dict(history, include_snapshot=True)
+
+
+@router.get("/report/history/{report_id}/download", tags=["报告生成"])
+def download_report_history(
+    report_id: int,
+    format: str = Query(default="xlsx", pattern="^(pdf|xlsx)$"),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> Response:
+    """Download a persisted snapshot as a native PDF or Excel workbook."""
+    history = _get_owned_history(session, report_id, current_user)
+    if format == "pdf":
+        content = _snapshot_pdf(history)
+        media_type = "application/pdf"
+    else:
+        content = _snapshot_workbook(history)
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    safe_name = f"{history.report_name}.{format}"
+    encoded = quote(safe_name, safe="")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="report_{history.report_id}.{format}"; '
+                f"filename*=UTF-8''{encoded}"
+            )
+        },
+    )
 
 
 # ============================================================================

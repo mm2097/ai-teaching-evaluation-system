@@ -9,6 +9,8 @@ export interface KnowledgeHeatmapResult {
   students: string[]
   data: number[][]
   classAvgByKp?: number[]
+  lossRateByKp?: number[]
+  classLossRateByKp?: number[]
 }
 
 /** 从热力图数据计算班级统计 */

@@ -20,6 +20,54 @@ from app.services.warning import scan_course_warnings, persist_warnings
 router = APIRouter()
 
 
+def _compute_knowledge_loss_rates(
+    session: Session,
+    course_id: int,
+    student_ids: list[int],
+    point_names: list[str],
+) -> dict[str, float]:
+    """按知识点聚合课程测试扣分，返回占累计可得分的百分比。"""
+    if not student_ids or not point_names:
+        return {name: 0.0 for name in point_names}
+
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+    if not batch_ids:
+        return {name: 0.0 for name in point_names}
+
+    details = session.exec(
+        select(CourseTestDetail).where(
+            CourseTestDetail.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+            CourseTestDetail.student_id.in_(student_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+
+    loss_by_name = {name: 0.0 for name in point_names}
+    canonical_names = {name.strip(): name for name in point_names}
+    total_possible_score = 0.0
+
+    for detail in details:
+        deductions = [
+            max(float(getattr(detail, f"question{index}_score") or 0), 0.0)
+            for index in range(1, 6)
+        ]
+        total_possible_score += max(float(detail.total_score or 0), 0.0) + sum(deductions)
+
+        for index, deduction in enumerate(deductions, start=1):
+            raw_name = getattr(detail, f"question{index}_knowledge")
+            point_name = canonical_names.get(str(raw_name or "").strip())
+            if point_name and deduction:
+                loss_by_name[point_name] += deduction
+
+    if total_possible_score <= 0:
+        return {name: 0.0 for name in point_names}
+    return {
+        name: round(loss_by_name[name] * 100.0 / total_possible_score, 1)
+        for name in point_names
+    }
+
+
 # ============================================================================
 # 权限校验辅助
 # ============================================================================
@@ -252,6 +300,7 @@ def get_knowledge_heatmap(
     if not kp_names:
         return {
             "knowledgePoints": [], "students": [], "data": [], "levels": [],
+            "lossRateByKp": [], "classLossRateByKp": [],
             "pointMeta": [], "moduleSummary": [],
             "weakPoints": [], "weakModules": [],
             "levelLabels": {"1": "薄弱", "2": "一般", "3": "良好"},
@@ -319,6 +368,15 @@ def get_knowledge_heatmap(
 
     avg_index = compute_mastery_index_with_fallback(session, course_id, avg_student_ids)
 
+    selected_loss_rates = _compute_knowledge_loss_rates(
+        session, course_id, student_ids, kp_names
+    )
+    class_loss_rates = _compute_knowledge_loss_rates(
+        session, course_id, avg_student_ids, kp_names
+    )
+    loss_rate_by_kp = [selected_loss_rates[name] for name in kp_names]
+    class_loss_rate_by_kp = [class_loss_rates[name] for name in kp_names]
+
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):
         vals = [avg_index.get((sid, kpid), 0.0) for sid in avg_student_ids]
@@ -337,6 +395,7 @@ def get_knowledge_heatmap(
             "moduleId": mid,
             "moduleName": module_map.get(mid, "") if mid else "",
             "classAvg": class_avg[kp_idx] if kp_idx < len(class_avg) else 0,
+            "lossRate": class_loss_rates.get(pt.point_name, 0.0),
             "level": score_level(class_avg[kp_idx])[1] if kp_idx < len(class_avg) else "薄弱",
         })
 
@@ -364,6 +423,7 @@ def get_knowledge_heatmap(
             "pointName": pt.point_name,
             "moduleName": module_map.get(point_module_map.get(pt.point_id), ""),
             "classAvg": class_avg[kp_idx] if kp_idx < len(class_avg) else 0,
+            "lossRate": class_loss_rates.get(pt.point_name, 0.0),
         }
         for kp_idx, pt in enumerate(points)
         if kp_idx < len(class_avg) and class_avg[kp_idx] < 60
@@ -390,6 +450,8 @@ def get_knowledge_heatmap(
                 "level": level_label,
                 "levelCode": level_code,
                 "classAvg": avg,
+                "lossRate": selected_loss_rates.get(pt.point_name, 0.0),
+                "classLossRate": class_loss_rates.get(pt.point_name, 0.0),
                 "gap": round(score - avg, 1),
             })
 
@@ -398,6 +460,8 @@ def get_knowledge_heatmap(
         "students": student_names,
         "data": data,
         "classAvgByKp": class_avg,
+        "lossRateByKp": loss_rate_by_kp,
+        "classLossRateByKp": class_loss_rate_by_kp,
         # 新增
         "levels": levels,
         "pointMeta": point_meta,

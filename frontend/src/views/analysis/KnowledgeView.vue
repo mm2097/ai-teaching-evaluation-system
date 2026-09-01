@@ -180,6 +180,15 @@ const weakPoints = computed(() => {
   return classStats.value?.weakPoints ?? []
 })
 
+const lossRateRows = computed(() => heatmapData.value.knowledgePoints.map((name, index) => ({
+  name,
+  masteryRate: viewMode.value === 'student'
+    ? (heatmapData.value.data.find((item) => item[0] === index)?.[2] ?? 0)
+    : (heatmapData.value.classAvgByKp?.[index] ?? classStats.value?.classAvgByKp[index] ?? 0),
+  lossRate: heatmapData.value.lossRateByKp?.[index] ?? 0,
+  classLossRate: heatmapData.value.classLossRateByKp?.[index] ?? 0,
+})))
+
 function handleViewModeChange(mode: ViewMode): void {
   viewMode.value = mode
 }
@@ -274,6 +283,32 @@ watch(
       />
     </div>
 
+    <div class="content-card">
+      <div class="content-card__title">知识点失分率</div>
+      <p class="hint-text">失分率按当前筛选范围内该知识点累计扣分占课程测试累计可得分的比例计算。</p>
+      <el-empty v-if="!lossRateRows.length" description="暂无课程测试扣分数据" :image-size="64" />
+      <el-table v-else :data="lossRateRows" stripe border>
+        <el-table-column prop="name" label="知识点" min-width="160" />
+        <el-table-column prop="masteryRate" label="掌握率" width="120" align="center">
+          <template #default="{ row }">{{ row.masteryRate }}%</template>
+        </el-table-column>
+        <el-table-column prop="lossRate" label="失分率" width="120" align="center">
+          <template #default="{ row }">
+            <span :class="{ 'loss-rate--high': row.lossRate >= 10 }">{{ row.lossRate }}%</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          v-if="viewMode === 'student'"
+          prop="classLossRate"
+          label="班级失分率"
+          width="130"
+          align="center"
+        >
+          <template #default="{ row }">{{ row.classLossRate }}%</template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <el-row :gutter="16">
       <el-col :span="viewMode === 'class' ? 12 : 24">
         <div class="content-card">
@@ -345,5 +380,10 @@ watch(
   color: #64748b;
   line-height: 1.6;
   margin: 0 0 8px;
+}
+
+.loss-rate--high {
+  color: #ef4444;
+  font-weight: 600;
 }
 </style>

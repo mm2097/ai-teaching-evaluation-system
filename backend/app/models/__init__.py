@@ -27,6 +27,7 @@ from app.models.evaluation import EvalDimension, EvalIndex, StudentEvaluationRes
 from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
 from app.models.notification import Notification
 from app.models.log import AiGenerationLog, SysOperationLog
+from app.models.report import ReportHistory
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
@@ -41,4 +42,5 @@ __all__ = [
     "KnowledgeMastery", "StudyWarning", "StudentProfile",
     "Notification",
     "AiGenerationLog", "SysOperationLog",
+    "ReportHistory",
 ]

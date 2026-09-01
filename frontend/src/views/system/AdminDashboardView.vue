@@ -16,9 +16,18 @@ const userStore = useUserStore()
 const loading = ref(false)
 const overview = ref<AdminOverview | null>(null)
 
-const statCards = computed(() => {
+interface AdminStatCard {
+  title: string
+  value: number
+  icon: string
+  color: string
+  link: string
+  query?: Record<string, string>
+}
+
+const statCards = computed<AdminStatCard[]>(() => {
   const data = overview.value
-  return [
+  const cards: AdminStatCard[] = [
     {
       title: '账号总数',
       value: data?.summary.totalUsers ?? 0,
@@ -59,6 +68,7 @@ const statCards = computed(() => {
       query: { status: '0' },
     },
   ]
+  return cards
 })
 
 const serviceItems = computed(() => {

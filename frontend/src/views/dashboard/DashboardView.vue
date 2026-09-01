@@ -4,7 +4,7 @@
   未查询时仅展示欢迎区与筛选栏
 -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
 import { DataAnalysis, Search } from '@element-plus/icons-vue'
@@ -246,6 +246,17 @@ function applyFiltersWrapper() {
 watch(queryCount, async () => {
   if (showDashboard.value) {
     await Promise.all([
+      loadDashboardData(applied.value.courseId, applied.value.classId),
+      loadHeatmap(applied.value.courseId, applied.value.classId),
+      loadTrendData(applied.value.courseId, applied.value.classId),
+    ])
+  }
+})
+
+// 从其他页面返回时（筛选状态已恢复），自动按上次筛选条件重新加载数据
+onMounted(() => {
+  if (showDashboard.value) {
+    void Promise.all([
       loadDashboardData(applied.value.courseId, applied.value.classId),
       loadHeatmap(applied.value.courseId, applied.value.classId),
       loadTrendData(applied.value.courseId, applied.value.classId),

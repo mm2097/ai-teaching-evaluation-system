@@ -39,6 +39,33 @@ export function useDashboardFilter() {
   const userStore = useUserStore()
   const deptId = 1
 
+  /** 筛选状态持久化（sessionStorage，按用户隔离，离开看板后返回可恢复） */
+  const storageKey = computed(() => `dashboard-filter-${userStore.userInfo?.id ?? 'anonymous'}`)
+
+  /** 保存当前筛选状态，便于从其他页面返回时恢复 */
+  function saveState(): void {
+    try {
+      sessionStorage.setItem(storageKey.value, JSON.stringify({
+        filters: filters.value,
+        applied: applied.value,
+        hasQueried: hasQueried.value,
+      }))
+    } catch { /* 存储不可用时静默降级，不影响筛选功能 */ }
+  }
+
+  /** 恢复上次的筛选状态（在选项加载前调用，选项加载后由 keepValid 系列函数校验） */
+  function restoreState(): void {
+    try {
+      const raw = sessionStorage.getItem(storageKey.value)
+      if (!raw) return
+      const saved = JSON.parse(raw) as Partial<{ filters: Partial<DashboardFilters>; applied: Partial<DashboardFilters>; hasQueried: boolean }>
+      if (!saved || typeof saved !== 'object') return
+      if (saved.filters) filters.value = { ...filters.value, ...saved.filters }
+      if (saved.applied) applied.value = { ...applied.value, ...saved.applied }
+      hasQueried.value = Boolean(saved.hasQueried)
+    } catch { /* 数据损坏时忽略，按全新状态初始化 */ }
+  }
+
   const semesterOptions = ref<{ label: string; value: string; id: number }[]>([])
 
   const filters = ref<DashboardFilters>({
@@ -253,7 +280,11 @@ export function useDashboardFilter() {
     }
     applied.value = { ...filters.value }
     hasQueried.value = true
+    saveState()
   }
+
+  // 恢复上次会话的筛选状态（含已应用的查询条件）
+  restoreState()
 
   onMounted(() => {
     optionsLoading.value = true
@@ -261,11 +292,19 @@ export function useDashboardFilter() {
       try {
         const sems = await fetchSemesters()
         semesterOptions.value = sems.map(s => ({ label: s.semesterName, value: s.semesterCode, id: s.id }))
-        const current = semesterOptions.value.find(s => s.value === '2025-2026-1')
-        filters.value.semester = current?.value ?? semesterOptions.value[0]?.value ?? ''
+        // 恢复的学期优先；否则默认当前学期
+        const restoredSemester = semesterOptions.value.find(s => s.value === filters.value.semester)
+        if (!restoredSemester) {
+          const current = semesterOptions.value.find(s => s.value === '2025-2026-1')
+          filters.value.semester = current?.value ?? semesterOptions.value[0]?.value ?? ''
+        }
         await loadMajors()
         await loadGrades()
         await loadCourses()
+        // 恢复态下课程已存在时，补充班级选项并校验恢复的班级
+        if (filters.value.courseId != null) {
+          await loadClasses()
+        }
       } finally {
         optionsLoading.value = false
       }

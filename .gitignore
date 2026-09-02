@@ -36,3 +36,6 @@ Thumbs.db
 
 # 解析脚本中间产物
 scripts/output/
+
+# 本地缓存（chromadb 向量模型等）
+.cache/

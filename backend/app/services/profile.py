@@ -355,24 +355,36 @@ def compute_attitude_score(
 
 # ===== D04 学习进步 =====
 
+def compute_class_slopes(session: Session, course_id: int) -> list[float]:
+    """课程内全体学生的回归斜率分布（D04 归一化基准）。
+
+    批量计算（如课程分析刷新）时先取一次复用，避免逐学生重复查询。
+    """
+    course_students = session.exec(
+        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    ).all()
+    slopes: list[float] = []
+    for sid in course_students:
+        k, degraded = get_student_slope(session, sid, course_id)
+        if not degraded:
+            slopes.append(k)
+    return slopes
+
+
 def compute_progress_score(
-    session: Session, student_id: int, course_id: int
+    session: Session, student_id: int, course_id: int,
+    class_slopes: list[float] | None = None,
 ) -> float:
     """D04 学习进步得分：复用回归斜率。
 
     若班级内有多个学生，按班级斜率分布归一化。
+    class_slopes 供批量计算复用（compute_class_slopes 的结果），
+    缺省时按当前行为实时收集。
     """
     slope, _ = get_student_slope(session, student_id, course_id)
 
-    # 收集班级所有学生的斜率分布
-    course_students = session.exec(
-        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
-    ).all()
-    class_slopes = []
-    for sid in course_students:
-        k, degraded = get_student_slope(session, sid, course_id)
-        if not degraded:
-            class_slopes.append(k)
+    if class_slopes is None:
+        class_slopes = compute_class_slopes(session, course_id)
 
     return slope_to_progress_score(slope, class_slopes if class_slopes else None)
 
@@ -380,12 +392,13 @@ def compute_progress_score(
 # ===== 汇总 =====
 
 def compute_profile(
-    session: Session, student_id: int, course_id: int
+    session: Session, student_id: int, course_id: int,
+    class_slopes: list[float] | None = None,
 ) -> ProfileScores:
-    """三维度同时计算。"""
+    """三维度同时计算。class_slopes 供批量计算复用（见 compute_class_slopes）。"""
     academic = compute_academic_score(session, student_id, course_id)
     attitude, detail = compute_attitude_score(session, student_id, course_id)
-    progress = compute_progress_score(session, student_id, course_id)
+    progress = compute_progress_score(session, student_id, course_id, class_slopes)
     return ProfileScores(
         academic_score=round(academic, 1),
         attitude_score=round(attitude, 1),

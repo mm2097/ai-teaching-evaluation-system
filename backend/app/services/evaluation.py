@@ -33,7 +33,7 @@ from app.models import (
     StudentEvaluationResult,
 )
 from app.services.mastery import compute_student_mastery
-from app.services.profile import _academic_part_score, compute_profile
+from app.services.profile import ProfileScores, _academic_part_score, compute_profile
 
 
 DEFAULT_WEIGHTS = {
@@ -191,11 +191,22 @@ def _configured_dimension_scores(
 def compute_evaluation(
     session: Session, student_id: int, course_id: int,
     weights: dict | None = None,
+    class_slopes: list[float] | None = None,
+    profile: ProfileScores | None = None,
 ) -> EvaluationResult:
-    """综合评价：四维度加权求和 + 等级。"""
+    """综合评价：四维度加权求和 + 等级。
+
+    class_slopes 供批量计算复用（profile.compute_class_slopes 的结果）；
+    profile 供调用方传入已算好的画像，避免重复计算。
+    二者缺省时由 compute_profile 实时计算。
+    """
     w = {**DEFAULT_WEIGHTS, **(weights or {})}
 
-    profile = compute_profile(session, student_id, course_id)
+    if profile is None:
+        if class_slopes is None:
+            profile = compute_profile(session, student_id, course_id)
+        else:
+            profile = compute_profile(session, student_id, course_id, class_slopes=class_slopes)
     masteries = compute_student_mastery(session, student_id, course_id)
     mastery_score = (
         sum(m.accuracy for m in masteries) / len(masteries)
@@ -229,6 +240,7 @@ def compute_evaluation(
 def persist_evaluation(
     session: Session, student_id: int, course_id: int,
     result: EvaluationResult | None = None,
+    class_slopes: list[float] | None = None,
 ) -> int:
     """落库：写入 student_evaluation_result + eval_dimension_score。返回 eval_id。
 
@@ -236,7 +248,7 @@ def persist_evaluation(
     则把维度分写入 eval_dimension_score；否则只写总分。
     """
     if result is None:
-        result = compute_evaluation(session, student_id, course_id)
+        result = compute_evaluation(session, student_id, course_id, class_slopes=class_slopes)
 
     # 取该课程的维度配置
     dims = session.exec(

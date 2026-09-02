@@ -24,9 +24,9 @@ from app.models import (
     KnowledgePoint,
     StudentProfile,
 )
-from app.services.evaluation import persist_evaluation
+from app.services.evaluation import compute_evaluation, persist_evaluation
 from app.services.mastery import compute_student_mastery
-from app.services.profile import compute_profile
+from app.services.profile import compute_class_slopes, compute_profile
 from app.services.tag import generate_tags
 from app.services.warning import evaluate_student, persist_warnings
 
@@ -177,11 +177,26 @@ def derive_module_strengths(
 
 def upsert_student_profile(
     session: Session, student_id: int, course_id: int,
+    class_slopes: list[float] | None = None,
+    profile=None,
+    refresh_tags: bool = True,
 ) -> None:
-    """计算并写入/更新学情画像（三维度 + 标签 + 模块优劣势）。"""
-    profile = compute_profile(session, student_id, course_id)
-    tags = generate_tags(session, student_id, course_id)
-    good_modules, weak_modules = derive_module_strengths(session, student_id, course_id)
+    """计算并写入/更新学情画像（三维度 + 标签 + 模块优劣势）。
+
+    class_slopes / profile 供批量刷新复用，避免重复计算。
+    refresh_tags=False 时仅更新三维度得分，保留已有标签与模块优劣势
+    （标签与优劣势不依赖评价配置，配置变化重算时无需重生成）。
+    """
+    if profile is None:
+        if class_slopes is None:
+            profile = compute_profile(session, student_id, course_id)
+        else:
+            profile = compute_profile(session, student_id, course_id, class_slopes=class_slopes)
+    if refresh_tags:
+        tags = generate_tags(session, student_id, course_id)
+        good_modules, weak_modules = derive_module_strengths(session, student_id, course_id)
+    else:
+        tags, good_modules, weak_modules = None, None, None
 
     total = round(
         (profile.academic_score + profile.attitude_score + profile.progress_score) / 3, 1
@@ -199,9 +214,10 @@ def upsert_student_profile(
         existing.attitude_score = profile.attitude_score
         existing.progress_score = profile.progress_score
         existing.total_profile_score = total
-        existing.study_tags = ", ".join(tags) if tags else None
-        existing.good_modules = good_modules or None
-        existing.weak_modules = weak_modules or None
+        if refresh_tags:
+            existing.study_tags = ", ".join(tags) if tags else None
+            existing.good_modules = good_modules or None
+            existing.weak_modules = weak_modules or None
         existing.update_time = datetime.now()
         session.add(existing)
     else:
@@ -252,15 +268,18 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
     total_mastery = 0
     warning_results: list = []
 
+    # 班级斜率分布取一次复用（D04 进步分归一化，避免逐学生重复计算）
+    class_slopes = compute_class_slopes(session, course_id)
+
     for sid in student_ids:
         # 1. 知识点掌握度（仅填充缺失项）
         total_mastery += upsert_knowledge_mastery(session, sid, course_id)
 
         # 2. 学情画像
-        upsert_student_profile(session, sid, course_id)
+        upsert_student_profile(session, sid, course_id, class_slopes=class_slopes)
 
         # 3. 学习质量评价
-        persist_evaluation(session, sid, course_id)
+        persist_evaluation(session, sid, course_id, class_slopes=class_slopes)
 
         # 4. 预警扫描
         weak_count = sum(
@@ -279,4 +298,39 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
         "mastery_filled": total_mastery,
         "evaluations_updated": len(student_ids),
         "warnings_created": warnings_count,
+    }
+
+
+def refresh_course_evaluations(session: Session, course_id: int) -> dict:
+    """评价配置变化后重算学情画像与学习质量评价。
+
+    教师调整评价维度/指标/权重（eval_config API）后调用，把新配置反映到：
+      - StudentProfile（学业水平配比影响画像三维度）
+      - StudentEvaluationResult + EvalDimensionScore（「学生学习质量评价」页数据源）
+
+    预警与知识点掌握度不依赖评价配置，无需重算。
+    """
+    student_ids = session.exec(
+        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    ).all()
+    if not student_ids:
+        return {"students_processed": 0, "evaluations_updated": 0}
+
+    # 班级斜率分布取一次复用（避免逐学生重复收集）
+    class_slopes = compute_class_slopes(session, course_id)
+    for sid in student_ids:
+        profile = compute_profile(session, sid, course_id, class_slopes=class_slopes)
+        result = compute_evaluation(
+            session, sid, course_id, class_slopes=class_slopes, profile=profile
+        )
+        persist_evaluation(session, sid, course_id, result=result)
+        # 画像只更新三维度得分（标签/模块优劣势不受评价配置影响）
+        upsert_student_profile(
+            session, sid, course_id, class_slopes=class_slopes,
+            profile=profile, refresh_tags=False,
+        )
+
+    return {
+        "students_processed": len(student_ids),
+        "evaluations_updated": len(student_ids),
     }

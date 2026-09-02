@@ -314,21 +314,65 @@ def _participation_rate(
 def _interaction_score(
     session: Session, student_id: int, course_id: int
 ) -> tuple[float, int]:
-    """互动得分：依据课堂参与度（0-1 → 0-100）。"""
+    """互动得分：依据课堂参与度（ParticipationSheet，0-1 → 0-100）。
+
+    InteractionRecord 已废弃，课堂互动数据源统一为上传的课堂参与情况表。
+    """
     rate, count = _participation_rate(session, student_id, course_id)
     return rate * 100.0, count
 
 
 def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
-    """作业提交率：暂无作业数据，保留字段返回基线 90%。"""
+    """作业提交率：暂无独立作业数据源，保留字段返回基线 90%。"""
     return 0.9
+
+
+def _attitude_component_weights(
+    session: Session, course_id: int,
+    default_attendance: float,
+    default_interaction: float,
+    default_homework: float,
+) -> tuple[float, float, float]:
+    """从学习态度维度的指标名推导出勤/互动/作业子权重。"""
+    dim = session.exec(
+        select(EvalDimension).where(
+            EvalDimension.course_id == course_id,
+            EvalDimension.dimension_name.contains("态度"),
+        )
+    ).first()
+    if not dim or dim.dimension_id is None:
+        return default_attendance, default_interaction, default_homework
+
+    raw = {"attendance": 0.0, "interaction": 0.0, "homework": 0.0}
+    indexes = session.exec(
+        select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+    ).all()
+    for idx in indexes:
+        name = (idx.index_name or "").replace(" ", "")
+        weight = max(0.0, float(idx.weight or 0.0))
+        if "出勤" in name or "考勤" in name:
+            raw["attendance"] += weight
+        elif "作业" in name:
+            raw["homework"] += weight
+        elif "互动" in name or "参与" in name or "课堂" in name:
+            raw["interaction"] += weight
+
+    total = sum(raw.values())
+    if total <= 0:
+        return default_attendance, default_interaction, default_homework
+    return raw["attendance"] / total, raw["interaction"] / total, raw["homework"] / total
 
 
 def compute_attitude_score(
     session: Session, student_id: int, course_id: int,
-    w_attendance: float = 0.5, w_interaction: float = 0.5,
+    w_attendance: float = 0.5, w_interaction: float = 0.5, w_homework: float = 0.0,
 ) -> tuple[float, dict]:
-    """D03 学习态度得分 = 0.5×考勤(到课率) + 0.5×课堂参与度。返回 (score, detail)。"""
+    """D03 学习态度得分 = w_attendance×到课率 + w_interaction×课堂参与度 + w_homework×作业提交率。
+
+    默认 0.5/0.5/0.0（出勤/互动/作业）。学情画像用此默认值；综合评价引擎
+    （evaluation._configured_dimension_scores）另按 EvalIndex.score_rule 计算，
+    两条链路独立，互不覆盖。
+    """
     att_rate = _attendance_rate(session, student_id, course_id)
     att_score = att_rate * 100.0
 
@@ -340,6 +384,7 @@ def compute_attitude_score(
     score = (
         w_attendance * att_score
         + w_interaction * int_score
+        + w_homework * hw_score
     )
     detail = {
         "attendance_rate": round(att_rate, 3),

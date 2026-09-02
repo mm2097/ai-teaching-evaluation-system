@@ -4,6 +4,8 @@
 import request from '@/utils/request'
 import type { TeachingDataRecord } from '@/types'
 
+export type TeachingRecordType = TeachingDataRecord['recordType']
+
 // ---------------------------------------------------------------------------
 // 模板下载
 // ---------------------------------------------------------------------------
@@ -75,6 +77,7 @@ interface TeachingDataApiRow {
   id: string
   recordId: number
   dataType: 'score' | 'attendance' | 'participation'
+  recordType?: TeachingRecordType
   subType?: string
   studentId: string
   studentName: string
@@ -95,6 +98,7 @@ interface TeachingDataApiRow {
 function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): TeachingDataRecord {
   return {
     id: row.recordId,
+    recordType: row.recordType || row.dataType,
     studentId: row.studentId,
     studentName: row.studentName,
     courseId: String(row.courseId),
@@ -158,6 +162,21 @@ export async function deleteTeachingData(
   recordId: number,
 ): Promise<void> {
   await request.delete(`/v1/teaching-data/${recordType}/${recordId}`)
+}
+
+/** @deprecated 旧名，等价于 deleteTeachingData，保留以兼容调用方。 */
+export async function deleteTeachingDataRecord(
+  recordType: TeachingRecordType,
+  recordId: number,
+): Promise<void> {
+  await request.delete(`/v1/teaching-data/${recordType}/${recordId}`)
+}
+
+export async function batchDeleteTeachingDataRecords(
+  records: { recordType: TeachingRecordType; recordId: number }[],
+): Promise<{ deleted: number }> {
+  const res = await request.post('/v1/teaching-data/batch-delete', { records })
+  return res.data as { deleted: number }
 }
 
 /**

@@ -35,6 +35,15 @@ interface RequestError {
   }
 }
 
+type ReportTypeId = 1 | 2 | 3 | 4
+
+interface ReportTypeOption {
+  id: ReportTypeId
+  name: string
+  desc: string
+  roles?: string[]
+}
+
 const isStudent = computed(() => userStore.userRole === 'student')
 
 // 是否显示学生选择器（学生角色自动匹配，不显示）
@@ -73,7 +82,7 @@ onMounted(async () => {
   }
 })
 
-const reportTypes = [
+const reportTypes: ReportTypeOption[] = [
   { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', roles: ['teacher'] },
   { id: 2, name: '学生个人学情报告', desc: '包含学生雷达图、知识点掌握、学习建议' },
   { id: 3, name: '课程知识点分析报告', desc: '包含知识点热力图、薄弱项分析、改进建议' },
@@ -84,12 +93,19 @@ const visibleReportTypes = computed(() =>
   reportTypes.filter((t) => !t.roles || t.roles.includes(userStore.userRole!))
 )
 
-const genParams = ref({
+const genParams = ref<{
+  reportType: ReportTypeId
+  semester: string
+  courseId: number
+  classId?: number
+  studentId?: number
+  format: 'pdf' | 'excel'
+}>({
   reportType: 1,
   semester: '2025-2026-1',
   courseId: 1,
   classId: userStore.userInfo?.classId ?? 1,
-  studentId: (userStore.userInfo?.studentId ?? undefined) as number | undefined,
+  studentId: userStore.userInfo?.studentId ?? undefined,
   format: 'pdf',
 })
 
@@ -188,7 +204,7 @@ async function generateReport(): Promise<void> {
 
     const history = await generateAndSaveReport({
       courseId: genParams.value.courseId,
-      reportType: genParams.value.reportType as 1 | 2 | 3 | 4,
+      reportType: genParams.value.reportType,
       classId: genParams.value.classId ?? undefined,
       studentId: (genParams.value.reportType === 2 || genParams.value.reportType === 4) ? genParams.value.studentId : undefined,
       semester: genParams.value.semester,
@@ -462,3 +478,7 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
   }
 }
 </style>
+
+
+
+

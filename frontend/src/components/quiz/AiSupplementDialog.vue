@@ -31,7 +31,7 @@ const emit = defineEmits<{
   }]
 }>()
 
-const questionTypes = ref<ExerciseType[]>(['single_choice', 'multi_choice', 'judge', 'fill_blank'])
+const questionTypes = ref<ExerciseType[]>(['single_choice', 'multi_choice', 'judge', 'fill_blank', 'short_answer'])
 const difficultyDistribution = ref<DifficultyDistribution>({ easy: 2, medium: 2, hard: 1 })
 const extraRequirements = ref('')
 const knowledgePoints = ref<string[]>([])
@@ -41,6 +41,7 @@ const questionTypeOptions = [
   { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
   { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
   { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
+  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
 ]
 
 const totalCount = computed(() =>
@@ -158,3 +159,5 @@ function handleConfirm(): void {
   }
 }
 </style>
+
+

@@ -28,13 +28,13 @@ const classOptions = ref<{ label: string; value: number }[]>([])
 const allEvalList = ref<StudentEvaluationItem[]>([])
 const distribution = ref<EvaluationDistribution | null>(null)
 
-/** 与数据库 eval_level 一致（seed：优秀/良好/中等/不及格） */
+/** 与实时评价算法等级一致（优 / 良 / 中 / 差） */
 const levelOptions = [
   { label: '全部', value: '' },
-  { label: '优秀', value: '优秀' },
-  { label: '良好', value: '良好' },
-  { label: '中等', value: '中等' },
-  { label: '不及格', value: '不及格' },
+  { label: '优', value: '优' },
+  { label: '良', value: '良' },
+  { label: '中', value: '中' },
+  { label: '差', value: '差' },
 ]
 
 /** 将 10 分档合并为 5 档，避免横坐标拥挤 */
@@ -432,3 +432,4 @@ onMounted(async () => {
   }
 }
 </style>
+

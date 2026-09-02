@@ -208,6 +208,79 @@ class TestEvaluation:
         assert "mastery" in result.dimensions
 
 
+
+    def test_eval_index_weights_affect_total_score(self, session):
+        """课程评价指标权重应接入综合评价总分。
+
+        新设计（_configured_dimension_scores）：每个维度下指标权重和需为 100，
+        指标按 score_rule 解析为 0-100 分后加权得到维度分；改指标权重会改变
+        维度分进而改变总分。load_dimension_weights 仍按维度汇总归一化为四维
+        权重，供评价配置页展示。
+        """
+        from app.models import EvalDimension, EvalIndex
+        from app.services.evaluation import compute_evaluation, load_dimension_weights
+
+        dim_attitude = EvalDimension(course_id=1, dimension_name="学习态度", sort_num=1)
+        session.add(dim_attitude)
+        session.flush()
+        # 学习态度维度：出勤率 vs 课堂互动，权重和 = 100，规则生效
+        idx_attendance = EvalIndex(
+            dimension_id=dim_attitude.dimension_id, index_name="出勤率",
+            weight=90, score_rule='{"type":"attendance"}',
+        )
+        idx_interaction = EvalIndex(
+            dimension_id=dim_attitude.dimension_id, index_name="课堂互动",
+            weight=10, score_rule='{"type":"interaction"}',
+        )
+        session.add_all([idx_attendance, idx_interaction])
+        session.commit()
+
+        attendance_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        # 维度权重归一化：仅学习态度维度配置了指标，其汇总权重归一化后 attitude=1.0
+        weights = load_dimension_weights(session, course_id=1)
+        assert round(weights["attitude"], 2) == 1.0
+
+        # 调换指标权重（10/90），维度分会因出勤率与互动分不同而变化，总分随之变化
+        idx_attendance.weight = 10
+        idx_interaction.weight = 90
+        session.add_all([idx_attendance, idx_interaction])
+        session.commit()
+
+        interaction_heavy = compute_evaluation(session, student_id=2, course_id=1)
+        assert attendance_heavy.dimensions["attitude"] != interaction_heavy.dimensions["attitude"]
+        assert attendance_heavy.total_score != interaction_heavy.total_score
+    def test_participation_feeds_attitude_score(self, session):
+        """学习态度互动项应使用课堂参与度（ParticipationSheet），而不是固定常量。"""
+        from app.models import ParticipationSheet
+        from app.services.profile import compute_attitude_score
+
+        # 无参与记录：互动分走基线 0.9 → 90 分
+        low_score, low_detail = compute_attitude_score(
+            session,
+            student_id=1,
+            course_id=1,
+            w_attendance=0.0,
+            w_interaction=1.0,
+            w_homework=0.0,
+        )
+        # 加一条低参与度记录（batch_id=1 已在 conftest 创建）
+        session.add(ParticipationSheet(
+            student_id=1, exam_batch_id=1, participation_rate=0.5, create_by=1,
+        ))
+        session.commit()
+
+        high_score, high_detail = compute_attitude_score(
+            session,
+            student_id=1,
+            course_id=1,
+            w_attendance=0.0,
+            w_interaction=1.0,
+            w_homework=0.0,
+        )
+        # 有参与记录后互动分 = 0.5×100 = 50，低于基线 90
+        assert high_detail["interaction_score"] == 50.0
+        assert high_score < low_score
+
 # ===== D12 去重 =====
 
 class TestDedup:
@@ -263,3 +336,23 @@ class TestReport:
         report = render_report(ctx)
         assert report["scope"] == "student"
         assert "张三" in report["summary"]
+
+
+def test_warning_w4_homework_missing_uses_interaction_records(session):
+    from datetime import date
+    from app.models import InteractionRecord
+    from app.services.warning import evaluate_student
+
+    for idx in range(3):
+        session.add(InteractionRecord(
+            course_id=1,
+            student_id=2,
+            interaction_date=date(2024, 12, idx + 1),
+            type=3,
+            score=100,
+            create_by=1,
+        ))
+    session.commit()
+
+    result = evaluate_student(session, student_id=3, course_id=1, weak_count=0)
+    assert any(hit.rule == "W4" for hit in result.hits)

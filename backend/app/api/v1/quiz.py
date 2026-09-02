@@ -1610,9 +1610,6 @@ def generate_exercises_stream(
                     "elapsedMs": total_elapsed_ms,
                 },
             })
-            usage.success = 1
-            session.add(usage)
-            session.commit()
 
         except HTTPException as e:
             yield _sse({"type": "error", "message": e.detail})
@@ -1728,5 +1725,6 @@ def start_self_practice(
         },
         "meta": generated["meta"],
     }
+
 
 

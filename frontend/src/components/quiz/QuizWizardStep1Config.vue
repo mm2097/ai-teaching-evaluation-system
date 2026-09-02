@@ -49,7 +49,7 @@ const form = ref({
   classId: undefined as number | undefined,
   title: '',
   knowledgePoints: [] as string[],
-  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank'] as ExerciseType[],
+  questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank', 'short_answer'] as ExerciseType[],
   difficultyDistribution: { easy: 2, medium: 2, hard: 1 } as DifficultyDistribution,
   extraRequirements: '',
 })
@@ -59,6 +59,7 @@ const questionTypeOptions = [
   { label: exerciseTypeLabels.multi_choice, value: 'multi_choice' as ExerciseType },
   { label: exerciseTypeLabels.judge, value: 'judge' as ExerciseType },
   { label: exerciseTypeLabels.fill_blank, value: 'fill_blank' as ExerciseType },
+  { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
 ]
 
 const totalCount = computed(() =>
@@ -324,3 +325,4 @@ defineExpose({
   }
 }
 </style>
+

@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -242,9 +242,6 @@ async function saveEdit(): Promise<void> {
     srcData[f.key] = f.value
   }
 
-  console.log('[saveEdit] recordId:', editRecordId.value)
-  console.log('[saveEdit] sourceData:', JSON.stringify(srcData))
-
   try {
     await updateRowData(editRecordId.value, srcData)
     await loadTeachingData()
@@ -286,10 +283,9 @@ async function handleBatchDelete(): Promise<void> {
   }
   await ElMessageBox.confirm(`确定删除选中的 ${selectedRows.value.length} 条数据吗？`, '批量删除', { type: 'warning' })
   try {
-    await Promise.all(
-      selectedRows.value.map((row) => deleteTeachingData(recordTypeOf(row), row.id)),
-    )
-    ElMessage.success(`已删除 ${selectedRows.value.length} 条数据`)
+    await batchDeleteTeachingDataRecords(selectedRows.value.map((row) => ({ recordType: row.recordType, recordId: row.id })))
+    selectedRows.value = []
+    ElMessage.success(`已删除选中数据`)
     await loadTeachingData()
   } catch {
     ElMessage.error('部分数据删除失败，请稍后重试')
@@ -546,3 +542,4 @@ function filterByCurrentFile(): void {
     </el-dialog>
   </div>
 </template>
+

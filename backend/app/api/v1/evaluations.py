@@ -15,6 +15,7 @@ from app.models import (
     EvalIndex, Student, StudentEvaluationResult, SysRole, SysUser, Teacher,
 )
 from app.api.v1.analysis import _check_course_access
+from app.services.evaluation import compute_evaluation, load_dimension_weights
 
 router = APIRouter()
 
@@ -61,6 +62,102 @@ def _check_eval_self_or_course(
 # 1. 评价列表（课程/班级级别）
 # ============================================================================
 
+# ============================================================================
+# 实时评价序列化
+# ============================================================================
+
+_DIMENSION_META = [
+    ("academic", "学业成绩"),
+    ("attitude", "学习态度"),
+    ("progress", "学习进步"),
+    ("mastery", "知识掌握"),
+]
+
+
+def _dimension_key_from_name(name: str) -> str | None:
+    compact = (name or "").replace(" ", "")
+    if "学业" in compact or "成绩" in compact:
+        return "academic"
+    if "态度" in compact:
+        return "attitude"
+    if "进步" in compact:
+        return "progress"
+    if "知识" in compact or "掌握" in compact:
+        return "mastery"
+    return None
+
+
+def _computed_dimensions(session: Session, course_id: int, result) -> list[dict]:
+    weights = load_dimension_weights(session, course_id)
+    configured = session.exec(
+        select(EvalDimension).where(EvalDimension.course_id == course_id)
+    ).all()
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for dim in configured:
+        key = _dimension_key_from_name(dim.dimension_name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "dimensionId": dim.dimension_id or 0,
+            "name": dim.dimension_name,
+            "score": round(float(result.dimensions.get(key, 0)), 1),
+            "weight": round(weights.get(key, 0) * 100, 1),
+        })
+    for index, (key, name) in enumerate(_DIMENSION_META, start=1):
+        if key in seen:
+            continue
+        rows.append({
+            "dimensionId": -index,
+            "name": name,
+            "score": round(float(result.dimensions.get(key, 0)), 1),
+            "weight": round(weights.get(key, 0) * 100, 1),
+        })
+    return rows
+
+
+def _evaluation_item_from_algorithm(session: Session, student: Student, course: Course) -> dict:
+    result = compute_evaluation(session, student_id=student.student_id, course_id=course.course_id)
+    return {
+        "id": 0,
+        "studentDbId": student.student_id,
+        "studentId": student.student_no,
+        "studentName": student.real_name,
+        "targetName": student.real_name,
+        "targetType": "student",
+        "courseId": course.course_id,
+        "courseName": course.course_name,
+        "totalScore": result.total_score,
+        "grade": result.level,
+        "dimensions": _computed_dimensions(session, course.course_id, result),
+        "computed": True,
+    }
+
+
+def _course_students(session: Session, course_id: int, student_id: int | None = None, class_id: int | None = None) -> list[Student]:
+    if student_id:
+        student = session.get(Student, student_id)
+        if not student:
+            return []
+        enrolled = session.exec(
+            select(CourseStudent).where(
+                CourseStudent.course_id == course_id,
+                CourseStudent.student_id == student_id,
+            )
+        ).first()
+        return [student] if enrolled else []
+
+    enrolled_ids = session.exec(
+        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    ).all()
+    if not enrolled_ids:
+        return []
+    stmt = select(Student).where(Student.student_id.in_(enrolled_ids))  # type: ignore[arg-type]
+    if class_id:
+        stmt = stmt.where(Student.class_id == class_id)
+    return session.exec(stmt.order_by(Student.student_id)).all()
+
 @router.get("/evaluations", tags=["评价管理"])
 def list_evaluations(
     course_id: int | None = Query(default=None),
@@ -81,9 +178,20 @@ def list_evaluations(
     _student_id = student_id if not isinstance(student_id, QueryParam) else None
     _eval_level = eval_level if not isinstance(eval_level, QueryParam) else None
 
+    _course_id = course_id if not isinstance(course_id, QueryParam) else None
+    if _course_id:
+        course = session.get(Course, _course_id)
+        if not course:
+            raise HTTPException(status_code=404, detail="课程不存在")
+        data = []
+        for student in _course_students(session, _course_id, _student_id):
+            item = _evaluation_item_from_algorithm(session, student, course)
+            if _eval_level and item["grade"] != _eval_level:
+                continue
+            data.append(item)
+        return data
+
     stmt = select(StudentEvaluationResult)
-    if course_id:
-        stmt = stmt.where(StudentEvaluationResult.course_id == course_id)
     if _student_id:
         stmt = stmt.where(StudentEvaluationResult.student_id == _student_id)
     results = session.exec(stmt).all()
@@ -95,37 +203,10 @@ def list_evaluations(
 
         student = session.get(Student, r.student_id)
         course = session.get(Course, r.course_id)
+        if not student or not course:
+            continue
 
-        dim_scores = session.exec(
-            select(EvalDimensionScore).where(EvalDimensionScore.eval_id == r.eval_id)
-        ).all()
-        dimensions = []
-        for ds in dim_scores:
-            dim = session.get(EvalDimension, ds.dimension_id)
-            indexes = session.exec(
-                select(EvalIndex).where(EvalIndex.dimension_id == ds.dimension_id)
-            ).all()
-            weight_sum = round(sum(i.weight for i in indexes), 1) if indexes else 0
-            dimensions.append({
-                "dimensionId": ds.dimension_id,
-                "name": dim.dimension_name if dim else "",
-                "score": ds.dimension_score,
-                "weight": weight_sum,
-            })
-
-        data.append({
-            "id": r.eval_id,
-            "studentDbId": r.student_id,
-            "studentId": student.student_no if student else "",
-            "studentName": student.real_name if student else "",
-            "targetName": student.real_name if student else "",   # 兼容旧字段
-            "targetType": "student",
-            "courseId": r.course_id,
-            "courseName": course.course_name if course else "",
-            "totalScore": r.total_score,
-            "grade": r.eval_level,
-            "dimensions": dimensions,
-        })
+        data.append(_evaluation_item_from_algorithm(session, student, course))
 
     return data
 
@@ -228,19 +309,16 @@ def get_evaluation_distribution(
     # Unwrap Query params
     _class_id = class_id if not isinstance(class_id, QueryParam) else None
 
-    stmt = select(StudentEvaluationResult).where(
-        StudentEvaluationResult.course_id == course_id
-    )
-    all_results = session.exec(stmt).all()
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
 
-    if _class_id:
-        class_students = set(session.exec(
-            select(Student.student_id).where(Student.class_id == _class_id)
-        ).all())
-        all_results = [r for r in all_results if r.student_id in class_students]
+    computed_results = [
+        _evaluation_item_from_algorithm(session, student, course)
+        for student in _course_students(session, course_id, class_id=_class_id)
+    ]
 
-    if not all_results:
-        course = session.get(Course, course_id)
+    if not computed_results:
         return {
             "courseId": course_id,
             "courseName": course.course_name if course else "",
@@ -250,7 +328,7 @@ def get_evaluation_distribution(
             "characteristic": "暂无评价数据",
         }
 
-    scores = [r.total_score for r in all_results]
+    scores = [r["totalScore"] for r in computed_results]
     n = len(scores)
     mean = sum(scores) / n
     sorted_scores = sorted(scores)
@@ -261,8 +339,9 @@ def get_evaluation_distribution(
 
     # 等级分布
     level_count = {"优": 0, "良": 0, "中": 0, "差": 0}
-    for r in all_results:
-        level_count[r.eval_level] = level_count.get(r.eval_level, 0) + 1
+    for r in computed_results:
+        level = r["grade"]
+        level_count[level] = level_count.get(level, 0) + 1
 
     level_ratio = {
         k: round(v / n * 100, 1) for k, v in level_count.items()
@@ -291,7 +370,6 @@ def get_evaluation_distribution(
     dominant_level = max(level_count, key=level_count.get) if level_count else "无"
     characteristic = f"离散度{dispersion}，主流等级为「{dominant_level}」"
 
-    course = session.get(Course, course_id)
     return {
         "courseId": course_id,
         "courseName": course.course_name if course else "",
@@ -310,3 +388,6 @@ def get_evaluation_distribution(
         },
         "characteristic": characteristic,
     }
+
+
+

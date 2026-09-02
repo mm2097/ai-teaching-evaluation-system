@@ -542,36 +542,36 @@ def seed() -> None:
         session.commit()
         print(f"  考勤记录: {len(attendances)} 条")
 
-        # ========== 12. 课堂互动（已禁用 - 功能暂不展示） ==========
-        # interactions = [
-        #     # 赵伟：互动积极，成绩好
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=9.0, remark="回答准确", create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
-        #                       type=2, score=8.5, remark="小组讨论出色", create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
-        #                       type=3, score=9.5, create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
-        #                       type=4, score=8.0, create_by=2),
-        #     # 钱丽华：中等
-        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=7.0, create_by=2),
-        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
-        #                       type=3, score=7.5, create_by=2),
-        #     # 孙浩然：互动少
-        #     InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=5.0, remark="回答不够完整", create_by=2),
-        #     # 冯文博（数据结构课）：进步明显
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
-        #                       type=1, score=4.0, remark="表现一般", create_by=3),
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
-        #                       type=2, score=7.5, remark="讨论中进步", create_by=3),
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
-        #                       type=4, score=9.0, remark="测验成绩好", create_by=3),
-        # ]
-        # session.add_all(interactions)
-        # session.commit()
-        # print(f"  课堂互动: {len(interactions)} 条")
+        # ========== 12. 课堂互动 ==========
+        interactions = [
+            # 赵伟：互动积极，成绩好
+            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
+                              type=1, score=9.0, remark="回答准确", create_by=2),
+            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
+                              type=2, score=8.5, remark="小组讨论出色", create_by=2),
+            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
+                              type=3, score=9.5, create_by=2),
+            InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
+                              type=4, score=8.0, create_by=2),
+            # 钱丽华：中等
+            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
+                              type=1, score=7.0, create_by=2),
+            InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
+                              type=3, score=7.5, create_by=2),
+            # 孙浩然：互动少
+            InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
+                              type=1, score=5.0, remark="回答不够完整", create_by=2),
+            # 冯文博（数据结构课）：进步明显
+            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
+                              type=1, score=4.0, remark="表现一般", create_by=3),
+            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
+                              type=2, score=7.5, remark="讨论中进步", create_by=3),
+            InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
+                              type=4, score=9.0, remark="测验成绩好", create_by=3),
+        ]
+        session.add_all(interactions)
+        session.commit()
+        print(f"  课堂互动: {len(interactions)} 条")
 
         # ========== 13. AI 题目（8道，覆盖题型） ==========
         questions = [
@@ -708,8 +708,12 @@ def seed() -> None:
         dimensions = [
             EvalDimension(course_id=1, dimension_name="学业成绩", description="考核成绩综合评价", sort_num=1),
             EvalDimension(course_id=1, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
+            EvalDimension(course_id=1, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
+            EvalDimension(course_id=1, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
             EvalDimension(course_id=3, dimension_name="学业成绩", description="考核成绩综合评价", sort_num=1),
             EvalDimension(course_id=3, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
+            EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
+            EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
         ]
         session.add_all(dimensions)
         session.commit()
@@ -725,16 +729,24 @@ def seed() -> None:
                       score_rule='{"type":"attendance","full_score":100}'),
             EvalIndex(dimension_id=2, index_name="课堂参与", weight=50,
                       score_rule='{"type":"interaction","full_score":100}'),
-            EvalIndex(dimension_id=3, index_name="期末成绩", weight=40,
+            EvalIndex(dimension_id=3, index_name="进步幅度", weight=100,
+                      score_rule='{"type":"progress"}'),
+            EvalIndex(dimension_id=4, index_name="知识点掌握度", weight=100,
+                      score_rule='{"type":"mastery"}'),
+            EvalIndex(dimension_id=5, index_name="期末成绩", weight=40,
                       score_rule='{"type":"direct","source":"score_record","batch_type":4}'),
-            EvalIndex(dimension_id=3, index_name="平时成绩", weight=30,
+            EvalIndex(dimension_id=5, index_name="平时成绩", weight=30,
                       score_rule='{"type":"direct","source":"score_record","batch_type":1}'),
-            EvalIndex(dimension_id=3, index_name="期中成绩", weight=30,
+            EvalIndex(dimension_id=5, index_name="期中成绩", weight=30,
                       score_rule='{"type":"direct","source":"score_record","batch_type":3}'),
-            EvalIndex(dimension_id=4, index_name="出勤率", weight=50,
+            EvalIndex(dimension_id=6, index_name="出勤率", weight=50,
                       score_rule='{"type":"attendance","full_score":100}'),
-            EvalIndex(dimension_id=4, index_name="课堂参与", weight=50,
+            EvalIndex(dimension_id=6, index_name="课堂参与", weight=50,
                       score_rule='{"type":"interaction","full_score":100}'),
+            EvalIndex(dimension_id=7, index_name="进步幅度", weight=100,
+                      score_rule='{"type":"progress"}'),
+            EvalIndex(dimension_id=8, index_name="知识点掌握度", weight=100,
+                      score_rule='{"type":"mastery"}'),
         ]
         session.add_all(indexes)
         session.commit()

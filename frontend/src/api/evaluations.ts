@@ -85,6 +85,9 @@ export function evalGradeTagType(grade: string): 'success' | 'primary' | 'warnin
 /**
  * GET /evaluations
  * 参数：course_id、eval_level（与 DB eval_level 精确匹配）、student_id
+ *
+ * 单独放宽超时到 30s：未落库的课程首访需对全班学生实时算四维评价
+ * （单学生约 150ms），全班可能 10s+，全局默认 10s 会误判超时。
  */
 export async function fetchEvaluations(params?: {
   courseId?: number
@@ -95,7 +98,7 @@ export async function fetchEvaluations(params?: {
   if (params?.courseId) q.course_id = params.courseId
   if (params?.evalLevel) q.eval_level = params.evalLevel
   if (params?.studentId) q.student_id = params.studentId
-  const res = await request.get('/v1/evaluations', { params: q })
+  const res = await request.get('/v1/evaluations', { params: q, timeout: 30000 })
   return res.data ?? []
 }
 
@@ -119,6 +122,8 @@ export async function fetchEvaluationResults(params?: {
 /**
  * GET /evaluations/distribution
  * 参数：course_id（必填）、class_id
+ *
+ * 同 fetchEvaluations，放宽到 30s 以兼容未落库课程的实时计算。
  */
 export async function fetchEvaluationDistribution(params: {
   courseId: number
@@ -126,6 +131,6 @@ export async function fetchEvaluationDistribution(params: {
 }): Promise<EvaluationDistribution> {
   const q: Record<string, number> = { course_id: params.courseId }
   if (params.classId) q.class_id = params.classId
-  const res = await request.get('/v1/evaluations/distribution', { params: q })
+  const res = await request.get('/v1/evaluations/distribution', { params: q, timeout: 30000 })
   return res.data
 }

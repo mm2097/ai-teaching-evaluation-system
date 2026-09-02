@@ -83,6 +83,9 @@ interface TeachingDataApiRow {
   studentName: string
   courseId: number
   courseName?: string
+  classId?: number
+  college?: string
+  major?: string
   semester?: string
   score?: number
   status?: string
@@ -107,7 +110,9 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     semesterId: 0,
     deptId: 0,
     majorId: 0,
-    classId: 0,
+    classId: row.classId || 0,
+    college: row.college,
+    major: row.major,
     dataType: row.dataType,
     subType: row.subType,
     score: row.dataType === 'score' ? row.score : undefined,

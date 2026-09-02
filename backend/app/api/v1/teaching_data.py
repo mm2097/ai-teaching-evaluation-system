@@ -27,7 +27,7 @@ import logging
 from app.core.database import get_session, engine
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.models import (
-    ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
+    ScoreRecord, AttendanceRecord, ExamBatch, Course, ClassInfo, Student,
     SysUser, Teacher, SysRole, SysOperationLog,
     IndividualScore, AttendanceSheet, ParticipationSheet, CourseTestDetail,
     InteractionRecord,
@@ -135,6 +135,17 @@ def query_teaching_data(
     matched_students = session.exec(student_stmt).all()
     student_ids = {s.student_id for s in matched_students}
 
+    # 学生班级信息（院系/专业/班级筛选用）
+    class_map = {c.class_id: c for c in session.exec(select(ClassInfo)).all()}
+
+    def class_fields(student: Student) -> dict:
+        ci = class_map.get(student.class_id)
+        return {
+            "classId": student.class_id,
+            "college": ci.college if ci else "",
+            "major": ci.major if ci else "",
+        }
+
     rows: list[dict] = []
 
     # ── 成绩数据 ──
@@ -160,6 +171,7 @@ def query_teaching_data(
                 "dataType": "score",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": batch.semester if batch else "",
@@ -195,6 +207,7 @@ def query_teaching_data(
                 "subType": "individual_score",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": batch.semester if batch else "",
@@ -228,6 +241,7 @@ def query_teaching_data(
                 "subType": "course_test_detail",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": batch.semester if batch else "",
@@ -266,6 +280,7 @@ def query_teaching_data(
                 "dataType": "attendance",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": "",
@@ -308,6 +323,7 @@ def query_teaching_data(
                 "subType": "attendance_sheet",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": batch.semester if batch else "",
@@ -347,6 +363,7 @@ def query_teaching_data(
                 "subType": "participation_sheet",
                 "studentId": student.student_no,
                 "studentName": student.real_name,
+                **class_fields(student),
                 "courseId": course_id,
                 "courseName": "",
                 "semester": batch.semester if batch else "",

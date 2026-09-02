@@ -1,7 +1,7 @@
 <!--
   个人设置弹窗
   展示当前账号基本信息；提供修改登录密码功能
-  学生角色额外支持修改本人手机号/邮箱（学生仅可更改手机号、邮箱、密码）
+  学生/教师角色额外支持修改本人手机号/邮箱（学生、教师仅可更改手机号、邮箱、密码）
 -->
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
@@ -18,7 +18,8 @@ const userStore = useUserStore()
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
 
-const isStudent = computed(() => userStore.userRole === 'student')
+/** 学生/教师支持修改本人联系方式 */
+const canEditContact = computed(() => userStore.userRole === 'student' || userStore.userRole === 'teacher')
 
 /** 基本信息（只读展示，来源于登录态） */
 const basicInfo = computed(() => {
@@ -62,7 +63,7 @@ const rules: FormRules = {
   ],
 }
 
-/** 学生联系方式表单（手机号/邮箱可空） */
+/** 联系方式表单（手机号/邮箱可空） */
 const contactForm = reactive({
   phone: '',
   email: '',
@@ -99,7 +100,7 @@ async function handleSubmit(): Promise<void> {
 }
 
 /**
- * 学生保存联系方式（手机号/邮箱，留空表示清空）
+ * 学生/教师保存联系方式（手机号/邮箱，留空表示清空）
  */
 async function handleSaveContact(): Promise<void> {
   if (savingContact.value) return
@@ -140,8 +141,8 @@ async function handleSaveContact(): Promise<void> {
       </el-descriptions>
     </div>
 
-    <!-- 学生联系方式（学生仅可更改手机号、邮箱、密码） -->
-    <div v-if="isStudent" class="contact-section">
+    <!-- 联系方式（学生/教师仅可更改手机号、邮箱、密码） -->
+    <div v-if="canEditContact" class="contact-section">
       <div class="section-title">联系方式</div>
       <el-form label-width="90px" @submit.prevent>
         <el-form-item label="手机号">

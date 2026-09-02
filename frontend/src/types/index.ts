@@ -24,7 +24,7 @@ export interface UserInfo {
   teacherId?: number
   classId?: number
   avatar?: string
-  /** 学生联系方式（可空） */
+  /** 联系方式（学生/教师，可空） */
   phone?: string
   email?: string
 }
@@ -152,6 +152,9 @@ export interface TeachingDataRecord {
   deptId: number
   majorId: number
   classId: number
+  /** 院系/专业名称（后端返回，用于前端映射筛选 ID） */
+  college?: string
+  major?: string
   score?: number
   attendance?: string
   homework?: string

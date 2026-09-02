@@ -47,11 +47,23 @@ async function loadTeachingData(): Promise<void> {
       courseName,
     )
     tableData.value = list
+    enrichRowIds()
   } catch {
     tableData.value = []
   } finally {
     loading.value = false
   }
+}
+
+/** 用院系/专业字典把行数据的名称字段映射为筛选 ID（后端只返回班级 ID 与名称） */
+function enrichRowIds(): void {
+  const deptIdByName = new Map(departmentOptions.value.map((d) => [d.label, d.value]))
+  const majorIdByName = new Map(majorOptions.value.map((m) => [m.label, m.value]))
+  tableData.value = tableData.value.map((row) => ({
+    ...row,
+    deptId: row.college ? (deptIdByName.get(row.college) ?? 0) : 0,
+    majorId: row.major ? (majorIdByName.get(row.major) ?? 0) : 0,
+  }))
 }
 
 onMounted(async () => {
@@ -80,9 +92,40 @@ const query = ref({
   sourceFile: '',
 })
 
+/**
+ * 课程筛选（合并下拉选择与名称输入）：
+ * - 下拉选中课程，或输入内容与课程名完全一致 → 切换 courseId 并重新加载数据
+ * - 输入其他文本 → 作为课程名称关键词，过滤当前已加载的数据
+ */
+const courseQuery = computed<string | number | undefined>({
+  get: () => query.value.courseName || courseId.value,
+  set: (val) => {
+    if (val === undefined || val === null || val === '') {
+      courseId.value = undefined
+      query.value.courseName = ''
+      return
+    }
+    if (typeof val === 'number') {
+      courseId.value = val
+      query.value.courseName = ''
+      return
+    }
+    const matched = courseOptions.value.find((c) => c.label === val)
+    if (matched) {
+      courseId.value = matched.value
+      query.value.courseName = ''
+    } else {
+      query.value.courseName = val
+    }
+  },
+})
+
 const selectedStudentId = ref<string | number | undefined>()
 
 const tableData = ref<TeachingDataRecord[]>([])
+
+/** 字典加载完成后重新补全行数据的院系/专业 ID（避免与字典接口的加载时序竞争） */
+watch([departmentOptions, majorOptions], () => enrichRowIds())
 
 /** 是否属于各题扣分子行（如"期中考试-第1大题"），这类行只在详情弹窗中展示 */
 function isQuestionDetailRow(row: TeachingDataRecord): boolean {
@@ -375,18 +418,20 @@ function filterByCurrentFile(): void {
     <div class="content-card">
       <div class="table-toolbar">
         <div class="filter-bar" style="margin-bottom: 0">
-          <el-select v-model="courseId" placeholder="课程" style="width: 200px">
+          <el-select
+            v-model="courseQuery"
+            placeholder="课程（可下拉或输入名称）"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            style="width: 240px"
+          >
             <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
           </el-select>
           <StudentLinkedPicker
             v-model="selectedStudentId"
             :students="studentPickerOptions"
-          />
-          <el-input
-            v-model="query.courseName"
-            placeholder="课程"
-            clearable
-            style="width: 140px"
           />
           <el-select v-model="query.semester" placeholder="学期" clearable style="width: 200px">
             <el-option v-for="s in semesterOptions" :key="s.value" :label="s.label" :value="s.value" />

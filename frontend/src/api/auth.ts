@@ -22,8 +22,8 @@ export const authApi = {
         studentNo: data.user.student_no ?? undefined,
         classId: data.user.class_id ?? undefined,
         teacherId: data.user.teacher_id ?? undefined,
-        phone: data.user.student_phone ?? '',
-        email: data.user.student_email ?? '',
+        phone: data.user.student_phone ?? data.user.teacher_phone ?? '',
+        email: data.user.student_email ?? data.user.teacher_email ?? '',
       },
     }
   },
@@ -33,7 +33,7 @@ export const authApi = {
     await request.post('/password/change', { old_password: oldPassword, new_password: newPassword })
   },
 
-  /** 学生修改本人联系方式（手机号/邮箱，空串表示清空） */
+  /** 学生/教师修改本人联系方式（手机号/邮箱，空串表示清空） */
   async updateContact(phone: string, email: string): Promise<void> {
     await request.put('/profile/contact', { phone, email })
   },

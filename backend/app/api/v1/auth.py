@@ -32,6 +32,8 @@ class LoginUser(SQLModel):
     teacher_id: int | None = None
     college: str | None = None
     title: str | None = None
+    teacher_phone: str | None = None
+    teacher_email: str | None = None
 
 
 class LoginResponse(SQLModel):
@@ -46,7 +48,7 @@ class ChangePasswordRequest(SQLModel):
 
 
 class UpdateContactRequest(SQLModel):
-    """学生修改本人联系方式请求体（手机号/邮箱可空）。"""
+    """学生/教师修改本人联系方式请求体（手机号/邮箱可空）。"""
     phone: str | None = None
     email: str | None = None
 
@@ -96,16 +98,20 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             student_phone = student.phone
             student_email = student.email
 
-    # 教师登录时附加 teacher_id / college / title
+    # 教师登录时附加 teacher_id / college / title / 联系方式
     teacher_id: int | None = None
     college: str | None = None
     title: str | None = None
+    teacher_phone: str | None = None
+    teacher_email: str | None = None
     if role_code == "teacher":
         teacher = session.exec(select(Teacher).where(Teacher.user_id == user.user_id)).first()
         if teacher:
             teacher_id = teacher.teacher_id
             college = teacher.college
             title = teacher.title
+            teacher_phone = teacher.phone
+            teacher_email = teacher.email
 
     token = create_token(user.user_id, user.username)
     return LoginResponse(
@@ -123,6 +129,8 @@ def login(payload: LoginRequest, session: Session = Depends(get_session)) -> Log
             teacher_id=teacher_id,
             college=college,
             title=title,
+            teacher_phone=teacher_phone,
+            teacher_email=teacher_email,
         ),
     )
 
@@ -164,24 +172,28 @@ def update_contact(
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """学生修改本人联系方式（手机号/邮箱）。学生仅可更改手机号、邮箱、密码。"""
+    """学生/教师修改本人联系方式（手机号/邮箱）。学生、教师仅可更改手机号、邮箱、密码。"""
     student = session.exec(select(Student).where(Student.user_id == current_user.user_id)).first()
+    teacher = None
     if not student:
-        raise HTTPException(status_code=403, detail="仅学生可修改联系方式")
+        teacher = session.exec(select(Teacher).where(Teacher.user_id == current_user.user_id)).first()
+    if not student and not teacher:
+        raise HTTPException(status_code=403, detail="仅学生和教师可修改联系方式")
+    target = student if student else teacher
     # 传空串表示清空，传 null 表示不改动
     if payload.phone is not None:
-        student.phone = (payload.phone or "").strip() or None
+        target.phone = (payload.phone or "").strip() or None
     if payload.email is not None:
-        student.email = (payload.email or "").strip() or None
-    student.update_time = datetime.now()
-    session.add(student)
+        target.email = (payload.email or "").strip() or None
+    target.update_time = datetime.now()
+    session.add(target)
     session.commit()
     save_operation_log(
         session,
         user_id=current_user.user_id,
         module="个人设置",
         operation="修改联系方式",
-        content=f"学生 {current_user.username} 更新手机号/邮箱",
+        content=f"{'学生' if student else '教师'} {current_user.username} 更新手机号/邮箱",
         ip_address=get_client_ip(request),
     )
-    return {"phone": student.phone, "email": student.email}
+    return {"phone": target.phone, "email": target.email}

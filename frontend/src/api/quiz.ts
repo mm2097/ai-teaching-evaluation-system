@@ -441,11 +441,12 @@ export async function submitQuizAnswers(
   answers: Record<number, string | string[] | boolean>,
   questions: QuizQuestion[],
 ): Promise<QuizSubmitResult> {
+  // 简答题 AI 判题耗时 16~19 秒，超时放宽到 120 秒（后端 httpx 为 30 秒）
   const { data } = await request.post('/v1/answer-records', {
     task_id: taskId,
     student_id: studentId,
     answers: normalizeAnswers(answers),
-  })
+  }, { timeout: 120000 })
   // 教师禁止查看详情时，不构建逐题详情
   const details = data.allowReview
     ? buildSubmitDetails(

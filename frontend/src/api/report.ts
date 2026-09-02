@@ -50,6 +50,7 @@ export async function generateAndSaveReport(params: {
   exportFormat: 'pdf' | 'xlsx'
   dashboardStats?: DashboardStatsSnapshot
 }): Promise<ReportHistoryDetail> {
+  // LLM 增强报告生成耗时较长（后端 httpx 30 秒），超时放宽到 60 秒
   const { data } = await request.post('/v1/report/history', {
     course_id: params.courseId,
     report_type: params.reportType,
@@ -58,7 +59,7 @@ export async function generateAndSaveReport(params: {
     semester: params.semester,
     export_format: params.exportFormat,
     dashboard_stats: params.dashboardStats ?? {},
-  })
+  }, { timeout: 60000 })
   return data
 }
 

@@ -130,10 +130,11 @@ export async function updateWarningStatus(
   return res.data as WarningRecord
 }
 
-/** 手动刷新课程预警列表 */
+/** 手动刷新课程预警列表（全课程重扫耗时较长，超时放宽到 60 秒） */
 export async function refreshWarnings(params: { courseId: number; classId?: number }): Promise<{ message: string }> {
   const res = await request.post('/v1/analysis/warnings/refresh', null, {
     params: { course_id: params.courseId, class_id: params.classId },
+    timeout: 60000,
   })
   return res.data as { message: string }
 }

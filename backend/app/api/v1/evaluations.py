@@ -135,6 +135,72 @@ def _evaluation_item_from_algorithm(session: Session, student: Student, course: 
     }
 
 
+def _db_dimension_scores(
+    session: Session, course_id: int, eval_ids: list[int]
+) -> dict[int, list[dict]]:
+    """批量读取已落库的维度分，按 eval_id 分组。
+
+    返回 {eval_id: [{dimensionId, name, score, weight}, ...]}。
+    维度名来自 EvalDimension；weight 来自 load_dimension_weights（仅展示）。
+    """
+    if not eval_ids:
+        return {}
+    rows = session.exec(
+        select(EvalDimensionScore, EvalDimension)
+        .join(EvalDimension, EvalDimensionScore.dimension_id == EvalDimension.dimension_id, isouter=True)
+        .where(EvalDimensionScore.eval_id.in_(eval_ids))  # type: ignore[arg-type]
+    ).all()
+    weights = load_dimension_weights(session, course_id)
+    grouped: dict[int, list[dict]] = {}
+    seen: dict[int, set[str]] = {}
+    for score_row, dim in rows:
+        key = _dimension_key_from_name(dim.dimension_name) if dim else None
+        if key and key in seen.setdefault(score_row.eval_id, set()):
+            continue
+        if key:
+            seen[score_row.eval_id].add(key)
+        grouped.setdefault(score_row.eval_id, []).append({
+            "dimensionId": dim.dimension_id if dim else 0,
+            "name": dim.dimension_name if dim else "",
+            "score": round(float(score_row.dimension_score), 1),
+            "weight": round(weights.get(key, 0) * 100, 1) if key else 0.0,
+        })
+    # 对落库维度不全的，补齐默认四维（与 _computed_dimensions 一致）
+    for eid, items in grouped.items():
+        seen_keys = {_dimension_key_from_name(it["name"]) for it in items}
+        for index, (key, name) in enumerate(_DIMENSION_META, start=1):
+            if key in seen_keys:
+                continue
+            items.append({
+                "dimensionId": -index,
+                "name": name,
+                "score": 0.0,
+                "weight": round(weights.get(key, 0) * 100, 1),
+            })
+    return grouped
+
+
+def _evaluation_item_from_db(
+    session: Session, student: Student, course: Course, result: StudentEvaluationResult,
+    dim_scores: list[dict] | None,
+) -> dict:
+    """用已落库的 StudentEvaluationResult 构造返回项（毫秒级，无需实时计算）。"""
+    return {
+        "id": result.eval_id or 0,
+        "studentDbId": student.student_id,
+        "studentId": student.student_no,
+        "studentName": student.real_name,
+        "targetName": student.real_name,
+        "targetType": "student",
+        "courseId": course.course_id,
+        "courseName": course.course_name,
+        "totalScore": result.total_score,
+        "grade": result.eval_level,
+        "dimensions": dim_scores or [],
+        "computed": False,
+    }
+
+
 def _course_students(session: Session, course_id: int, student_id: int | None = None, class_id: int | None = None) -> list[Student]:
     if student_id:
         student = session.get(Student, student_id)
@@ -183,9 +249,33 @@ def list_evaluations(
         course = session.get(Course, _course_id)
         if not course:
             raise HTTPException(status_code=404, detail="课程不存在")
-        data = []
-        for student in _course_students(session, _course_id, _student_id):
-            item = _evaluation_item_from_algorithm(session, student, course)
+
+        students = _course_students(session, _course_id, _student_id)
+        if not students:
+            return []
+
+        # 优先读已落库的预算结果（毫秒级），避免对全班学生实时重算
+        sid_set = [s.student_id for s in students if s.student_id is not None]
+        db_rows = session.exec(
+            select(StudentEvaluationResult).where(
+                StudentEvaluationResult.course_id == _course_id,
+                StudentEvaluationResult.student_id.in_(sid_set),  # type: ignore[arg-type]
+            )
+        ).all()
+        db_by_sid = {r.student_id: r for r in db_rows}
+        db_dims = _db_dimension_scores(session, _course_id, [r.eval_id for r in db_rows if r.eval_id])
+
+        data: list[dict] = []
+        for student in students:
+            sid = student.student_id
+            cached = db_by_sid.get(sid)
+            if cached is not None:
+                item = _evaluation_item_from_db(
+                    session, student, course, cached, db_dims.get(cached.eval_id, [])
+                )
+            else:
+                # 未落库学生实时兜底（单学生约 150ms）
+                item = _evaluation_item_from_algorithm(session, student, course)
             if _eval_level and item["grade"] != _eval_level:
                 continue
             data.append(item)
@@ -313,12 +403,9 @@ def get_evaluation_distribution(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    computed_results = [
-        _evaluation_item_from_algorithm(session, student, course)
-        for student in _course_students(session, course_id, class_id=_class_id)
-    ]
-
-    if not computed_results:
+    # 优先读已落库的预算总分（毫秒级），未落库学生实时兜底
+    students = _course_students(session, course_id, class_id=_class_id)
+    if not students:
         return {
             "courseId": course_id,
             "courseName": course.course_name if course else "",
@@ -327,6 +414,31 @@ def get_evaluation_distribution(
             "statistics": {},
             "characteristic": "暂无评价数据",
         }
+
+    sid_set = [s.student_id for s in students if s.student_id is not None]
+    db_rows = session.exec(
+        select(StudentEvaluationResult).where(
+            StudentEvaluationResult.course_id == course_id,
+            StudentEvaluationResult.student_id.in_(sid_set),  # type: ignore[arg-type]
+        )
+    ).all()
+    db_by_sid = {r.student_id: r for r in db_rows}
+
+    computed_results = []
+    for student in students:
+        sid = student.student_id
+        cached = db_by_sid.get(sid)
+        if cached is not None:
+            computed_results.append({
+                "totalScore": cached.total_score,
+                "grade": cached.eval_level,
+            })
+        else:
+            item = _evaluation_item_from_algorithm(session, student, course)
+            computed_results.append({
+                "totalScore": item["totalScore"],
+                "grade": item["grade"],
+            })
 
     scores = [r["totalScore"] for r in computed_results]
     n = len(scores)

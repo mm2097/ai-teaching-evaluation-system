@@ -68,6 +68,14 @@ const studentEvalList = computed(() => {
   return allEvalList.value.filter((item) => classStudentIds.value.has(item.studentDbId))
 })
 
+/** 分页：避免 74 行全展开导致表格过长 */
+const currentPage = ref(1)
+const pageSize = ref(10)
+const pagedEvalList = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return studentEvalList.value.slice(start, start + pageSize.value)
+})
+
 const distributionTitle = computed(() => {
   if (!distribution.value) return '等级分布'
   const cls = classOptions.value.find((c) => c.value === classId.value)
@@ -144,6 +152,7 @@ async function loadData(): Promise<void> {
 async function onCourseChange(): Promise<void> {
   classId.value = undefined
   evalLevel.value = ''
+  currentPage.value = 1
   const teacherId = role.value === 'teacher' ? userStore.userInfo?.teacherId : undefined
   const classes = await fetchClasses({ deptId: 1, courseId: courseId.value, teacherId })
   classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
@@ -151,6 +160,7 @@ async function onCourseChange(): Promise<void> {
 }
 
 async function onQuery(): Promise<void> {
+  currentPage.value = 1
   await loadData()
 }
 
@@ -308,31 +318,44 @@ onMounted(async () => {
           <div class="content-card">
             <div class="content-card__title">学生学习质量评价</div>
             <el-empty v-if="!studentEvalList.length" description="暂无评价数据" />
-            <el-table v-else :data="studentEvalList" stripe border>
-              <el-table-column prop="studentId" label="学号" width="130" />
-              <el-table-column prop="studentName" label="学生姓名" width="100" />
-              <el-table-column prop="totalScore" label="综合得分" width="100" align="center" sortable>
-                <template #default="{ row }">
-                  <span class="score-num">{{ row.totalScore }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="grade" label="评价等级" width="90" align="center">
-                <template #default="{ row }">
-                  <el-tag :type="evalGradeTagType(row.grade)" effect="dark" size="small">{{ row.grade }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="各维度得分" min-width="220">
-                <template #default="{ row }">
-                  <div class="dim-scores">
-                    <div v-for="d in row.dimensions" :key="d.dimensionId" class="dim-score-item">
-                      <span class="dim-name">{{ d.name }}</span>
-                      <el-progress :percentage="d.score" :stroke-width="6" :show-text="false" style="width: 72px" />
-                      <span class="dim-val">{{ d.score }}</span>
+            <template v-else>
+              <el-table :data="pagedEvalList" stripe border>
+                <el-table-column prop="studentId" label="学号" width="130" />
+                <el-table-column prop="studentName" label="学生姓名" width="100" />
+                <el-table-column prop="totalScore" label="综合得分" width="100" align="center" sortable>
+                  <template #default="{ row }">
+                    <span class="score-num">{{ row.totalScore }}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="grade" label="评价等级" width="90" align="center">
+                  <template #default="{ row }">
+                    <el-tag :type="evalGradeTagType(row.grade)" effect="dark" size="small">{{ row.grade }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="各维度得分" min-width="280">
+                  <template #default="{ row }">
+                    <div class="dim-scores">
+                      <div v-for="d in row.dimensions" :key="d.dimensionId" class="dim-score-item">
+                        <span class="dim-name">{{ d.name }}</span>
+                        <el-progress :percentage="d.score" :stroke-width="6" :show-text="false" style="width: 72px" />
+                        <span class="dim-val">{{ d.score }}</span>
+                      </div>
                     </div>
-                  </div>
-                </template>
-              </el-table-column>
-            </el-table>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <div class="pagination-bar">
+                <el-pagination
+                  v-model:current-page="currentPage"
+                  v-model:page-size="pageSize"
+                  :page-sizes="[10, 20, 50]"
+                  :total="studentEvalList.length"
+                  layout="total, sizes, prev, pager, next, jumper"
+                  background
+                  small
+                />
+              </div>
+            </template>
           </div>
         </el-col>
         <el-col :span="8">
@@ -406,9 +429,9 @@ onMounted(async () => {
 }
 
 .dim-scores {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
 }
 
 .dim-score-item {
@@ -419,7 +442,8 @@ onMounted(async () => {
 
   .dim-name {
     color: #64748b;
-    width: 56px;
+    width: 52px;
+    flex-shrink: 0;
   }
 
   .dim-val {
@@ -427,9 +451,15 @@ onMounted(async () => {
     color: #2563eb;
     white-space: nowrap;
     flex-shrink: 0;
-    min-width: 36px;
+    min-width: 28px;
     text-align: right;
   }
+}
+
+.pagination-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 </style>
 

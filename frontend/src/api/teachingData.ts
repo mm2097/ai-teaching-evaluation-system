@@ -205,3 +205,47 @@ export async function exportTeachingData(
 
   return { blob, filename }
 }
+
+// ============================================================================
+// 课堂互动记录（InteractionRecord）—— 教师单次课堂对学生打分
+// ============================================================================
+
+export interface InteractionRecordItem {
+  interactionId: number
+  courseId: number
+  studentId: number
+  studentName: string
+  studentNo: string
+  type: number          // 1=课堂提问, 2=小组讨论, 4=课堂测验
+  typeLabel: string
+  score: number         // 0-100
+  remark?: string | null
+  date: string
+}
+
+export interface InteractionRecordPayload {
+  courseId: number
+  studentId: number
+  interactionType: number  // 1/2/4
+  score: number            // 0-100
+  interactionDate?: string // YYYY-MM-DD
+  remark?: string
+}
+
+export async function fetchInteractionRecords(params: {
+  courseId: number
+  studentId?: number
+  interactionType?: number
+}): Promise<InteractionRecordItem[]> {
+  const res = await request.get('/v1/teaching-data/interactions', { params })
+  return res.data || []
+}
+
+export async function createInteractionRecord(payload: InteractionRecordPayload): Promise<InteractionRecordItem> {
+  const res = await request.post('/v1/teaching-data/interactions', payload)
+  return res.data
+}
+
+export async function deleteInteractionRecord(interactionId: number): Promise<void> {
+  await request.delete(`/v1/teaching-data/interactions/${interactionId}`)
+}

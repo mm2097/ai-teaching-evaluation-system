@@ -721,15 +721,19 @@ def seed() -> None:
 
         indexes = [
             *_academic_part_indexes(1),
-            EvalIndex(dimension_id=2, index_name="出勤率", weight=50,
+            EvalIndex(dimension_id=2, index_name="出勤率", weight=40,
                       score_rule='{"type":"attendance","full_score":100}'),
-            EvalIndex(dimension_id=2, index_name="课堂参与", weight=50,
+            EvalIndex(dimension_id=2, index_name="课堂参与", weight=30,
                       score_rule='{"type":"interaction","full_score":100}'),
+            EvalIndex(dimension_id=2, index_name="作业提交", weight=30,
+                      score_rule='{"type":"homework","full_score":100}'),
             *_academic_part_indexes(3),
-            EvalIndex(dimension_id=4, index_name="出勤率", weight=50,
+            EvalIndex(dimension_id=4, index_name="出勤率", weight=40,
                       score_rule='{"type":"attendance","full_score":100}'),
-            EvalIndex(dimension_id=4, index_name="课堂参与", weight=50,
+            EvalIndex(dimension_id=4, index_name="课堂参与", weight=30,
                       score_rule='{"type":"interaction","full_score":100}'),
+            EvalIndex(dimension_id=4, index_name="作业提交", weight=30,
+                      score_rule='{"type":"homework","full_score":100}'),
         ]
         session.add_all(indexes)
         session.commit()

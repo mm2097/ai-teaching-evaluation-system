@@ -28,7 +28,10 @@ from app.models import (
     ParticipationSheet,
     ScoreRecord,
     Student,
+    AnswerTask,
+    StudentAnswerRecord,
 )
+from app.models.question import TASK_TYPE_ASSIGNMENT
 from app.services.predict import (
     get_student_slope,
     slope_to_progress_score,
@@ -55,6 +58,13 @@ class ProfileScores:
     interaction_count: int      # 课堂参与次数（D03 子项）
     participation_rate: float   # 课堂参与度 0-1（D03 子项，无数据基线 0.9）
     homework_rate: float        # 作业提交率 0-1（保留字段，暂无作业数据）
+    # D03 子项得分（0-100）+ 权重，供前端展示态度分构成
+    attendance_score: float = 0.0
+    interaction_score: float = 0.0
+    homework_score: float = 0.0
+    w_attendance: float = 0.5
+    w_interaction: float = 0.5
+    w_homework: float = 0.0
 
 
 # ===== D02 学业水平 =====
@@ -314,17 +324,48 @@ def _participation_rate(
 def _interaction_score(
     session: Session, student_id: int, course_id: int
 ) -> tuple[float, int]:
-    """互动得分：依据课堂参与度（ParticipationSheet，0-1 → 0-100）。
-
-    InteractionRecord 已废弃，课堂互动数据源统一为上传的课堂参与情况表。
+    """互动得分：优先用教师录入的课堂互动记录（InteractionRecord，type!=3 平均分）；
+    无互动记录时回退课堂参与度（ParticipationSheet，0-1 → 0-100）。
     """
+    records = session.exec(
+        select(InteractionRecord).where(
+            InteractionRecord.student_id == student_id,
+            InteractionRecord.course_id == course_id,
+            InteractionRecord.type != 3,
+        )
+    ).all()
+    if records:
+        avg = sum(float(r.score or 0.0) for r in records) / len(records)
+        return max(0.0, min(100.0, avg)), len(records)
     rate, count = _participation_rate(session, student_id, course_id)
     return rate * 100.0, count
 
 
 def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
-    """作业提交率：暂无独立作业数据源，保留字段返回基线 90%。"""
-    return 0.9
+    """作业提交率：基于教师发布的作业任务（AnswerTask, task_type=assignment）。
+
+    应交 = 课程内 task_type=assignment 且 status≥1（已发布/进行中/已结束）的任务数；
+    已交 = 该学生有 StudentAnswerRecord 的此类任务数。
+    提交率 = 已交 / 应交；无应交任务时返回基线 0.9。
+    """
+    tasks = session.exec(
+        select(AnswerTask.task_id).where(
+            AnswerTask.course_id == course_id,
+            AnswerTask.task_type == TASK_TYPE_ASSIGNMENT,
+            AnswerTask.status >= 1,
+        )
+    ).all()
+    if not tasks:
+        return 0.9
+
+    submitted = session.exec(
+        select(StudentAnswerRecord.task_id).where(
+            StudentAnswerRecord.student_id == student_id,
+            StudentAnswerRecord.task_id.in_(tasks),  # type: ignore[arg-type]
+        )
+    ).all()
+    submitted_task_count = len(set(submitted))
+    return max(0.0, min(1.0, submitted_task_count / len(tasks)))
 
 
 def _attitude_component_weights(
@@ -365,14 +406,20 @@ def _attitude_component_weights(
 
 def compute_attitude_score(
     session: Session, student_id: int, course_id: int,
-    w_attendance: float = 0.5, w_interaction: float = 0.5, w_homework: float = 0.0,
+    w_attendance: float | None = None, w_interaction: float | None = None, w_homework: float | None = None,
 ) -> tuple[float, dict]:
     """D03 学习态度得分 = w_attendance×到课率 + w_interaction×课堂参与度 + w_homework×作业提交率。
 
-    默认 0.5/0.5/0.0（出勤/互动/作业）。学情画像用此默认值；综合评价引擎
-    （evaluation._configured_dimension_scores）另按 EvalIndex.score_rule 计算，
-    两条链路独立，互不覆盖。
+    子项权重默认从课程"学习态度"维度的指标配置推导（_attitude_component_weights，
+    按指标名归一化）；无配置时回退 0.5/0.5/0.0。这与综合评价引擎
+    _configured_dimension_scores（按 score_rule.type 加权）对同一配置推导出一致权重，
+    保证学情画像与综合评价的态度分一致。调用方也可显式传入权重覆盖。
     """
+    if w_attendance is None or w_interaction is None or w_homework is None:
+        w_attendance, w_interaction, w_homework = _attitude_component_weights(
+            session, course_id, 0.5, 0.5, 0.0
+        )
+
     att_rate = _attendance_rate(session, student_id, course_id)
     att_score = att_rate * 100.0
 
@@ -394,6 +441,9 @@ def compute_attitude_score(
         "interaction_score": round(int_score, 1),
         "homework_rate": round(hw_rate, 3),
         "homework_score": round(hw_score, 1),
+        "w_attendance": round(w_attendance, 3),
+        "w_interaction": round(w_interaction, 3),
+        "w_homework": round(w_homework, 3),
     }
     return max(0.0, min(100.0, score)), detail
 
@@ -452,4 +502,10 @@ def compute_profile(
         interaction_count=detail["interaction_count"],
         participation_rate=detail["participation_rate"],
         homework_rate=detail["homework_rate"],
+        attendance_score=detail["attendance_score"],
+        interaction_score=detail["interaction_score"],
+        homework_score=detail["homework_score"],
+        w_attendance=detail["w_attendance"],
+        w_interaction=detail["w_interaction"],
+        w_homework=detail["w_homework"],
     )

@@ -85,6 +85,7 @@ const radarOption = computed<EChartsOption>(() => ({
 }))
 
 const dimensionScores = computed(() => profileData.value?.dimensionScores || [])
+const attitudeDetail = computed(() => profileData.value?.attitudeDetail)
 const studentTags = computed(() => profileData.value?.tags || [])
 
 onMounted(async () => {
@@ -180,6 +181,31 @@ watch(queryParams, async (val) => {
         <el-table-column prop="desc" label="说明" />
       </el-table>
     </div>
+
+    <div v-if="!isClassView && attitudeDetail" class="content-card">
+      <div class="content-card__title">学习态度构成</div>
+      <el-descriptions :column="3" border size="small">
+        <el-descriptions-item label="出勤率">
+          {{ (attitudeDetail.attendanceRate * 100).toFixed(1) }}%
+          <span class="attitude-weight">权重 {{ (attitudeDetail.weights.attendance * 100).toFixed(0) }}%</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="出勤得分">{{ attitudeDetail.attendanceScore.toFixed(1) }}</el-descriptions-item>
+        <el-descriptions-item label="参与次数">{{ attitudeDetail.interactionCount }} 次</el-descriptions-item>
+        <el-descriptions-item label="课堂参与度">
+          {{ (attitudeDetail.participationRate * 100).toFixed(1) }}%
+          <span class="attitude-weight">权重 {{ (attitudeDetail.weights.interaction * 100).toFixed(0) }}%</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="互动得分">{{ attitudeDetail.interactionScore.toFixed(1) }}</el-descriptions-item>
+        <el-descriptions-item label="作业提交率">
+          {{ (attitudeDetail.homeworkRate * 100).toFixed(1) }}%
+          <span class="attitude-weight">权重 {{ (attitudeDetail.weights.homework * 100).toFixed(0) }}%</span>
+        </el-descriptions-item>
+        <el-descriptions-item label="作业得分">{{ attitudeDetail.homeworkScore.toFixed(1) }}</el-descriptions-item>
+        <el-descriptions-item label="态度总分">
+          <strong style="color: #2563eb">{{ attitudeDetail.score.toFixed(1) }}</strong>
+        </el-descriptions-item>
+      </el-descriptions>
+    </div>
   </div>
 </template>
 
@@ -240,5 +266,11 @@ watch(queryParams, async (val) => {
     &.success { background: #ecfdf5; h4 { color: #10b981; } }
     &.danger { background: #fef2f2; h4 { color: #ef4444; } }
   }
+}
+
+.attitude-weight {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>

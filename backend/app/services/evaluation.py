@@ -180,9 +180,9 @@ def _score_for_rule(
     if rule_type == "attendance":
         return float(profile.attendance_rate) * 100.0
     if rule_type == "interaction":
-        return float(profile.participation_rate) * 100.0
+        return float(profile.interaction_score)
     if rule_type == "homework":
-        return float(profile.homework_rate) * 100.0
+        return float(profile.homework_score)
     if rule_type == "progress":
         return float(profile.progress_score)
     if rule_type == "mastery":

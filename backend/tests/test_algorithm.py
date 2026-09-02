@@ -249,36 +249,39 @@ class TestEvaluation:
         interaction_heavy = compute_evaluation(session, student_id=2, course_id=1)
         assert attendance_heavy.dimensions["attitude"] != interaction_heavy.dimensions["attitude"]
         assert attendance_heavy.total_score != interaction_heavy.total_score
-    def test_participation_feeds_attitude_score(self, session):
-        """学习态度互动项应使用课堂参与度（ParticipationSheet），而不是固定常量。"""
-        from app.models import ParticipationSheet
+    def test_interaction_record_feeds_attitude_score(self, session):
+        """学习态度互动项优先用课堂互动记录（InteractionRecord），数据能影响得分。"""
+        from datetime import date
+        from app.models import InteractionRecord
         from app.services.profile import compute_attitude_score
 
-        # 无参与记录：互动分走基线 0.9 → 90 分
+        # student 3 无 InteractionRecord，互动分走 ParticipationSheet 基线 0.9 → 90
         low_score, low_detail = compute_attitude_score(
             session,
-            student_id=1,
+            student_id=3,
             course_id=1,
             w_attendance=0.0,
             w_interaction=1.0,
             w_homework=0.0,
         )
-        # 加一条低参与度记录（batch_id=1 已在 conftest 创建）
-        session.add(ParticipationSheet(
-            student_id=1, exam_batch_id=1, participation_rate=0.5, create_by=1,
+        # 教师录入一条低分互动记录（type=1 课堂提问）
+        session.add(InteractionRecord(
+            course_id=1, student_id=3, interaction_date=date(2024, 12, 1),
+            type=1, score=50, create_by=1,
         ))
         session.commit()
 
         high_score, high_detail = compute_attitude_score(
             session,
-            student_id=1,
+            student_id=3,
             course_id=1,
             w_attendance=0.0,
             w_interaction=1.0,
             w_homework=0.0,
         )
-        # 有参与记录后互动分 = 0.5×100 = 50，低于基线 90
-        assert high_detail["interaction_score"] == 50.0
+        # student 3 原有 1 条 type=1 score=70，加 1 条 score=50 → avg=60
+        assert high_detail["interaction_score"] == 60.0
+        assert high_detail["interaction_count"] == 2
         assert high_score < low_score
 
 # ===== D12 去重 =====

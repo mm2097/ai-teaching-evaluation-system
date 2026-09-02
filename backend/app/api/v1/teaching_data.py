@@ -11,13 +11,14 @@ import json
 import os
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import quote
 
 import openpyxl
 from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 from sqlalchemy import or_
 
@@ -29,6 +30,7 @@ from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, Student,
     SysUser, Teacher, SysRole, SysOperationLog,
     IndividualScore, AttendanceSheet, ParticipationSheet, CourseTestDetail,
+    InteractionRecord,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
 from app.services.analysis_refresh import refresh_course_analysis
@@ -1241,3 +1243,112 @@ def download_template(
     )
 
 
+
+
+# ============================================================================
+# 课堂互动记录（InteractionRecord）—— 教师单次课堂对学生打分
+# type: 1=课堂提问, 2=小组讨论, 4=课堂测验（3=作业提交由答题任务自动产生，不在此录入）
+# ============================================================================
+
+INTERACTION_TYPE_LABELS = {1: "课堂提问", 2: "小组讨论", 4: "课堂测验"}
+
+
+class InteractionRecordPayload(BaseModel):
+    """课堂互动打分录入体。"""
+
+    course_id: int
+    student_id: int
+    interaction_type: int = Field(ge=1, le=4, description="1=课堂提问, 2=小组讨论, 4=课堂测验")
+    score: float = Field(ge=0, le=100, description="互动得分 0-100")
+    interaction_date: date | None = None
+    remark: str | None = Field(default=None, max_length=255)
+
+
+@router.post("/teaching-data/interactions", tags=["教学数据"])
+def create_interaction_record(
+    payload: InteractionRecordPayload,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """录入一条课堂互动记录（教师对学生在某次课堂的表现打分）。"""
+    if payload.interaction_type == 3:
+        raise HTTPException(status_code=422, detail="type=3 作业提交由答题任务自动产生，不可手动录入")
+    _require_teacher_for_course(current_user, payload.course_id, session)
+    student = session.get(Student, payload.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="学生不存在")
+
+    record = InteractionRecord(
+        course_id=payload.course_id,
+        student_id=payload.student_id,
+        type=payload.interaction_type,
+        score=payload.score,
+        remark=payload.remark,
+        interaction_date=payload.interaction_date or date.today(),
+        create_by=current_user.user_id,
+    )
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    save_operation_log(
+        session, current_user.user_id, "教学数据", "录入互动",
+        f"{INTERACTION_TYPE_LABELS.get(payload.interaction_type, '互动')}打分：学生{student.real_name}，{payload.score}分",
+        get_client_ip(request) if request else "",
+    )
+    return _interaction_to_dict(record, student)
+
+
+@router.get("/teaching-data/interactions", tags=["教学数据"])
+def list_interaction_records(
+    course_id: int = Query(...),
+    student_id: int | None = Query(default=None),
+    interaction_type: int | None = Query(default=None),
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> list[dict]:
+    """查询课程课堂互动记录（仅授课教师）。"""
+    _require_teacher_for_course(current_user, course_id, session)
+    stmt = select(InteractionRecord, Student).outer_join(
+        Student, InteractionRecord.student_id == Student.student_id
+    ).where(InteractionRecord.course_id == course_id)
+    if student_id is not None:
+        stmt = stmt.where(InteractionRecord.student_id == student_id)  # type: ignore[arg-type]
+    if interaction_type is not None:
+        stmt = stmt.where(InteractionRecord.type == interaction_type)  # type: ignore[arg-type]
+    stmt = stmt.order_by(InteractionRecord.interaction_date.desc(), InteractionRecord.interaction_id.desc())
+    return [
+        _interaction_to_dict(rec, stu)
+        for rec, stu in session.exec(stmt).all()
+    ]
+
+
+@router.delete("/teaching-data/interactions/{interaction_id}", tags=["教学数据"])
+def delete_interaction_record(
+    interaction_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """删除一条课堂互动记录（仅授课教师）。"""
+    record = session.get(InteractionRecord, interaction_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="互动记录不存在")
+    _require_teacher_for_course(current_user, record.course_id, session)
+    session.delete(record)
+    session.commit()
+    return {"interactionId": interaction_id, "deleted": True}
+
+
+def _interaction_to_dict(rec: InteractionRecord, student: Student | None) -> dict:
+    return {
+        "interactionId": rec.interaction_id,
+        "courseId": rec.course_id,
+        "studentId": rec.student_id,
+        "studentName": student.real_name if student else "",
+        "studentNo": student.student_no if student else "",
+        "type": rec.type,
+        "typeLabel": INTERACTION_TYPE_LABELS.get(rec.type, "未知"),
+        "score": rec.score,
+        "remark": rec.remark,
+        "date": rec.interaction_date.isoformat() if rec.interaction_date else "",
+    }

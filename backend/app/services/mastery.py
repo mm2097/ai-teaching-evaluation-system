@@ -70,34 +70,42 @@ def compute_student_mastery(
     if not points:
         return []
 
+    point_ids = [p.point_id for p in points]
+
+    # 一次聚合全部知识点的答题正确数/总数（避免逐知识点查询）
+    answer_rows = session.exec(
+        select(
+            AiQuestion.point_id,
+            func.count(StudentAnswerRecord.answer_id),
+            func.sum(StudentAnswerRecord.is_correct),
+        )
+        .join(StudentAnswerRecord, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .where(
+            StudentAnswerRecord.student_id == student_id,
+            AiQuestion.course_id == course_id,
+            AiQuestion.point_id.in_(point_ids),  # type: ignore[arg-type]
+        )
+        .group_by(AiQuestion.point_id)
+    ).all()
+    answer_stats = {pid: (total, correct) for pid, total, correct in answer_rows}
+
+    # 兜底：KnowledgeMastery 表一次取
+    km_rows = session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.student_id == student_id,
+            KnowledgeMastery.course_id == course_id,
+            KnowledgeMastery.point_id.in_(point_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    km_scores = {km.point_id: km.mastery_score for km in km_rows}
+
     results: list[MasteryStat] = []
     for p in points:
-        # 优先用答题记录
-        total, correct = session.exec(
-            select(
-                func.count(StudentAnswerRecord.answer_id),
-                func.sum(StudentAnswerRecord.is_correct),
-            )
-            .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
-            .where(
-                StudentAnswerRecord.student_id == student_id,
-                AiQuestion.course_id == course_id,
-                AiQuestion.point_id == p.point_id,
-            )
-        ).one()
-
+        total, correct = answer_stats.get(p.point_id, (0, 0))
         if total and total > 0:
             accuracy = (correct or 0) * 100.0 / total
         else:
-            # 兜底：KnowledgeMastery 表
-            km = session.exec(
-                select(KnowledgeMastery).where(
-                    KnowledgeMastery.student_id == student_id,
-                    KnowledgeMastery.course_id == course_id,
-                    KnowledgeMastery.point_id == p.point_id,
-                )
-            ).first()
-            accuracy = km.mastery_score if km else 0.0
+            accuracy = km_scores.get(p.point_id, 0.0)
 
         level, color = accuracy_to_level(accuracy)
         results.append(

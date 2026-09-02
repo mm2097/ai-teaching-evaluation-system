@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import json as _json
+import logging
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -17,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Query as QueryParam
 from sqlmodel import Session, select
 
-from app.core.database import get_session
+from app.core.database import engine, get_session
 from app.core.operation_log import get_current_user
 from app.api.v1.analysis import _check_course_access
 from app.models import (
@@ -29,8 +31,45 @@ from app.models import (
     SysUser,
     SysRole,
 )
+from app.services.analysis_refresh import refresh_course_evaluations
 
 router = APIRouter()
+
+
+# ============================================================================
+# 配置变化后的评价重算（防抖合并批量保存，后台线程执行）
+# ============================================================================
+
+_eval_refresh_timers: dict[int, threading.Timer] = {}
+_eval_refresh_lock = threading.Lock()
+_eval_refresh_delay = 5.0  # 秒；批量保存权重会连续调用多个接口，防抖合并为一次重算
+
+
+def _run_evaluation_refresh(course_id: int) -> None:
+    """后台线程：按最新配置重算该课程的画像与学习质量评价并落库。"""
+    # 定时器已触发，先从防抖表移除自身
+    with _eval_refresh_lock:
+        _eval_refresh_timers.pop(course_id, None)
+    try:
+        with Session(engine) as bg_session:
+            refresh_course_evaluations(bg_session, course_id)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Evaluation refresh failed after eval config change (course_id=%s)",
+            course_id,
+        )
+
+
+def _schedule_evaluation_refresh(course_id: int) -> None:
+    """配置变化后防抖触发重算（同一课程的连续变更只触发一次）。"""
+    with _eval_refresh_lock:
+        old = _eval_refresh_timers.pop(course_id, None)
+        if old is not None:
+            old.cancel()
+        timer = threading.Timer(_eval_refresh_delay, _run_evaluation_refresh, args=(course_id,))
+        timer.daemon = True
+        _eval_refresh_timers[course_id] = timer
+        timer.start()
 
 
 # ============================================================================
@@ -307,6 +346,9 @@ def update_dimension(
         select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
     ).all()
 
+    # 维度改名会影响得分映射（名称需匹配 学业成绩/学习态度/学习进步/知识掌握），重算评价
+    _schedule_evaluation_refresh(dim.course_id)
+
     return _dimension_to_dict(dim, list(indexes))
 
 
@@ -346,6 +388,9 @@ def delete_dimension(
     dim_name = dim.dimension_name
     session.delete(dim)
     session.commit()
+
+    # 维度删除后总分与其余维度得分需按最新配置重算
+    _schedule_evaluation_refresh(course_id)
 
     return {
         "message": f"维度「{dim_name}」及其 {len(indexes)} 个指标已删除",
@@ -413,6 +458,9 @@ def create_index(
     total = _auto_fill_other_index_weight(session, dimension_id)
     session.commit()
     session.refresh(idx)
+
+    # 指标变化影响评分计算，重算该课程评价
+    _schedule_evaluation_refresh(dim.course_id)
 
     return {
         "indexId": idx.index_id,
@@ -490,6 +538,9 @@ def update_index(
     session.commit()
     session.refresh(idx)
 
+    # 权重/规则变化影响评分计算，重算该课程评价
+    _schedule_evaluation_refresh(dim.course_id)
+
     return {
         "indexId": idx.index_id,
         "dimensionId": idx.dimension_id,
@@ -524,11 +575,15 @@ def delete_index(
 
     dimension_id = idx.dimension_id
     index_name = idx.index_name
+    course_id = dim.course_id
 
     session.delete(idx)
     # 「其他」指标自动补足（删除指标后重新计算）
     total = _auto_fill_other_index_weight(session, dimension_id)
     session.commit()
+
+    # 指标删除影响评分计算，重算该课程评价
+    _schedule_evaluation_refresh(course_id)
 
     # 返回删除后的权重状态
     is_valid = abs(total - 100.0) < 0.01

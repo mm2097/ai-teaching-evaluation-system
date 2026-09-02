@@ -252,3 +252,4 @@ const chartTitle = computed(() =>
   }
 }
 </style>
+

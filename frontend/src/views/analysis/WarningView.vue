@@ -7,7 +7,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchWarnings, updateWarningStatus, sendWarningNotice } from '@/api/analysis'
+import { fetchWarnings, refreshWarnings, updateWarningStatus, sendWarningNotice } from '@/api/analysis'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
 import { warningLevelType } from '@/utils/auth'
@@ -29,6 +29,7 @@ const courseOptions = ref<{ label: string; value: number }[]>([])
 const warningList = ref<WarningRecord[]>([])
 const studentList = ref<LinkedStudentOption[]>([])
 const studentLoading = ref(false)
+const refreshing = ref(false)
 const selectedStudentNo = ref<string | undefined>()
 
 async function loadStudentOptions(): Promise<void> {
@@ -133,7 +134,7 @@ watch(
 )
 
 let _inited = false
-watch([courseId, classId, levelFilter, typeFilter, statusFilter], async () => {
+watch([courseId, classId, levelFilter, typeFilter, statusFilter, selectedStudentNo], async () => {
   if (!_inited) { _inited = true; return }
   await loadWarnings()
 })
@@ -171,6 +172,21 @@ async function markResolved(): Promise<void> {
     // 错误提示由 request 拦截器统一处理
   } finally {
     markingResolved.value = false
+  }
+}
+
+async function handleRefreshWarnings(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  refreshing.value = true
+  try {
+    const result = await refreshWarnings({ courseId: courseId.value, classId: classId.value })
+    ElMessage.success(result.message || '预警刷新完成')
+    await loadWarnings()
+  } finally {
+    refreshing.value = false
   }
 }
 
@@ -248,6 +264,7 @@ const statusOptions = [
           <el-option v-for="s in statusOptions" :key="s.value" :label="s.label" :value="s.value" />
         </el-select>
         <el-button type="primary" @click="handleQuery">查询</el-button>
+        <el-button :loading="refreshing" @click="handleRefreshWarnings">刷新预警</el-button>
       </div>
 
       <el-table :data="filteredWarnings" stripe border>

@@ -18,7 +18,7 @@ from app.models import (
     KnowledgeModule, KnowledgePoint,
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
-    IndividualScore, AttendanceSheet, CourseTestDetail,
+    IndividualScore, AttendanceSheet, ParticipationSheet, CourseTestDetail,
     AiQuestion, AnswerTask, AnswerTaskClass, TaskQuestion, StudentAnswerRecord,
     EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore,
     KnowledgeMastery, StudyWarning, StudentProfile,
@@ -542,36 +542,24 @@ def seed() -> None:
         session.commit()
         print(f"  考勤记录: {len(attendances)} 条")
 
-        # ========== 12. 课堂互动（已禁用 - 功能暂不展示） ==========
-        # interactions = [
-        #     # 赵伟：互动积极，成绩好
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=9.0, remark="回答准确", create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 12),
-        #                       type=2, score=8.5, remark="小组讨论出色", create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 19),
-        #                       type=3, score=9.5, create_by=2),
-        #     InteractionRecord(course_id=1, student_id=1, interaction_date=date(2026, 3, 26),
-        #                       type=4, score=8.0, create_by=2),
-        #     # 钱丽华：中等
-        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=7.0, create_by=2),
-        #     InteractionRecord(course_id=1, student_id=2, interaction_date=date(2026, 3, 12),
-        #                       type=3, score=7.5, create_by=2),
-        #     # 孙浩然：互动少
-        #     InteractionRecord(course_id=1, student_id=3, interaction_date=date(2026, 3, 5),
-        #                       type=1, score=5.0, remark="回答不够完整", create_by=2),
-        #     # 冯文博（数据结构课）：进步明显
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 4),
-        #                       type=1, score=4.0, remark="表现一般", create_by=3),
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 11),
-        #                       type=2, score=7.5, remark="讨论中进步", create_by=3),
-        #     InteractionRecord(course_id=3, student_id=7, interaction_date=date(2026, 3, 18),
-        #                       type=4, score=9.0, remark="测验成绩好", create_by=3),
-        # ]
-        # session.add_all(interactions)
-        # session.commit()
-        # print(f"  课堂互动: {len(interactions)} 条")
+        # ========== 12. 课堂参与情况（ParticipationSheet，学习态度维度数据源） ==========
+        # 课堂参与度作为学习态度维度的互动项数据源（_participation_rate 读取）。
+        # 复用课程 1 的"平时作业"批次（batch_id=1）承载参与记录，按学生差异化。
+        participations = [
+            ParticipationSheet(student_id=1, exam_batch_id=1, participation_rate=0.95,
+                               total_count=16, create_by=2),  # 赵伟：积极参与
+            ParticipationSheet(student_id=2, exam_batch_id=1, participation_rate=0.75,
+                               total_count=16, create_by=2),  # 钱丽华：中等
+            ParticipationSheet(student_id=3, exam_batch_id=1, participation_rate=0.50,
+                               total_count=16, create_by=2),  # 孙浩然：参与少
+            ParticipationSheet(student_id=4, exam_batch_id=1, participation_rate=0.85,
+                               total_count=16, create_by=2),  # 周婷：较积极
+            ParticipationSheet(student_id=5, exam_batch_id=1, participation_rate=0.60,
+                               total_count=16, create_by=2),  # 吴磊：偏少
+        ]
+        session.add_all(participations)
+        session.commit()
+        print(f"  课堂参与情况: {len(participations)} 条")
 
         # ========== 13. AI 题目（8道，覆盖题型） ==========
         questions = [
@@ -710,6 +698,8 @@ def seed() -> None:
             EvalDimension(course_id=1, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
             EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
             EvalDimension(course_id=3, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
+            EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
+            EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
         ]
         session.add_all(dimensions)
         session.commit()

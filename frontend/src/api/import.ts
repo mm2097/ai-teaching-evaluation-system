@@ -20,9 +20,10 @@ export interface ImportResult {
   analysisRefresh: Record<string, unknown>
 }
 
-/** 获取导入日志列表（当前后端暂无导入日志表，返回空列表） */
+/** 获取导入日志列表 */
 export async function fetchImportLogs(): Promise<ImportLog[]> {
-  return []
+  const res = await request.get('/v1/teaching-data/import-logs')
+  return res.data as ImportLog[]
 }
 
 /**
@@ -44,3 +45,4 @@ export async function executeImport(
 
   return res.data as ImportResult
 }
+

@@ -32,6 +32,18 @@ export interface ReportResponse {
   error?: string
 }
 
+export interface ReportHistoryItem {
+  id: number
+  name: string
+  type: string
+  time: string
+  format: string
+  reportType: 1 | 2 | 3 | 4
+  courseId: number
+  classId?: number | null
+  studentId?: number | null
+}
+
 /** 生成练习题（兼容旧调用，实际走后端 AI 出题代理） */
 export async function generateExercises(params: AIQuestionParams): Promise<GeneratedQuestion[]> {
   const result = await generateQuizQuestions({
@@ -58,6 +70,7 @@ export async function generateReport(params: {
   reportType: 1 | 2 | 3 | 4
   classId?: number
   studentId?: number
+  recordHistory?: boolean
 }): Promise<ReportResponse> {
   const { data } = await request.get('/v1/report', {
     params: {
@@ -65,7 +78,43 @@ export async function generateReport(params: {
       report_type: params.reportType,
       class_id: params.classId,
       student_id: params.studentId,
+      record_history: params.recordHistory,
     },
   })
   return data
 }
+
+function parseDownloadFilename(disposition: string, fallback: string): string {
+  const rfc5987 = disposition.match(/filename\*=UTF-8''([^;]+)/)
+  if (rfc5987) return decodeURIComponent(rfc5987[1]!)
+  const ascii = disposition.match(/filename="?([^";\s]+)"?/)
+  return ascii ? ascii[1]! : fallback
+}
+
+export async function exportReportFile(params: {
+  courseId: number
+  reportType: 1 | 2 | 3 | 4
+  classId?: number
+  studentId?: number
+}): Promise<{ blob: Blob; filename: string }> {
+  const res = await request.get('/v1/report/export', {
+    params: {
+      course_id: params.courseId,
+      report_type: params.reportType,
+      class_id: params.classId,
+      student_id: params.studentId,
+      format: 'xlsx',
+    },
+    responseType: 'blob',
+  })
+  const disposition = (res.headers as Record<string, string>)['content-disposition'] ?? ''
+  return {
+    blob: res.data as Blob,
+    filename: parseDownloadFilename(disposition, `report_type${params.reportType}.xlsx`),
+  }
+}
+export async function fetchReportHistory(): Promise<ReportHistoryItem[]> {
+  const { data } = await request.get('/v1/report/history')
+  return data as ReportHistoryItem[]
+}
+

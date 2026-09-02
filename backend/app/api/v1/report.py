@@ -39,7 +39,7 @@ from sqlmodel import Session, select
 
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
-from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser
+from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser, SysOperationLog
 from app.api.v1.analysis import _check_course_access
 from app.services.report_template import (
     build_class_context,
@@ -64,6 +64,30 @@ _REPORT_TYPE_NAMES: dict[int, str] = {
     3: "课程知识点分析报告",
     4: "学生学习质量报告",
 }
+
+
+def _report_history_payload(
+    *,
+    report_type: int,
+    course_id: int,
+    course_name: str,
+    class_id: int | None,
+    student_id: int | None,
+    ctx,
+) -> str:
+    target_name = ctx.student_name or ctx.class_name or ""
+    type_name = _REPORT_TYPE_NAMES.get(report_type, "报告")
+    name_parts = [part for part in [target_name, course_name, type_name] if part]
+    payload = {
+        "name": " - ".join(name_parts)[:90],
+        "type": type_name[:12],
+        "reportType": report_type,
+        "courseId": course_id,
+        "classId": class_id,
+        "studentId": student_id,
+        "format": "PDF/Excel",
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 # 学生可访问的报告类型（仅限查看本人数据）
 _STUDENT_REPORT_TYPES = {2, 3, 4}
@@ -428,9 +452,16 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
 
 
 # ============================================================================
-# 1. 报告生成（JSON）—— Report.Generate
+# 1. 报告历史 —— Report.History
 # ============================================================================
 
+# 注：报告历史列表查询接口定义在下方「报告历史持久化」章节
+# （GET /report/history，读取 ReportHistory 表），此处不再重复注册，
+# 避免 FastAPI 因重复路径而用旧版（查 SysOperationLog）遮蔽新版。
+
+# ============================================================================
+# 1. 报告生成（JSON）—— Report.Generate
+# ============================================================================
 @router.get("/report", tags=["报告生成"])
 def get_report(
     course_id: int = Query(..., description="课程 ID"),
@@ -438,6 +469,7 @@ def get_report(
     class_id: int | None = Query(default=None),
     student_id: int | None = Query(default=None),
     use_llm: bool = Query(default=True, description="是否使用 LLM 增强"),
+    record_history: bool = Query(default=True, description="是否写入报告生成历史"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -450,7 +482,23 @@ def get_report(
     """
     _check_report_access(session, current_user, course_id, report_type, student_id)
 
-    report, _ = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
+    report, ctx = _assemble_report(session, course_id, report_type, class_id, student_id, use_llm, current_user)
+    if record_history:
+        course = session.get(Course, course_id)
+        session.add(SysOperationLog(
+            user_id=current_user.user_id or 0,
+            module="报告生成",
+            operation="生成",
+            content=_report_history_payload(
+                report_type=report_type,
+                course_id=course_id,
+                course_name=course.course_name if course else "",
+                class_id=class_id if not isinstance(class_id, QueryParam) else None,
+                student_id=ctx.student_id or (student_id if not isinstance(student_id, QueryParam) else None),
+                ctx=ctx,
+            ),
+        ))
+        session.commit()
     return report
 
 
@@ -826,3 +874,6 @@ def export_report(
             ),
         },
     )
+
+
+

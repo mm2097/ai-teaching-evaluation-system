@@ -20,7 +20,7 @@ const router = useRouter()
 const userStore = useUserStore()
 
 /** 实时看板数据（来自后端） */
-const dashboardStats = ref({ studentCount: 0, courseCount: 0, teacherCount: 0, passRate: 0, excellentRate: 0, attendanceRate: 0, warningCount: 0 })
+const dashboardStats = ref({ studentCount: 0, courseCount: 0, teacherCount: 0, passRate: 0, excellentRate: 0, attendanceRate: 0, warningCount: 0, aiCompletionRate: 0 })
 const warnings = ref<unknown[]>([])
 const heatmap = ref<KnowledgeHeatmapResult>({ knowledgePoints: [], students: [], data: [] })
 
@@ -192,7 +192,7 @@ async function loadTrendData(courseId?: number, classId?: number) {
     if (classId) params.class_id = classId
     const res = await request.get('/v1/dashboard/grade-trend', { params })
     const d = res.data
-    trendData.value = { months: d.months || [], passRate: d.passRate || [], excellentRate: d.passRate ? d.passRate.map(() => 0) : [] }
+    trendData.value = { months: d.months || [], passRate: d.passRate || [], excellentRate: d.excellentRate || [] }
   } catch { /* ignore */ }
 }
 

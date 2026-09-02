@@ -100,6 +100,7 @@ export async function fetchWarnings(query: AnalysisQuery & {
   type?: string
   status?: number
   teacherId?: number
+  studentNo?: string
 }): Promise<WarningRecord[]> {
   try {
     const res = await request.get('/v1/analysis/warnings', {
@@ -107,7 +108,9 @@ export async function fetchWarnings(query: AnalysisQuery & {
         course_id: query.courseId,
         class_id: query.classId,
         level: query.level,
+        warning_type: query.type,
         status: query.status,
+        student_no: query.studentNo,
       },
     })
     return res.data
@@ -124,7 +127,15 @@ export async function updateWarningStatus(
   const res = await request.put(`/v1/analysis/warnings/${warningId}/status`, null, {
     params: { status },
   })
-  return res.data
+  return res.data as WarningRecord
+}
+
+/** 手动刷新课程预警列表 */
+export async function refreshWarnings(params: { courseId: number; classId?: number }): Promise<{ message: string }> {
+  const res = await request.post('/v1/analysis/warnings/refresh', null, {
+    params: { course_id: params.courseId, class_id: params.classId },
+  })
+  return res.data as { message: string }
 }
 
 /** 向预警学生发送站内通知（学生端铃铛可见） */
@@ -132,7 +143,7 @@ export async function sendWarningNotice(
   warningId: number,
 ): Promise<{ notificationId: number; studentName: string; message: string }> {
   const res = await request.post(`/v1/analysis/warnings/${warningId}/notify`)
-  return res.data
+  return res.data as { notificationId: number; studentName: string; message: string }
 }
 
 /** 获取成绩预测列表 */

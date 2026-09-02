@@ -238,9 +238,36 @@ def _check_w3_attendance(
 def _check_w4_homework(
     session: Session, student_id: int, course_id: int
 ) -> list[WarningHit]:
-    """W4 作业未提交（已禁用）。"""
-    return []  # disabled
+    """W4 作业未提交：InteractionRecord.type=3 表示作业提交。"""
+    course_students = session.exec(
+        select(CourseStudent.student_id).where(CourseStudent.course_id == course_id)
+    ).all()
+    if not course_students:
+        return []
 
+    submit_counts: dict[int, int] = {}
+    for sid in course_students:
+        count = session.exec(
+            select(InteractionRecord).where(
+                InteractionRecord.student_id == sid,
+                InteractionRecord.course_id == course_id,
+                InteractionRecord.type == 3,
+            )
+        ).all()
+        submit_counts[sid] = len(count)
+
+    expected = max(submit_counts.values()) if submit_counts else 0
+    if expected <= 0:
+        return []
+
+    submitted = submit_counts.get(student_id, 0)
+    missing = expected - submitted
+    if missing >= WARNING_CONFIG["w4_miss_hw"]:
+        return [WarningHit(
+            rule="W4", level="低",
+            reason=f"作业未提交 {missing} 次（应交 {expected} 次，已交 {submitted} 次）",
+        )]
+    return []
 
 def _check_w5_mastery(
     session: Session, student_id: int, course_id: int, weak_count: int

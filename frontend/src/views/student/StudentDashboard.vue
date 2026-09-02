@@ -95,15 +95,8 @@ const scoreBarOption = computed<EChartsOption>(() => ({
       barWidth: 28,
       itemStyle: { color: '#2563eb', borderRadius: [6, 6, 0, 0] },
     },
-    {
-      name: '班级均分',
-      type: 'bar',
-      data: courses.value.map((c) => c.avgScore),
-      barWidth: 28,
-      itemStyle: { color: '#94a3b8', borderRadius: [6, 6, 0, 0] },
-    },
   ],
-  legend: { top: 0, textStyle: { color: '#64748b' } },
+  legend: { show: false },
   grid: { left: 50, right: 20, top: 40, bottom: 30 },
 }))
 
@@ -153,7 +146,6 @@ onMounted(async () => {
       trendMonths.value = trendRes.data.months
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     } else if (trendRes.data?.labels) {
-      // 兼容 mock 数据格式
       trendMonths.value = trendRes.data.labels
       trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
     }

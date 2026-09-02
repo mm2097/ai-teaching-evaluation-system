@@ -12,12 +12,40 @@ from app.models import (
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult, EvalDimension,
     SysUser, Teacher, SysRole,
     IndividualScore, CourseTestDetail, ExamBatch,
+    AttendanceSheet, ParticipationSheet,
 )
 from app.services.predict import predict_student_scores
 from app.services.mastery import compute_assignment_accuracy_index, compute_mastery_index_with_fallback
 from app.services.warning import scan_course_warnings, persist_warnings
+from app.services.profile import compute_profile
 
 router = APIRouter()
+
+# 学情雷达图五轴（成绩/考勤/互动/进步/综合，满分 100）
+RADAR_INDICATORS: list[dict] = [
+    {"name": "成绩", "max": 100},
+    {"name": "考勤", "max": 100},
+    {"name": "互动", "max": 100},
+    {"name": "进步", "max": 100},
+    {"name": "综合", "max": 100},
+]
+
+
+def _build_radar_values(
+    academic: float,
+    attendance_rate: float,
+    participation_rate: float,
+    progress: float,
+    comprehensive: float,
+) -> list[float]:
+    """组装雷达五轴数值（与 RADAR_INDICATORS 顺序一致）。"""
+    return [
+        round(academic, 1),
+        round(attendance_rate * 100.0, 1),
+        round(participation_rate * 100.0, 1),
+        round(progress, 1),
+        round(comprehensive, 1),
+    ]
 
 
 def _compute_knowledge_loss_rates(
@@ -187,6 +215,7 @@ def _check_course_access(
 def get_student_profile(
     student_id: int = Query(...),
     course_id: int | None = Query(default=None),
+    class_id: int | None = Query(default=None, description="班级视角：返回班级平均画像（平均到课率/平均参与度等）"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict | None:
@@ -195,7 +224,12 @@ def get_student_profile(
     权限（Analysis.Profile.UserValid）：
     - 任课教师仅可查看自己授课课程内的学生画像
     - 学生仅可查看自己的画像
+    班级视角（class_id 非空）：仅任课教师，返回班级平均雷达。
     """
+    # ── 班级视角 ──
+    if class_id is not None:
+        return _get_class_profile(session, class_id, course_id, current_user)
+
     _check_profile_access(current_user, student_id, course_id, session)
 
     stmt = select(StudentProfile).where(StudentProfile.student_id == student_id)
@@ -240,23 +274,139 @@ def get_student_profile(
 
     tags = [t.strip() for t in (profile.study_tags or "").split(",") if t.strip()]
 
+    # 雷达五轴：实时计算，保证上传考勤/课堂参与后立即同步到雷达图
+    computed = compute_profile(session, student_id, profile.course_id)
+    comprehensive = (
+        eval_result.total_score if eval_result is not None
+        else profile.total_profile_score
+    )
+
     return {
+        "viewType": "student",
         "studentId": student_id,
         "studentNo": student.student_no if student else "",
         "studentName": student.real_name if student else "",
         "className": cls.class_name if cls else "",
         "courseName": course.course_name if course else "",
         "tags": tags,
-        "radarValues": [
-            profile.academic_score,
-            profile.attitude_score,
-            profile.progress_score,
-            dim_scores[0]["score"] if dim_scores else 0,
-            dim_scores[1]["score"] if len(dim_scores) > 1 else 0,
-        ],
+        "radarIndicators": RADAR_INDICATORS,
+        "radarValues": _build_radar_values(
+            computed.academic_score,
+            computed.attendance_rate,
+            computed.participation_rate,
+            computed.progress_score,
+            comprehensive,
+        ),
         "dimensionScores": dim_scores,
         "strongPoints": profile.good_modules or "",
         "weakPoints": profile.weak_modules or "",
+    }
+
+
+def _get_class_profile(
+    session: Session,
+    class_id: int,
+    course_id: int | None,
+    current_user: SysUser,
+) -> dict | None:
+    """班级视角画像：返回班级平均雷达（平均到课率、平均课堂参与度等）。
+
+    权限：仅任课教师可查看自己授课课程的班级画像。
+    """
+    if course_id is None:
+        raise HTTPException(status_code=400, detail="班级视角必须指定课程")
+
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
+    if role_code != "teacher":
+        raise HTTPException(status_code=403, detail="仅任课教师可查看班级学情画像")
+    teacher = session.exec(
+        select(Teacher).where(Teacher.user_id == current_user.user_id)
+    ).first()
+    if not teacher:
+        raise HTTPException(status_code=403, detail="当前账号未关联教师信息")
+    course = session.get(Course, course_id)
+    if not course or course.teacher_id != teacher.teacher_id:
+        raise HTTPException(status_code=403, detail="仅授课教师可查看该课程画像")
+    cls = session.get(ClassInfo, class_id)
+    if not cls:
+        raise HTTPException(status_code=404, detail="班级不存在")
+
+    student_ids = session.exec(
+        select(CourseStudent.student_id)
+        .join(Student, CourseStudent.student_id == Student.student_id)
+        .where(CourseStudent.course_id == course_id, Student.class_id == class_id)
+    ).all()
+    if not student_ids:
+        return None
+
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+
+    # 学业水平/学习态度/学习进步：持久化画像平均
+    profiles = session.exec(
+        select(StudentProfile).where(
+            StudentProfile.course_id == course_id,
+            StudentProfile.student_id.in_(student_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    if profiles:
+        academic = sum(p.academic_score for p in profiles) / len(profiles)
+        attitude = sum(p.attitude_score for p in profiles) / len(profiles)
+        progress = sum(p.progress_score for p in profiles) / len(profiles)
+    else:
+        academic = attitude = progress = 75.0
+
+    # 到课率：新表平均（无数据基线 90%）
+    att_rates = session.exec(
+        select(AttendanceSheet.attendance_rate).where(
+            AttendanceSheet.student_id.in_(student_ids),  # type: ignore[arg-type]
+            AttendanceSheet.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    att_rates = [r for r in att_rates if r is not None]
+    attendance_rate = sum(att_rates) / len(att_rates) if att_rates else 0.9
+
+    # 课堂参与度：新表平均（无数据基线 90%）
+    part_rates = session.exec(
+        select(ParticipationSheet.participation_rate).where(
+            ParticipationSheet.student_id.in_(student_ids),  # type: ignore[arg-type]
+            ParticipationSheet.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    part_rates = [r for r in part_rates if r is not None]
+    participation_rate = sum(part_rates) / len(part_rates) if part_rates else 0.9
+
+    # 综合：评价总分平均 → 画像综合分平均兜底 → 态度分兜底
+    totals = session.exec(
+        select(StudentEvaluationResult.total_score).where(
+            StudentEvaluationResult.course_id == course_id,
+            StudentEvaluationResult.student_id.in_(student_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    if totals:
+        comprehensive = sum(totals) / len(totals)
+    elif profiles:
+        comprehensive = sum(p.total_profile_score for p in profiles) / len(profiles)
+    else:
+        comprehensive = attitude
+
+    return {
+        "viewType": "class",
+        "studentId": None,
+        "studentNo": "",
+        "studentName": f"{cls.class_name}（班级平均）",
+        "className": cls.class_name,
+        "courseName": course.course_name,
+        "tags": [],
+        "radarIndicators": RADAR_INDICATORS,
+        "radarValues": _build_radar_values(
+            academic, attendance_rate, participation_rate, progress, comprehensive,
+        ),
+        "dimensionScores": [],
+        "strongPoints": "",
+        "weakPoints": "",
     }
 
 

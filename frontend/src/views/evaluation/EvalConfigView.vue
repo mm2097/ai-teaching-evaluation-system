@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { InfoFilled } from '@element-plus/icons-vue'
 import { fetchCourses } from '@/api/dict'
 import {
   fetchEvalConfig,
@@ -21,6 +22,7 @@ import {
   buildScoreRuleJson,
   detectRulePreset,
   calcWeightSum,
+  isAutoFillOtherRule,
   SCORE_RULE_PRESETS,
   type EvalDimensionItem,
   type EvalIndexItem,
@@ -71,9 +73,17 @@ function setDraftWeight(dimId: number, indexId: number, weight: number): void {
 }
 
 function getDraftWeightSum(dim: EvalDimensionItem): number {
+  // 「其他」指标为自动补足值，不计入手工草稿权重
   return calcWeightSum(
-    dim.indexes.map((idx) => getDraftWeight(dim.dimensionId, idx.indexId, idx.weight)),
+    dim.indexes
+      .filter((idx) => !isAutoFillOtherRule(idx.scoreRule))
+      .map((idx) => getDraftWeight(dim.dimensionId, idx.indexId, idx.weight)),
   )
+}
+
+/** 「其他」指标自动补足值 = 100 − 其余指标草稿权重和（≥0） */
+function otherAutoWeight(dim: EvalDimensionItem): number {
+  return Math.max(0, 100 - getDraftWeightSum(dim))
 }
 
 function isWeightDirty(dim: EvalDimensionItem): boolean {
@@ -209,7 +219,7 @@ function openAddIndex(dim: EvalDimensionItem): void {
     indexId: 0,
     dimensionId: dim.dimensionId,
     indexName: '',
-    rulePreset: 'score_daily',
+    rulePreset: 'part_midterm',
   }
   indexDialogVisible.value = true
 }
@@ -297,9 +307,16 @@ async function handleDeleteIndex(dim: EvalDimensionItem, idx: EvalIndexItem): Pr
 
 async function handleSaveWeights(dim: EvalDimensionItem): Promise<void> {
   if (busy.value) return
+  const hasOther = dim.indexes.some((idx) => isAutoFillOtherRule(idx.scoreRule))
   const sum = getDraftWeightSum(dim)
-  if (sum > 100.01) {
-    ElMessage.warning(`权重合计 ${sum}%，须调整为 100% 后再保存`)
+  if (hasOther) {
+    // 存在「其他」自动补足指标：其余指标合计不超过 100 即可
+    if (sum > 100.01) {
+      ElMessage.warning(`其余指标权重合计 ${sum}%，超过 100%，请调整`)
+      return
+    }
+  } else if (Math.abs(sum - 100) >= 0.01) {
+    ElMessage.warning(`权重合计 ${sum}%，所有部分总占比必须为 100% 后再保存`)
     return
   }
   if (!isWeightDirty(dim)) {
@@ -332,7 +349,9 @@ async function handleSaveWeights(dim: EvalDimensionItem): Promise<void> {
 }
 
 function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
+  const hasOther = dim.indexes.some((idx) => isAutoFillOtherRule(idx.scoreRule))
   const sum = getDraftWeightSum(dim)
+  if (hasOther) return sum > 100.01 ? 'danger' : 'success'
   if (Math.abs(sum - 100) < 0.01) return 'success'
   if (sum > 100) return 'danger'
   return 'info'
@@ -370,7 +389,10 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
             <template #title>
               <div class="dim-title">
                 <span class="dim-name">{{ dim.dimensionName }}</span>
-                <el-tag :type="weightTagType(dim)" size="small" effect="plain">
+                <el-tag v-if="dim.indexes.some((i) => isAutoFillOtherRule(i.scoreRule))" :type="weightTagType(dim)" size="small" effect="plain">
+                  合计 100%（含「其他」自动补足）
+                </el-tag>
+                <el-tag v-else :type="weightTagType(dim)" size="small" effect="plain">
                   合计 {{ getDraftWeightSum(dim) }}%
                 </el-tag>
                 <el-tag v-if="isWeightDirty(dim)" type="warning" size="small" effect="plain">未保存</el-tag>
@@ -409,9 +431,10 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
 
               <el-table :data="dim.indexes" stripe border size="small" empty-text="暂无指标">
                 <el-table-column prop="indexName" label="指标" min-width="120" />
-                <el-table-column label="权重 (%)" width="150" align="center">
+                <el-table-column label="权重 (%)" width="170" align="center">
                   <template #default="{ row }">
                     <el-input-number
+                      v-if="!isAutoFillOtherRule(row.scoreRule)"
                       :model-value="getDraftWeight(dim.dimensionId, row.indexId, row.weight)"
                       :min="0"
                       :max="100"
@@ -423,6 +446,12 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
                         if (v !== undefined) setDraftWeight(dim.dimensionId, row.indexId, v)
                       }"
                     />
+                    <span v-else class="auto-weight">
+                      {{ otherAutoWeight(dim) }}%
+                      <el-tooltip content="「其他」占比自动 = 100% − 其余指标占比之和" placement="top">
+                        <el-icon style="vertical-align: -2px"><InfoFilled /></el-icon>
+                      </el-tooltip>
+                    </span>
                   </template>
                 </el-table-column>
                 <el-table-column label="数据来源" min-width="120">
@@ -503,6 +532,11 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
   margin: 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.auto-weight {
+  font-weight: 600;
+  color: #2563eb;
 }
 
 .dim-list {

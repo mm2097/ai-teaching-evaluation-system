@@ -67,13 +67,14 @@ class TestPredict:
 
 class TestProfile:
     def test_academic_score(self, session):
-        """D02 学业水平（Z-score 标准化）。"""
+        """D02 学业水平（课程考核构成配比加权：小班讨论/期中/期末/考勤/其他）。"""
         from app.services.profile import compute_academic_score
         score = compute_academic_score(session, student_id=1, course_id=1)
         assert 0 <= score <= 100
-        # Z-score 测量相对位置（近期权重高），张三前两次高于均值
-        # 结果应在合理范围内
-        assert 60 <= score <= 85
+        # 张三：期中55（配比30）+ 考勤25（到课率25%×100，配比10）+ 其他(作业1/2均分80，配比20）；
+        # 无期末/小班讨论数据 → 有数据部分按配比归一化：
+        # (55*30 + 25*10 + 80*20) / 60 = 58.3
+        assert abs(score - 58.3) < 0.1
 
     def test_attitude_score(self, session):
         """D03 学习态度。"""
@@ -248,12 +249,12 @@ class TestEvaluation:
         interaction_heavy = compute_evaluation(session, student_id=2, course_id=1)
         assert attendance_heavy.dimensions["attitude"] != interaction_heavy.dimensions["attitude"]
         assert attendance_heavy.total_score != interaction_heavy.total_score
-    def test_interaction_records_feed_attitude_score(self, session):
-        """学习态度互动项应使用 InteractionRecord，而不是固定常量。"""
-        from datetime import date
-        from app.models import InteractionRecord
+    def test_participation_feeds_attitude_score(self, session):
+        """学习态度互动项应使用课堂参与度（ParticipationSheet），而不是固定常量。"""
+        from app.models import ParticipationSheet
         from app.services.profile import compute_attitude_score
 
+        # 无参与记录：互动分走基线 0.9 → 90 分
         low_score, low_detail = compute_attitude_score(
             session,
             student_id=1,
@@ -262,13 +263,9 @@ class TestEvaluation:
             w_interaction=1.0,
             w_homework=0.0,
         )
-        session.add(InteractionRecord(
-            course_id=1,
-            student_id=1,
-            interaction_date=date(2024, 12, 1),
-            type=1,
-            score=100,
-            create_by=1,
+        # 加一条低参与度记录（batch_id=1 已在 conftest 创建）
+        session.add(ParticipationSheet(
+            student_id=1, exam_batch_id=1, participation_rate=0.5, create_by=1,
         ))
         session.commit()
 
@@ -280,8 +277,9 @@ class TestEvaluation:
             w_interaction=1.0,
             w_homework=0.0,
         )
-        assert high_detail["interaction_count"] == low_detail["interaction_count"] + 1
-        assert high_score > low_score
+        # 有参与记录后互动分 = 0.5×100 = 50，低于基线 90
+        assert high_detail["interaction_score"] == 50.0
+        assert high_score < low_score
 
 # ===== D12 去重 =====
 

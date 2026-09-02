@@ -33,7 +33,7 @@ from app.models import (
     StudentEvaluationResult,
 )
 from app.services.mastery import compute_student_mastery
-from app.services.profile import compute_profile
+from app.services.profile import _academic_part_score, compute_profile
 
 
 DEFAULT_WEIGHTS = {
@@ -134,6 +134,11 @@ def _score_for_rule(
 ) -> float:
     """Resolve one configured indicator to a 0-100 score."""
     rule_type = str(rule.get("type", "")).strip().lower()
+    if rule_type == "academic_part":
+        # 学业水平组成部分（小班讨论/期中/期末/考勤/其他），按批次名称关键字取分
+        part = str(rule.get("part", "")).strip().lower()
+        value = _academic_part_score(session, student_id, course_id, part)
+        return float(value) if value is not None else fallback
     if rule_type == "direct":
         batch_type = rule.get("batch_type")
         if not isinstance(batch_type, int):
@@ -175,7 +180,7 @@ def _score_for_rule(
     if rule_type == "attendance":
         return float(profile.attendance_rate) * 100.0
     if rule_type == "interaction":
-        return min(100.0, float(profile.interaction_count) * 10.0)
+        return float(profile.participation_rate) * 100.0
     if rule_type == "homework":
         return float(profile.homework_rate) * 100.0
     if rule_type == "progress":
@@ -312,15 +317,24 @@ def persist_evaluation(
     session.commit()
     session.refresh(er)
 
+    # 维度分映射（名称匹配，兼容「学业成绩」/「学业水平」两种命名）
     name_to_dim = {d.dimension_name: d for d in dims}
+
+    def _find_dim(*names: str) -> EvalDimension | None:
+        for n in names:
+            d = name_to_dim.get(n)
+            if d:
+                return d
+        return None
+
     mapping = [
-        ("学业成绩", result.dimensions["academic"]),
-        ("学习态度", result.dimensions["attitude"]),
-        ("学习进步", result.dimensions["progress"]),
-        ("知识掌握", result.dimensions["mastery"]),
+        (("学业成绩", "学业水平"), result.dimensions["academic"]),
+        (("学习态度",), result.dimensions["attitude"]),
+        (("学习进步",), result.dimensions["progress"]),
+        (("知识掌握",), result.dimensions["mastery"]),
     ]
-    for name, score in mapping:
-        d = name_to_dim.get(name)
+    for names, score in mapping:
+        d = _find_dim(*names)
         if not d:
             continue
         session.add(EvalDimensionScore(

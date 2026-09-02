@@ -4,6 +4,7 @@
   1. 课程测试各题扣分情况 → ExamBatch + CourseTestDetail + 知识点自动创建
   2. 单项成绩             → ExamBatch + IndividualScore
   3. 成绩考勤情况         → ExamBatch + AttendanceSheet
+  4. 课堂参与情况         → ExamBatch + ParticipationSheet
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from app.models import (
     IndividualScore,
     KnowledgeModule,
     KnowledgePoint,
+    ParticipationSheet,
     Student,
     SysUser,
 )
@@ -101,10 +103,25 @@ TEMPLATE_ATTENDANCE = TemplateDef(
     numeric_fields=[],
 )
 
+# 模板4：课堂参与情况
+TEMPLATE_PARTICIPATION = TemplateDef(
+    template_id="participation",
+    name="课堂参与情况",
+    match_headers=["学号", "课堂1", "课堂2", "课堂3"],
+    all_headers=[
+        "编号", "课程号", "课程名称", "学期", "学号", "姓名",
+        *[f"课堂{i}" for i in range(1, 33)],
+        "课堂总数", "课堂参与度",
+    ],
+    required_fields=["学号", "姓名"],
+    numeric_fields=["课堂总数", "课堂参与度"],
+)
+
 ALL_TEMPLATES: list[TemplateDef] = [
     TEMPLATE_EXAM_DEDUCTION,
     TEMPLATE_SIMPLE_SCORE,
     TEMPLATE_ATTENDANCE,
+    TEMPLATE_PARTICIPATION,
 ]
 
 
@@ -956,6 +973,117 @@ def _update_attendance_sheet(
     sheet.update_time = datetime.now()
 
 
+def _import_participation(
+    session: Session,
+    sheet_data: dict[str, list[dict[str, Any]]],
+    course_id: int,
+    create_by: int,
+    tmpl: TemplateDef,
+) -> ImportResult:
+    """导入课堂参与情况 → ParticipationSheet。
+
+    每位学生一行，包含 32 次课堂参与槽位（是/否）+ 课堂总数 + 课堂参与度。
+    """
+    result = ImportResult(detected_template=tmpl.name)
+
+    # 收集所有行
+    all_rows: list[dict[str, Any]] = []
+    for sheet_name, rows in sheet_data.items():
+        result.sheets_processed.append(sheet_name)
+        all_rows.extend(rows)
+
+    semester = _extract_semester(all_rows)
+
+    # 课堂参与批次名称
+    course = session.get(Course, course_id)
+    if not semester:
+        semester = course.semester if course else ""
+    batch_name = f"课堂参与情况" if not course else f"{course.course_name}-课堂参与情况"
+
+    batch = _get_or_create_exam_batch(
+        session, course_id, batch_name,
+        batch_type=6, semester=semester, create_by=create_by,
+        batch_weight=5.0,  # 课堂参与默认权重
+    )
+
+    for sheet_name, rows in sheet_data.items():
+        for row_data in rows:
+            excel_row = row_data.get("_excel_row", 0)
+
+            errors = validate_row(row_data, tmpl, sheet_name, excel_row)
+            if errors:
+                result.errors.extend(errors)
+                result.error_count += len(errors)
+                continue
+
+            student_no = str(row_data.get("学号", "")).strip()
+            student = _get_student_by_no(session, student_no)
+            if not student:
+                result.errors.append(ImportError(
+                    sheet=sheet_name, row=excel_row, field="学号",
+                    message=f"学号「{student_no}」在系统中不存在",
+                ))
+                result.error_count += 1
+                continue
+
+            _ensure_course_student(session, course_id, student.student_id)
+
+            source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            source_json = json.dumps(source, ensure_ascii=False, default=str)
+
+            # 解析 32 次课堂参与
+            part_values: list[str | None] = []
+            for i in range(1, 33):
+                col_name = f"课堂{i}"
+                part_val = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
+                part_values.append(part_val if part_val else None)
+
+            # 课堂总数/参与度缺失（Excel 公式未计算）时，从槽位自动推导
+            total_count = _safe_int(row_data.get("课堂总数"))
+            part_rate = _safe_float(row_data.get("课堂参与度"))
+            if total_count is None:
+                total_count = len([v for v in part_values if v])
+            if part_rate is None and total_count:
+                yes_count = sum(1 for v in part_values if v == "是")
+                part_rate = round(yes_count / total_count, 4)
+
+            # Upsert
+            existing = session.exec(
+                select(ParticipationSheet).where(
+                    ParticipationSheet.student_id == student.student_id,
+                    ParticipationSheet.exam_batch_id == batch.batch_id,
+                )
+            ).first()
+
+            if existing:
+                existing.total_count = total_count
+                existing.participation_rate = part_rate
+                existing.source_data = source_json
+                existing.update_time = datetime.now()
+                for i, val in enumerate(part_values, start=1):
+                    setattr(existing, f"participation_{i}", val)
+                session.add(existing)
+            else:
+                sheet = ParticipationSheet(
+                    student_id=student.student_id,
+                    exam_batch_id=batch.batch_id,
+                    total_count=total_count,
+                    participation_rate=part_rate,
+                    source_data=source_json,
+                    create_by=create_by,
+                )
+                for i, val in enumerate(part_values, start=1):
+                    setattr(sheet, f"participation_{i}", val)
+                session.add(sheet)
+
+            result.success_count += 1
+
+        # 每个 Sheet 处理完毕后统一提交，减少数据库事务次数
+        session.commit()
+
+    return result
+
+
 # ============================================================================
 # 导入调度
 # ============================================================================
@@ -964,6 +1092,7 @@ IMPORT_HANDLERS: dict[str, Callable] = {
     TEMPLATE_EXAM_DEDUCTION.template_id: _import_exam_deduction,
     TEMPLATE_ATTENDANCE.template_id: _import_attendance,
     TEMPLATE_SIMPLE_SCORE.template_id: _import_simple_score,
+    TEMPLATE_PARTICIPATION.template_id: _import_participation,
 }
 
 
@@ -1136,6 +1265,23 @@ TEMPLATE_META: list[dict[str, Any]] = [
             None, None, None, None, None, None,
         ],
         "instruction": "填写说明：①考勤列填「到」「缺」「请假」「迟到」「早退」之一；②考勤总数、到课数、请假数、早退数、迟到数、到课率为Excel公式自动计算，请勿手动填写。",
+    },
+    {
+        "template_id": TEMPLATE_PARTICIPATION.template_id,
+        "name": "课堂参与情况",
+        "dataType": "课堂参与",
+        "description": "导入课程课堂参与记录，每位学生32次课的课堂参与状态（是/否）与课堂参与度。",
+        "headers": [
+            "编号", "课程号", "课程名称", "学期", "学号", "姓名",
+            *[f"课堂{i}" for i in range(1, 33)],
+            "课堂总数", "课堂参与度",
+        ],
+        "example": [
+            1, "CS101", "计算机网络", "2025-2026-1", "2024001001", "赵伟",
+            *(["是"] * 30), *(["否"] * 2),
+            32, 0.9375,
+        ],
+        "instruction": "填写说明：①课堂列填「是」（参与）或「否」（未参与）；②课堂总数与课堂参与度为Excel公式自动计算，请勿手动填写。",
     },
 ]
 

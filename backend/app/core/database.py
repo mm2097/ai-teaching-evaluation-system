@@ -23,6 +23,7 @@ def init_db() -> None:
     _migrate_ai_question()
     _migrate_legacy_tables()
     _migrate_academic_parts()
+    _migrate_student_answers()
 
 
 def _migrate_academic_parts() -> None:
@@ -107,6 +108,62 @@ def _migrate_academic_parts() -> None:
                     score_rule=json.dumps({"type": "academic_part", "part": part}, ensure_ascii=False),
                 ))
             session.commit()
+
+
+def _migrate_student_answers() -> None:
+    """答题记录历史数据修复（幂等，每次启动自动执行）。
+
+    - 早期版本反复执行 seed --inject-analysis 会为同一
+      (task, student, question) 积累多份重复答题记录，界面得分按记录
+      求和会被放大 → 每人每题仅保留最新（answer_id 最大）的一条。
+    - 旧种子数据每题按 5 分制存储（5/2/0），与界面 100 分制满分不一致
+      → 对"每行分数只可能是 0/2/5 且存在满分 5"的任务，
+        按 100/题数 换算为 100 分制。
+    """
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "student_answer_record" not in inspector.get_table_names():
+            return
+
+        # 1) 去重：同一 (task, student, question) 只保留最新一条
+        connection.execute(text(
+            """
+            DELETE FROM student_answer_record
+            WHERE answer_id NOT IN (
+                SELECT MAX(answer_id)
+                FROM student_answer_record
+                GROUP BY task_id, student_id, question_id
+            )
+            """
+        ))
+
+        # 2) 旧 5 分制任务换算为 100 分制
+        task_rows = connection.execute(text(
+            """
+            SELECT sar.task_id,
+                   (SELECT COUNT(*) FROM task_question tq
+                    WHERE tq.task_id = sar.task_id) AS q_count
+            FROM student_answer_record sar
+            GROUP BY sar.task_id
+            """
+        )).all()
+        for task_id, q_count in task_rows:
+            if not q_count:
+                continue
+            distinct_scores = {
+                row[0] for row in connection.execute(text(
+                    "SELECT DISTINCT score FROM student_answer_record WHERE task_id = :tid"
+                ), {"tid": task_id}).all()
+            }
+            # 5 分制特征：所有分数只可能是 0/2/5，且至少存在一个满分 5
+            if not distinct_scores or distinct_scores - {0.0, 2.0, 5.0}:
+                continue
+            factor = (100.0 / q_count) / 5.0
+            if factor == 1.0:
+                continue
+            connection.execute(text(
+                "UPDATE student_answer_record SET score = score * :factor WHERE task_id = :tid"
+            ), {"factor": factor, "tid": task_id})
 
 
 def _migrate_ai_question() -> None:

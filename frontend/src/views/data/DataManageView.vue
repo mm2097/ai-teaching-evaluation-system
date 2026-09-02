@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords, createInteractionRecord } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -366,66 +366,6 @@ function filterByCurrentFile(): void {
   query.value.sourceFile = query.value.sourceFile === 'current' ? '' : 'current'
 }
 
-// --------------------------------------------------------------------------
-// 课堂互动打分
-// --------------------------------------------------------------------------
-const interactionVisible = ref(false)
-const interactionSubmitting = ref(false)
-const interactionFormRef = ref()
-const interactionForm = ref({
-  studentId: undefined as number | undefined,
-  interactionType: 1,
-  score: 80,
-  interactionDate: '',
-  remark: '',
-})
-const interactionRules = {
-  studentId: [{ required: true, message: '请选择学生', trigger: 'change' }],
-  interactionType: [{ required: true, message: '请选择互动类型', trigger: 'change' }],
-  score: [{ required: true, message: '请输入得分', trigger: 'blur' }],
-}
-const courseNameLabel = computed(() => {
-  const c = courses.value.find((x) => x.id === courseId.value)
-  return c?.courseName || `课程ID ${courseId.value || '?'}`
-})
-
-function openInteractionDialog(): void {
-  if (!courseId.value) {
-    ElMessage.warning('请先选择课程')
-    return
-  }
-  interactionForm.value = {
-    studentId: undefined,
-    interactionType: 1,
-    score: 80,
-    interactionDate: '',
-    remark: '',
-  }
-  interactionVisible.value = true
-}
-
-async function submitInteraction(): Promise<void> {
-  if (!interactionFormRef.value) return
-  await interactionFormRef.value.validate()
-  interactionSubmitting.value = true
-  try {
-    await createInteractionRecord({
-      courseId: courseId.value!,
-      studentId: interactionForm.value.studentId!,
-      interactionType: interactionForm.value.interactionType,
-      score: interactionForm.value.score,
-      interactionDate: interactionForm.value.interactionDate || undefined,
-      remark: interactionForm.value.remark || undefined,
-    })
-    ElMessage.success('互动打分已记录')
-    interactionVisible.value = false
-    await loadTeachingData()
-  } catch {
-    // 错误提示由 request 拦截器处理
-  } finally {
-    interactionSubmitting.value = false
-  }
-}
 </script>
 
 <template>
@@ -482,7 +422,6 @@ async function submitInteraction(): Promise<void> {
           </el-button>
           <el-button type="danger" :icon="Delete" plain @click="handleBatchDelete">批量删除</el-button>
           <el-button type="primary" :icon="Download" :loading="exporting" @click="handleExport">导出 Excel</el-button>
-          <el-button type="warning" plain @click="openInteractionDialog">课堂互动打分</el-button>
         </div>
       </div>
 
@@ -603,45 +542,6 @@ async function submitInteraction(): Promise<void> {
       </template>
     </el-dialog>
 
-    <!-- 课堂互动打分弹窗 -->
-    <el-dialog v-model="interactionVisible" title="课堂互动打分" width="520px" destroy-on-close>
-      <el-form :model="interactionForm" label-width="90px" ref="interactionFormRef" :rules="interactionRules">
-        <el-form-item label="课程">
-          <span>{{ courseNameLabel }}</span>
-        </el-form-item>
-        <el-form-item label="学生" prop="studentId">
-          <el-select v-model="interactionForm.studentId" filterable placeholder="选择学生" style="width: 100%">
-            <el-option
-              v-for="s in studentPickerOptions"
-              :key="s.id"
-              :label="`${s.name}（${s.id}）`"
-              :value="Number(s.id)"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="互动类型" prop="interactionType">
-          <el-select v-model="interactionForm.interactionType" style="width: 100%">
-            <el-option :value="1" label="课堂提问" />
-            <el-option :value="2" label="小组讨论" />
-            <el-option :value="4" label="课堂测验" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="得分" prop="score">
-          <el-input-number v-model="interactionForm.score" :min="0" :max="100" :step="1" style="width: 100%" />
-          <span style="color: #94a3b8; font-size: 12px; margin-left: 8px">0-100</span>
-        </el-form-item>
-        <el-form-item label="日期">
-          <el-date-picker v-model="interactionForm.interactionDate" type="date" value-format="YYYY-MM-DD" placeholder="默认今天" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="interactionForm.remark" maxlength="100" placeholder="如：回答准确" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="interactionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="interactionSubmitting" @click="submitInteraction">提交</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

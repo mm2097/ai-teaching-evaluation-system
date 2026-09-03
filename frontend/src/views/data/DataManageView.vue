@@ -9,7 +9,7 @@ import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
 import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords } from '@/api/teachingData'
+import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords, clearTeachingDataByType } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -335,6 +335,33 @@ async function handleBatchDelete(): Promise<void> {
   }
 }
 
+/** 一键清空当前课程某一数据类型的全部记录（需先在筛选栏选择数据类型） */
+async function handleClearAll(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  if (!query.value.dataType) {
+    ElMessage.warning('请先在「数据类型」筛选中选择要清空的类型（成绩/考勤/课堂参与）')
+    return
+  }
+  const typeName = dataTypeLabels[query.value.dataType]
+  const courseName = courseOptions.value.find((c) => c.value === courseId.value)?.label || ''
+  await ElMessageBox.confirm(
+    `将删除课程「${courseName}」的全部「${typeName}」数据（含各考核批次下的记录），该操作不可恢复，是否继续？`,
+    '清空确认',
+    { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' },
+  )
+  try {
+    const { deleted } = await clearTeachingDataByType(courseId.value, query.value.dataType)
+    selectedRows.value = []
+    ElMessage.success(`已清空「${typeName}」数据（${deleted} 条）`)
+    await loadTeachingData()
+  } catch {
+    ElMessage.error('清空失败，请稍后重试')
+  }
+}
+
 // --------------------------------------------------------------------------
 // 详情弹窗
 // --------------------------------------------------------------------------
@@ -466,6 +493,7 @@ function filterByCurrentFile(): void {
             {{ dataFlowStore.currentImportLog.fileName }}
           </el-button>
           <el-button type="danger" :icon="Delete" plain @click="handleBatchDelete">批量删除</el-button>
+          <el-button type="danger" :icon="Delete" plain @click="handleClearAll">清空全部</el-button>
           <el-button type="primary" :icon="Download" :loading="exporting" @click="handleExport">导出 Excel</el-button>
         </div>
       </div>

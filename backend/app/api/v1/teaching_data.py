@@ -20,7 +20,7 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Qu
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
-from sqlalchemy import or_
+from sqlalchemy import delete, or_
 
 import logging
 
@@ -878,6 +878,77 @@ def batch_delete_teaching_data(
             client_ip,
         )
     return {"deleted": len(normalized)}
+
+
+@router.post("/teaching-data/clear", tags=["教学数据"])
+def clear_teaching_data(
+    payload: dict = Body(...),
+    request: Request = None,  # type: ignore[assignment]
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """一键清空课程下某一数据类型的全部记录（Data.Query.Delete 的批量版）。
+
+    data_type 对应删除范围：
+      score         → ScoreRecord / IndividualScore / CourseTestDetail
+      attendance    → AttendanceRecord / AttendanceSheet
+      participation → ParticipationSheet
+    考核批次（ExamBatch）保留，重新导入同名文件时可复用（按 course+name+semester 去重）；
+    删除完成后后台刷新课程分析缓存（画像/掌握度/评价/预警），并写入一条汇总操作日志。
+    """
+    course_id = payload.get("courseId") if isinstance(payload, dict) else None
+    data_type = payload.get("dataType") if isinstance(payload, dict) else None
+    if not isinstance(course_id, int):
+        raise HTTPException(status_code=422, detail="courseId 必须为整数")
+    if data_type not in ("score", "attendance", "participation"):
+        raise HTTPException(
+            status_code=422,
+            detail="dataType 必须为 score / attendance / participation",
+        )
+
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    _require_teacher_for_course(current_user, course_id, session)
+
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+
+    def _bulk_delete(model: Any, where: Any) -> int:
+        return int(session.execute(delete(model).where(where)).rowcount or 0)
+
+    if data_type == "score":
+        deleted = _bulk_delete(ScoreRecord, ScoreRecord.course_id == course_id)
+        if batch_ids:
+            deleted += _bulk_delete(IndividualScore, IndividualScore.exam_batch_id.in_(batch_ids))  # type: ignore[arg-type]
+            deleted += _bulk_delete(CourseTestDetail, CourseTestDetail.exam_batch_id.in_(batch_ids))  # type: ignore[arg-type]
+        label = "成绩"
+    elif data_type == "attendance":
+        deleted = _bulk_delete(AttendanceRecord, AttendanceRecord.course_id == course_id)
+        if batch_ids:
+            deleted += _bulk_delete(AttendanceSheet, AttendanceSheet.exam_batch_id.in_(batch_ids))  # type: ignore[arg-type]
+        label = "考勤"
+    else:
+        deleted = 0
+        if batch_ids:
+            deleted += _bulk_delete(ParticipationSheet, ParticipationSheet.exam_batch_id.in_(batch_ids))  # type: ignore[arg-type]
+        label = "课堂参与"
+
+    session.commit()
+
+    if request is not None:
+        save_operation_log(
+            session,
+            current_user.user_id,
+            "教学数据",
+            "清空数据",
+            f"清空{label}数据（课程：{course.course_name}，课程ID：{course_id}，共 {deleted} 条）",
+            get_client_ip(request),
+        )
+
+    _refresh_analysis_in_background(course_id)
+    return {"deleted": deleted, "dataType": data_type}
 
 
 @router.get("/teaching-data/export", tags=["教学数据"])

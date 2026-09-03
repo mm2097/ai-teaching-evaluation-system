@@ -186,6 +186,15 @@ export async function batchDeleteTeachingDataRecords(
   return res.data as { deleted: number }
 }
 
+/** 一键清空当前课程某一数据类型的全部记录（成绩/考勤/课堂参与，后端按类型删除对应各表） */
+export async function clearTeachingDataByType(
+  courseId: number,
+  dataType: 'score' | 'attendance' | 'participation',
+): Promise<{ deleted: number }> {
+  const res = await request.post('/v1/teaching-data/clear', { courseId, dataType })
+  return res.data as { deleted: number }
+}
+
 /**
  * 导出教学数据为 Excel 文件（Data.Query.Export，后端生成）。
  *

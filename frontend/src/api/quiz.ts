@@ -302,6 +302,14 @@ export async function closeQuizAssignment(id: number): Promise<void> {
   await request.post(`/v1/answer-tasks/${id}/close`)
 }
 
+/** 删除练习任务（教师端与学生端一并清除，含答题记录） */
+export async function deleteQuizAssignment(
+  id: number,
+): Promise<{ id: number; deletedRecords: number; message: string }> {
+  const { data } = await request.delete(`/v1/answer-tasks/${id}`)
+  return data
+}
+
 /** 修改查看权限（发布前后均可） */
 export async function updateReviewPolicy(
   id: number,

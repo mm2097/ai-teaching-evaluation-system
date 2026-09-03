@@ -12,6 +12,7 @@ from app.models import (
     AnswerTask,
     AnswerTaskClass,
     ClassInfo,
+    KnowledgeMastery,
     Student,
     StudentAnswerRecord,
     SysUser,
@@ -808,3 +809,199 @@ def test_distribute_question_types_single_batch_unchanged():
         "judge": 1,
         "fill_blank": 1,
     }
+
+
+# ===== 删除答题任务 =====
+# 使用独立内存库（函数级隔离），避免删除操作污染共享种子数据
+# （其他测试文件依赖任务 1/2，且本组用例之间存在删除顺序依赖）。
+
+@pytest.fixture
+def delete_engine():
+    from sqlalchemy.pool import StaticPool
+    from sqlmodel import SQLModel, create_engine, Session as SqlSession
+
+    eng = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(eng)
+
+    from datetime import datetime as _dt
+    from app.models import (
+        Course, CourseStudent, KnowledgeMastery, KnowledgeModule, KnowledgePoint,
+        Student, SysRole, SysUser, Teacher,
+    )
+
+    with SqlSession(eng) as s:
+        s.add(SysRole(role_id=1, role_name="教师", role_code="teacher"))
+        s.add(SysRole(role_id=2, role_name="学生", role_code="student"))
+        s.add(SysUser(user_id=1, username="teacher", password="x", real_name="王老师", role_id=1, status=1))
+        s.add(SysUser(user_id=2, username="s1", password="x", real_name="张三", role_id=2, status=1))
+        s.add(Teacher(teacher_id=1, teacher_no="T001", real_name="王老师", user_id=1,
+                      college="计算机学院"))
+        s.add(ClassInfo(class_id=1, class_name="计科2401", college="计算机学院"))
+        s.add(Course(course_id=1, course_code="CS101", course_name="数据结构",
+                     teacher_id=1, semester="2024-2025-1", college="计算机学院"))
+        s.add(Student(student_id=1, student_no="2024001", real_name="张三", class_id=1, user_id=2))
+        s.add(Student(student_id=2, student_no="2024002", real_name="李四", class_id=1, user_id=3))
+        s.add(Student(student_id=3, student_no="2024003", real_name="王五", class_id=1, user_id=4))
+        for sid in (1, 2, 3):
+            s.add(CourseStudent(course_id=1, student_id=sid))
+        s.add(KnowledgeModule(module_id=1, course_id=1, module_name="树结构"))
+        s.add(KnowledgePoint(point_id=1, module_id=1, point_name="二叉树"))
+        s.add(KnowledgePoint(point_id=2, module_id=1, point_name="红黑树"))
+        # 题库题目：q1/q2 同属知识点1，q3 属知识点2
+        s.add(AiQuestion(question_id=1, course_id=1, point_id=1, type=1,
+                          content="Q1", correct_answer="A", create_by=1))
+        s.add(AiQuestion(question_id=2, course_id=1, point_id=1, type=1,
+                          content="Q2", correct_answer="B", create_by=1))
+        s.add(AiQuestion(question_id=3, course_id=1, point_id=2, type=1,
+                          content="Q3", correct_answer="A", create_by=1))
+        s.add(AnswerTask(task_id=100, course_id=1, task_name="待删除练习",
+                          deadline=_dt(2025, 1, 1), status=1, create_by=1))
+        s.add(AnswerTask(task_id=101, course_id=1, task_name="【自主练习】红黑树",
+                          task_type=TASK_TYPE_SELF_PRACTICE,
+                          deadline=_dt(2025, 1, 1), status=2, create_by=2))
+        s.commit()
+        s.add(AnswerTaskClass(task_id=100, class_id=1))
+        s.add(TaskQuestion(task_id=100, question_id=1, sort_num=0))
+        # 3 名学生对任务 100 的答题记录
+        for sid in (1, 2, 3):
+            s.add(StudentAnswerRecord(task_id=100, question_id=1, student_id=sid,
+                                       user_answer="A", score=10, is_correct=1))
+        # 学生 3 在知识点 1 的另一条剩余记录（task_id=0 旧数据）
+        s.add(StudentAnswerRecord(task_id=0, question_id=1, student_id=3,
+                                   user_answer="B", score=0, is_correct=0))
+        # 掌握度持久化行
+        for sid in (1, 2, 3):
+            s.add(KnowledgeMastery(course_id=1, student_id=sid, point_id=1,
+                                    mastery_score=75, mastery_level=2))
+        s.add(KnowledgeMastery(course_id=1, student_id=1, point_id=2,
+                                mastery_score=60, mastery_level=2))
+        s.commit()
+    return eng
+
+
+@pytest.fixture
+def delete_session(delete_engine):
+    from sqlmodel import Session as SqlSession
+    with SqlSession(delete_engine) as s:
+        yield s
+
+
+def _du(session, user_id: int) -> SysUser:
+    return session.get(SysUser, user_id)
+
+
+def test_delete_task_cascades_records_and_links(delete_session):
+    """删除任务级联清除任务-题目/班级关联与答题记录，题库题目保留。"""
+    result = quiz.delete_answer_task(
+        100,
+        session=delete_session,
+        current_user=_du(delete_session, 1),
+    )
+
+    assert "3 条答题记录" in result["message"]
+    assert delete_session.get(AnswerTask, 100) is None
+    assert not delete_session.exec(
+        select(TaskQuestion).where(TaskQuestion.task_id == 100)
+    ).all()
+    assert not delete_session.exec(
+        select(AnswerTaskClass).where(AnswerTaskClass.task_id == 100)
+    ).all()
+    assert not delete_session.exec(
+        select(StudentAnswerRecord).where(StudentAnswerRecord.task_id == 100)
+    ).all()
+    # 题库题目保留，可被其他任务复用
+    assert delete_session.get(AiQuestion, 1) is not None
+
+    # 学生端任务列表与答题记录同步清除
+    tasks = quiz.list_answer_tasks(
+        course_id=None,
+        teacher_id=None,
+        session=delete_session,
+        current_user=_du(delete_session, 2),
+    )
+    assert 100 not in {item["id"] for item in tasks}
+    records = quiz.list_answer_records(
+        task_id=None,
+        student_id=None,
+        course_id=None,
+        session=delete_session,
+        current_user=_du(delete_session, 2),
+    )
+    assert not any(item["assignmentId"] == 100 for item in records)
+
+
+def test_delete_task_cleans_up_mastery_leftovers(delete_session):
+    """删除记录后：无剩余记录的 (学生, 知识点) 清除掌握度行，有剩余的保留并重算。"""
+    quiz.delete_answer_task(
+        100,
+        session=delete_session,
+        current_user=_du(delete_session, 1),
+    )
+
+    # 学生1/2 知识点1 已无剩余答题记录 → 掌握度行清除
+    assert delete_session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.student_id == 1,
+            KnowledgeMastery.point_id == 1,
+        )
+    ).first() is None
+    assert delete_session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.student_id == 2,
+            KnowledgeMastery.point_id == 1,
+        )
+    ).first() is None
+    # 学生3 知识点1 仍有剩余记录（task_id=0）→ 掌握度行保留并按剩余记录重算（0/1 → 0 分）
+    km3 = delete_session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.student_id == 3,
+            KnowledgeMastery.point_id == 1,
+        )
+    ).first()
+    assert km3 is not None
+    assert km3.mastery_score == 0.0
+    # 未受影响的知识点行不动
+    km_other = delete_session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.student_id == 1,
+            KnowledgeMastery.point_id == 2,
+        )
+    ).first()
+    assert km_other is not None and km_other.mastery_score == 60
+
+
+def test_delete_task_rejects_student(delete_session):
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.delete_answer_task(
+            100,
+            session=delete_session,
+            current_user=_du(delete_session, 2),
+        )
+    assert exc_info.value.status_code == 403
+    # 未删除
+    assert delete_session.get(AnswerTask, 100) is not None
+
+
+def test_delete_task_rejects_self_practice(delete_session):
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.delete_answer_task(
+            101,
+            session=delete_session,
+            current_user=_du(delete_session, 1),
+        )
+    assert exc_info.value.status_code == 409
+    assert delete_session.get(AnswerTask, 101) is not None
+
+
+def test_delete_missing_task_returns_404(delete_session):
+    with pytest.raises(HTTPException) as exc_info:
+        quiz.delete_answer_task(
+            99999,
+            session=delete_session,
+            current_user=_du(delete_session, 1),
+        )
+    assert exc_info.value.status_code == 404

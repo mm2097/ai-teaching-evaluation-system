@@ -5,6 +5,7 @@
     POST /api/v1/answer-tasks              创建/保存答题任务
     POST /api/v1/answer-tasks/{id}/publish 发布任务
     POST /api/v1/answer-tasks/{id}/close   关闭任务
+    DELETE /api/v1/answer-tasks/{id}       删除任务（含答题记录级联清除）
     GET  /api/v1/answer-records            答题记录列表（按任务/学生聚合）
     POST /api/v1/self-practice/start        学生创建自主练习
     POST /api/v1/self-practice/submit       学生提交自主练习
@@ -34,6 +35,7 @@ from app.models import (
     ClassInfo,
     Course,
     CourseStudent,
+    KnowledgeMastery,
     KnowledgeModule,
     KnowledgePoint,
     Student,
@@ -1095,6 +1097,95 @@ def close_answer_task(
     session.add(task)
     session.commit()
     return {"id": task.task_id, "status": "closed", "message": "已关闭"}
+
+
+@router.delete("/answer-tasks/{task_id}", tags=["答题管理"])
+def delete_answer_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """删除答题任务（教师端与学生端一并清除）。
+
+    级联删除：
+      - task_question 任务-题目关联
+      - answer_task_class 目标班级关联
+      - student_answer_record 学生答题记录（错题本/答题记录随之消失）
+    题库题目（ai_question）保留，可被其他任务继续复用。
+
+    删除记录后同步修正知识点掌握度持久化数据：
+      - 无剩余答题记录的 (学生, 知识点) 删除其掌握度行
+      - 仍有剩余记录的按剩余记录重算（refresh_student_mastery）
+    """
+    task = session.get(AnswerTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if _role_code(current_user, session) != "teacher":
+        raise HTTPException(status_code=403, detail="无权删除答题任务")
+    _require_course_access(current_user, task.course_id, session)
+    if _is_self_practice(task):
+        raise HTTPException(status_code=409, detail="自主练习由学生本人管理，无法在此删除")
+
+    course_id = task.course_id
+    # 受影响的 (学生, 知识点)：来自被删答题记录，用于掌握度修正
+    affected_pairs = set(session.exec(
+        select(StudentAnswerRecord.student_id, AiQuestion.point_id)
+        .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .where(StudentAnswerRecord.task_id == task_id)
+    ).all())
+
+    for link in session.exec(
+        select(TaskQuestion).where(TaskQuestion.task_id == task_id)
+    ).all():
+        session.delete(link)
+    for link in session.exec(
+        select(AnswerTaskClass).where(AnswerTaskClass.task_id == task_id)
+    ).all():
+        session.delete(link)
+    records = session.exec(
+        select(StudentAnswerRecord).where(StudentAnswerRecord.task_id == task_id)
+    ).all()
+    record_count = len(records)
+    for record in records:
+        session.delete(record)
+    session.delete(task)
+    session.commit()
+
+    # 掌握度修正：先删无剩余记录的持久化行，再按剩余记录重算受影响学生
+    for sid, point_id in affected_pairs:
+        remaining = session.exec(
+            select(func.count(StudentAnswerRecord.answer_id))
+            .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+            .where(
+                StudentAnswerRecord.student_id == sid,
+                AiQuestion.point_id == point_id,
+            )
+        ).one()
+        if remaining:
+            continue
+        km = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == course_id,
+                KnowledgeMastery.student_id == sid,
+                KnowledgeMastery.point_id == point_id,
+            )
+        ).first()
+        if km:
+            session.delete(km)
+    affected_students = {sid for sid, _ in affected_pairs}
+    for sid in affected_students:
+        refresh_student_mastery(session, sid, course_id)
+    session.commit()
+
+    return {
+        "id": task_id,
+        "deletedRecords": record_count,
+        "message": (
+            f"已删除练习「{task.task_name}」及 {record_count} 条答题记录"
+            if record_count
+            else f"已删除练习「{task.task_name}」"
+        ),
+    }
 
 
 class UpdateReviewPolicyRequest(BaseModel):

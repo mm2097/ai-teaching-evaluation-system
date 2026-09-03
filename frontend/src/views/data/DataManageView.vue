@@ -168,7 +168,7 @@ function formatRate(rate: number): string {
 }
 
 /** 编辑弹窗中不可修改的字段（标识信息） */
-const READONLY_FIELDS = new Set(['编号', '课程号', '课程名称', '学期', '测试名称', '学号', '姓名'])
+const READONLY_FIELDS = new Set(['编号', '课程号', '课程名称', '学期', '测试名称', '学号', '姓名', '来源文件'])
 
 function isReadonlyField(key: string): boolean {
   return READONLY_FIELDS.has(key)

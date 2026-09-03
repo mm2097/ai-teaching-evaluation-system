@@ -93,6 +93,7 @@ interface TeachingDataApiRow {
   batchId?: number
   remark?: string
   sourceData?: string
+  sourceFileName?: string
   attendanceDate?: string | null
   participationRate?: number
   totalCount?: number
@@ -123,6 +124,7 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     participationRate: row.dataType === 'participation' ? row.participationRate : undefined,
     totalCount: row.dataType === 'participation' ? row.totalCount : undefined,
     sourceData: row.sourceData,
+    sourceFileName: row.sourceFileName,
   }
 }
 

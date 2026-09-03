@@ -375,6 +375,14 @@ def query_teaching_data(
                 "sourceData": p.source_data,
             })
 
+    # 补全来源文件名（导入时以保留字段「来源文件」写入 sourceData）
+    for row in rows:
+        try:
+            src = json.loads(row.get("sourceData") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            src = {}
+        row["sourceFileName"] = str(src.get("来源文件") or "")
+
     # 分页
     total = len(rows)
     start = (page - 1) * page_size
@@ -1115,6 +1123,7 @@ def upload_teaching_data(
             file_ext=ext,
             course_id=course_id,
             create_by=current_user.user_id,
+            file_name=file.filename or "",
         )
 
         # 导入成功后自动刷新课程分析数据

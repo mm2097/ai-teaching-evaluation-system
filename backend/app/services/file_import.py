@@ -596,6 +596,7 @@ def _import_exam_deduction(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入模板1数据：课程测试各题扣分情况 → CourseTestDetail。
 
@@ -647,6 +648,8 @@ def _import_exam_deduction(
             # 过滤内部字段和不需要的列
             source = {k: v for k, v in row_data.items()
                       if not k.startswith("_") and k != "所考查的知识点"}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 获取或创建考核批次
@@ -729,6 +732,7 @@ def _import_simple_score(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入单项成绩 → IndividualScore。
 
@@ -782,6 +786,8 @@ def _import_simple_score(
                 continue
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 获取或创建考试批次
@@ -832,6 +838,7 @@ def _import_attendance(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入成绩考勤情况 → AttendanceSheet。
 
@@ -882,6 +889,8 @@ def _import_attendance(
             _ensure_course_student(session, course_id, student.student_id)
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 解析 32 次考勤
@@ -979,6 +988,7 @@ def _import_participation(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入课堂参与情况 → ParticipationSheet。
 
@@ -1029,6 +1039,8 @@ def _import_participation(
             _ensure_course_student(session, course_id, student.student_id)
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 解析 32 次课堂参与
@@ -1102,10 +1114,12 @@ def import_file(
     file_ext: str,
     course_id: int,
     create_by: int,
+    file_name: str = "",
 ) -> ImportResult:
     """主导入流程：解析文件 → 按 Sheet 检测模板 → 校验 → 导入。
 
     每个 Sheet 独立检测模板并导入，同一文件可包含多种模板数据。
+    file_name 会写入每行 sourceData 的保留字段「来源文件」。
     """
     # 1. 解析文件
     if file_ext == ".xlsx":
@@ -1186,7 +1200,7 @@ def import_file(
 
         # 取第一个 sheet 对应的模板定义
         first_tmpl = sheet_templates[next(iter(sheets))][0]
-        partial = handler(session, sheets, course_id, create_by, first_tmpl)
+        partial = handler(session, sheets, course_id, create_by, first_tmpl, file_name)
         merged.success_count += partial.success_count
         merged.error_count += partial.error_count
         merged.errors.extend(partial.errors)

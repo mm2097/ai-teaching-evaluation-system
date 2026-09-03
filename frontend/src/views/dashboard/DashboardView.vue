@@ -130,7 +130,8 @@ const scorePieOption = computed<EChartsOption>(() => {
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c}人 ({d}%)' },
     legend: { bottom: 0, textStyle: { color: '#64748b' } },
-    color: ['#10b981', '#2563eb', '#f59e0b', '#ef4444', '#94a3b8'],
+    // 等级配色与学生学习质量页「分数段分布」保持一致
+    color: ['#10b981', '#2563eb', '#f59e0b', '#f97316', '#ef4444'],
     series: [{
       type: 'pie',
       radius: ['42%', '68%'],

@@ -26,7 +26,34 @@ def init_db() -> None:
     _migrate_legacy_tables()
     _migrate_academic_parts()
     _migrate_attitude_homework()
+    _migrate_evaluation_levels()
     _migrate_student_answers()
+
+
+def _migrate_evaluation_levels() -> None:
+    """综合得分评价等级统一为五档（幂等）。
+
+    旧等级标准（优≥85 / 良75-85 / 中60-75 / 差<60）与综合看板
+    「班级成绩等级分布」、学习质量页「分数段分布」的五档分数等级
+    （优秀≥90 / 良好80-89 / 中等70-79 / 合格60-69 / 不合格<60）不一致，
+    按已落库总分重算全部评价等级。
+    """
+    from sqlmodel import select
+
+    from app.models import StudentEvaluationResult
+    from app.services.evaluation import score_to_level
+
+    with Session(engine) as session:
+        rows = session.exec(select(StudentEvaluationResult)).all()
+        changed = 0
+        for row in rows:
+            new_level = score_to_level(float(row.total_score or 0))
+            if row.eval_level != new_level:
+                row.eval_level = new_level
+                session.add(row)
+                changed += 1
+        if changed:
+            session.commit()
 
 
 def _migrate_academic_parts() -> None:

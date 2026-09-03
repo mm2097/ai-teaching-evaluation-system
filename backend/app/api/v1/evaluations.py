@@ -227,7 +227,7 @@ def _course_students(session: Session, course_id: int, student_id: int | None = 
 @router.get("/evaluations", tags=["评价管理"])
 def list_evaluations(
     course_id: int | None = Query(default=None),
-    eval_level: str | None = Query(default=None, description="优/良/中/差"),
+    eval_level: str | None = Query(default=None, description="优秀/良好/中等/合格/不合格"),
     student_id: int | None = Query(default=None, description="按数据库 student_id 筛选"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
@@ -389,8 +389,8 @@ def get_evaluation_distribution(
 ) -> dict:
     """班级评价结果分布统计（Eval.Student.Distribute）。
 
-    返回等级分布（优/良/中/差）、分数统计（均值/中位数/标准差/极值），
-    支持按班级筛选。
+    返回等级分布（优秀/良好/中等/合格/不合格五档，与分数段分布口径一致）、
+    分数统计（均值/中位数/标准差/极值），支持按班级筛选。
 
     权限（Eval.Student.UserValid）：仅课程授课教师可查看。
     """
@@ -449,8 +449,8 @@ def get_evaluation_distribution(
     variance = sum((s - mean) ** 2 for s in scores) / n
     std_dev = variance ** 0.5
 
-    # 等级分布
-    level_count = {"优": 0, "良": 0, "中": 0, "差": 0}
+    # 等级分布（五档，与 scoreDistribution 分数段口径一致）
+    level_count = {"优秀": 0, "良好": 0, "中等": 0, "合格": 0, "不合格": 0}
     for r in computed_results:
         level = r["grade"]
         level_count[level] = level_count.get(level, 0) + 1

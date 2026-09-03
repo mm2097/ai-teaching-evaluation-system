@@ -741,14 +741,14 @@ def seed() -> None:
         session.commit()
         print(f"  评价维度: {len(dimensions)} 个，指标: {len(indexes)} 个")
 
-        # ========== 16. 评价结果（差异化：优秀/良好/中等/及格/不及格） ==========
+        # ========== 16. 评价结果（差异化：优秀/良好/中等/合格/不合格 五档） ==========
         eval_results = [
             # 计算机网络课 5 名学生
-            StudentEvaluationResult(course_id=1, student_id=1, total_score=89.5, eval_level="优秀"),
+            StudentEvaluationResult(course_id=1, student_id=1, total_score=89.5, eval_level="良好"),
             StudentEvaluationResult(course_id=1, student_id=2, total_score=72.0, eval_level="中等"),
-            StudentEvaluationResult(course_id=1, student_id=3, total_score=52.5, eval_level="不及格"),
+            StudentEvaluationResult(course_id=1, student_id=3, total_score=52.5, eval_level="不合格"),
             StudentEvaluationResult(course_id=1, student_id=4, total_score=80.8, eval_level="良好"),
-            StudentEvaluationResult(course_id=1, student_id=5, total_score=55.0, eval_level="不及格"),
+            StudentEvaluationResult(course_id=1, student_id=5, total_score=55.0, eval_level="不合格"),
             # 数据结构课
             StudentEvaluationResult(course_id=3, student_id=2, total_score=94.2, eval_level="优秀"),
             StudentEvaluationResult(course_id=3, student_id=7, total_score=70.5, eval_level="中等"),
@@ -1364,6 +1364,9 @@ def inject_analysis_data() -> None:
         total_warnings = 0
         total_answers = 0
 
+        # 评价等级五档映射（与 score_to_level / 看板等级分布口径一致）
+        from app.services.evaluation import score_to_level
+
         for sid in existing_ids:
             tier = _student_tier(sid)
             trend = _tier_trend(tier, sid)
@@ -1458,12 +1461,8 @@ def inject_analysis_data() -> None:
             total_profiles += 1
 
             # --- 2e. StudentEvaluationResult + EvalDimensionScore ---
-            # 先获取 eval_id
-            eval_level = "优" if total_profile_score >= 85 else (
-                "良" if total_profile_score >= 75 else (
-                    "中" if total_profile_score >= 60 else "差"
-                )
-            )
+            # 先获取 eval_id（五档等级与 score_to_level 口径一致）
+            eval_level = score_to_level(total_profile_score)
             er = StudentEvaluationResult(
                 course_id=course_id,
                 student_id=sid,

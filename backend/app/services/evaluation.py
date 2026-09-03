@@ -1,4 +1,4 @@
-"""D08 学习质量评价聚合（线性加权 + 优良中差双轨）。
+"""D08 学习质量评价聚合（线性加权 + 五档等级）。
 
 四维度默认权重：
     学业成绩（D02）   0.4
@@ -6,11 +6,12 @@
     学习进步（D04）   0.1
     知识掌握（D05）   0.3
 
-等级映射：
-    >= 85  优
-    75-85 良
-    60-75 中
-    < 60  差
+等级映射（与综合看板「班级成绩等级分布」、学习质量页「分数段分布」一致）：
+    >= 90   优秀
+    80-89   良好
+    70-79   中等
+    60-69   合格
+    < 60    不合格
 
 课程评价配置中的 EvalIndex.weight 会按维度汇总后归一化为四维权重。
 """
@@ -77,13 +78,16 @@ class EvaluationResult:
 
 
 def score_to_level(score: float) -> str:
-    if score >= 85:
-        return "优"
-    if score >= 75:
-        return "良"
+    """综合得分 → 五档评价等级（与看板等级分布、分数段分布口径一致）。"""
+    if score >= 90:
+        return "优秀"
+    if score >= 80:
+        return "良好"
+    if score >= 70:
+        return "中等"
     if score >= 60:
-        return "中"
-    return "差"
+        return "合格"
+    return "不合格"
 
 
 def _dimension_key(name: str) -> str | None:

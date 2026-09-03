@@ -192,17 +192,22 @@ class TestTag:
 class TestEvaluation:
     def test_score_to_level(self):
         from app.services.evaluation import score_to_level
-        assert score_to_level(90) == "优"
-        assert score_to_level(80) == "良"
-        assert score_to_level(65) == "中"
-        assert score_to_level(50) == "差"
+        assert score_to_level(95) == "优秀"
+        assert score_to_level(90) == "优秀"
+        assert score_to_level(85) == "良好"
+        assert score_to_level(80) == "良好"
+        assert score_to_level(75) == "中等"
+        assert score_to_level(70) == "中等"
+        assert score_to_level(65) == "合格"
+        assert score_to_level(60) == "合格"
+        assert score_to_level(50) == "不合格"
 
     def test_compute_evaluation(self, session):
         """综合评价。"""
         from app.services.evaluation import compute_evaluation
         result = compute_evaluation(session, student_id=2, course_id=1)
         assert 0 <= result.total_score <= 100
-        assert result.level in ("优", "良", "中", "差")
+        assert result.level in ("优秀", "良好", "中等", "合格", "不合格")
         assert "academic" in result.dimensions
         assert "attitude" in result.dimensions
         assert "mastery" in result.dimensions

@@ -483,6 +483,8 @@ export interface QuizSubmission {
   assignmentId: number
   studentId: number
   studentName: string
+  /** 学号（存于学生表） */
+  studentNo: string
   score: number
   totalScore: number
   submitTime: string

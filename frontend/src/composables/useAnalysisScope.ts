@@ -14,6 +14,9 @@ const roleTargetTypes: Record<UserRole, TargetType[]> = {
   student: ['student'],
 }
 
+/** 演示数据默认班级：测试数据集中在该班级，进入分析页时优先选中 */
+const PREFERRED_CLASS_NAME = '软件1801'
+
 function pickFirstOption<T extends { value: number }>(
   options: T[],
   current?: number,
@@ -29,6 +32,16 @@ function pickFirstStudent(
   if (current && students.some((s) => s.id === current)) return current
   const first = students[0]?.id
   return typeof first === 'number' ? first : undefined
+}
+
+/** 选默认班级：优先 PREFERRED_CLASS_NAME（演示数据所在班级），否则首个选项 */
+function pickDefaultClass(
+  options: { label: string; value: number }[],
+  current?: number,
+): number | undefined {
+  if (current && options.some((o) => o.value === current)) return current
+  const preferred = options.find((o) => o.label.includes(PREFERRED_CLASS_NAME))
+  return preferred?.value ?? options[0]?.value
 }
 
 export function useAnalysisScope(defaultTargetType?: TargetType) {
@@ -104,7 +117,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
           teacherId,
         })
         classOptions.value = classes.map((c) => ({ label: c.className, value: c.id }))
-        classId.value = pickFirstOption(classOptions.value, classId.value)
+        classId.value = pickDefaultClass(classOptions.value, classId.value)
       } else if (role.value === 'student') {
         const studentClassId = userStore.userInfo?.classId
         const courses = studentClassId

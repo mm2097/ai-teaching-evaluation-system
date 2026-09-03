@@ -44,11 +44,25 @@ const defaultIndicators = [
 ]
 const defaultValues = [80, 80, 80, 80, 80]
 
+const radarIndicators = computed(() => profileData.value?.radarIndicators ?? defaultIndicators)
+
+/** 雷达图各项指标得分（左下角直读，与悬停提示一致） */
+const radarScores = computed(() => {
+  const values = profileData.value?.radarValues ?? defaultValues
+  return radarIndicators.value.map((ind, i) => ({
+    name: ind.name,
+    score: values[i] != null ? values[i].toFixed(1) : '—',
+  }))
+})
+
 const radarOption = computed<EChartsOption>(() => ({
   tooltip: {},
   radar: {
-    indicator: profileData.value?.radarIndicators ?? defaultIndicators,
+    indicator: radarIndicators.value,
     shape: 'polygon',
+    // 中心右移上移，左下角留白放置各项得分清单
+    center: ['60%', '47%'],
+    radius: '62%',
     splitArea: { areaStyle: { color: ['#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1'] } },
     axisName: { color: '#64748b' },
   },
@@ -100,7 +114,15 @@ onMounted(loadProfile)
       <el-col :span="12">
         <div class="content-card">
           <div class="content-card__title">学情雷达图</div>
-          <BaseChart :option="radarOption" height="340px" />
+          <div class="radar-wrap">
+            <BaseChart :option="radarOption" height="340px" />
+            <ul class="radar-score-list">
+              <li v-for="item in radarScores" :key="item.name">
+                <span class="radar-score-name">{{ item.name }}</span>
+                <span class="radar-score-value">{{ item.score }}</span>
+              </li>
+            </ul>
+          </div>
         </div>
       </el-col>
       <el-col :span="12">
@@ -125,6 +147,43 @@ onMounted(loadProfile)
 </template>
 
 <style scoped lang="scss">
+.radar-wrap {
+  position: relative;
+}
+
+/* 雷达图左下角：各项指标得分直读（不遮挡悬停交互） */
+.radar-score-list {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  margin: 0;
+  padding: 10px 14px;
+  list-style: none;
+  pointer-events: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    line-height: 20px;
+    font-size: 12px;
+  }
+
+  .radar-score-name {
+    color: #64748b;
+  }
+
+  .radar-score-value {
+    min-width: 34px;
+    text-align: right;
+    color: #1e293b;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
 .profile-card {
   .profile-header {
     display: flex;

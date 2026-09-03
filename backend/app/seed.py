@@ -694,9 +694,9 @@ def seed() -> None:
 
         # ========== 15. 评价维度 & 指标 ==========
         dimensions = [
-            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
+            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
             EvalDimension(course_id=1, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
+            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
             EvalDimension(course_id=3, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
             EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
             EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
@@ -705,7 +705,7 @@ def seed() -> None:
         session.commit()
 
         def _academic_part_indexes(dim_id: int) -> list:
-            """学业水平组成部分指标：小班讨论/期中/期末/考勤/其他（占比自动补足）。"""
+            """学业水平组成部分指标：小班讨论/期中/期末/考勤/作业/其他（占比自动补足）。"""
             return [
                 EvalIndex(dimension_id=dim_id, index_name="小班讨论", weight=10,
                           score_rule='{"type":"academic_part","part":"discussion"}'),
@@ -715,7 +715,9 @@ def seed() -> None:
                           score_rule='{"type":"academic_part","part":"final"}'),
                 EvalIndex(dimension_id=dim_id, index_name="考勤", weight=10,
                           score_rule='{"type":"academic_part","part":"attendance"}'),
-                EvalIndex(dimension_id=dim_id, index_name="其他", weight=20,
+                EvalIndex(dimension_id=dim_id, index_name="作业", weight=10,
+                          score_rule='{"type":"academic_part","part":"homework"}'),
+                EvalIndex(dimension_id=dim_id, index_name="其他", weight=10,
                           score_rule='{"type":"academic_part","part":"other"}'),
             ]
 

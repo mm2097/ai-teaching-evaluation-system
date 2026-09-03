@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime
 
 from sqlalchemy import inspect, text
 from sqlmodel import Session, SQLModel, create_engine
@@ -27,11 +28,12 @@ def init_db() -> None:
 
 
 def _migrate_academic_parts() -> None:
-    """学业水平五部分默认配置（幂等）。
+    """学业水平六部分默认配置（幂等）。
 
-    - 旧「期末/平时/期中」指标配置迁移为：小班讨论/期中考试/期末考试/考勤/其他
+    - 旧「期末/平时/期中」指标配置迁移为：小班讨论/期中考试/期末考试/考勤/作业/其他
     - 旧维度名「学业成绩」统一更名为「学业水平」
-    - 没有任何学业水平维度的课程自动补建默认维度与五部分指标
+    - 已有五部分配置（缺「作业」）的课程补建作业指标，权重从「其他」让出
+    - 没有任何学业水平维度的课程自动补建默认维度与六部分指标
     """
     import json
 
@@ -45,14 +47,23 @@ def _migrate_academic_parts() -> None:
         ("期中考试", 30, "midterm"),
         ("期末考试", 30, "final"),
         ("考勤", 10, "attendance"),
-        ("其他", 20, "other"),
+        ("作业", 10, "homework"),
+        ("其他", 10, "other"),
     ]
+    HOMEWORK_WEIGHT = 10.0
 
     def _rule(idx: EvalIndex) -> dict:
         try:
             return json.loads(idx.score_rule or "{}")
         except (json.JSONDecodeError, TypeError):
             return {}
+
+    def _parts_of(indexes: list[EvalIndex]) -> set[str]:
+        return {
+            str(_rule(idx).get("part"))
+            for idx in indexes
+            if _rule(idx).get("type") == "academic_part"
+        }
 
     with Session(engine) as session:
         dims = session.exec(select(EvalDimension)).all()
@@ -65,14 +76,31 @@ def _migrate_academic_parts() -> None:
             indexes = list(session.exec(
                 select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
             ).all())
-            # 已是五部分配置（存在「其他」自动补足指标）→ 跳过
-            if any(
-                _rule(idx).get("type") == "academic_part"
-                and _rule(idx).get("part") == "other"
-                for idx in indexes
-            ):
+            parts = _parts_of(indexes)
+            # 已是六部分配置（存在「其他」自动补足与「作业」指标）→ 跳过
+            if "other" in parts and "homework" in parts:
                 continue
-            # 删除旧指标，写入五部分默认
+            # 已是五部分配置（有「其他」缺「作业」）→ 补建作业指标，
+            # 作业权重从「其他」自动补足指标中让出，保持合计 100%
+            if "other" in parts:
+                other_idx = next(
+                    idx for idx in indexes
+                    if _rule(idx).get("type") == "academic_part"
+                    and _rule(idx).get("part") == "other"
+                )
+                homework_weight = min(HOMEWORK_WEIGHT, max(0.0, float(other_idx.weight or 0)))
+                session.add(EvalIndex(
+                    dimension_id=dim.dimension_id,
+                    index_name="作业",
+                    weight=homework_weight,
+                    score_rule=json.dumps({"type": "academic_part", "part": "homework"}, ensure_ascii=False),
+                ))
+                other_idx.weight = round(float(other_idx.weight or 0) - homework_weight, 1)
+                other_idx.update_time = datetime.now()
+                session.add(other_idx)
+                session.commit()
+                continue
+            # 删除旧指标，写入六部分默认
             for idx in indexes:
                 session.delete(idx)
             for name, weight, part in DEFAULT_PARTS:
@@ -87,14 +115,14 @@ def _migrate_academic_parts() -> None:
                 session.add(dim)
             session.commit()
 
-        # 没有学业水平维度的课程：自动补建默认维度与五部分
+        # 没有学业水平维度的课程：自动补建默认维度与六部分
         for course_id in session.exec(select(Course.course_id)).all():
             if course_id in configured_course_ids:
                 continue
             dim = EvalDimension(
                 course_id=course_id,
                 dimension_name="学业水平",
-                description="课程考核构成配比（小班讨论/期中/期末/考勤/其他，合计固定 100%）",
+                description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他，合计固定 100%）",
                 sort_num=1,
             )
             session.add(dim)

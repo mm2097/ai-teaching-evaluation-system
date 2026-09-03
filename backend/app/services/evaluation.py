@@ -135,7 +135,7 @@ def _score_for_rule(
     """Resolve one configured indicator to a 0-100 score."""
     rule_type = str(rule.get("type", "")).strip().lower()
     if rule_type == "academic_part":
-        # 学业水平组成部分（小班讨论/期中/期末/考勤/其他），按批次名称关键字取分
+        # 学业水平组成部分（小班讨论/期中/期末/考勤/作业/其他），按批次名称关键字取分
         part = str(rule.get("part", "")).strip().lower()
         value = _academic_part_score(session, student_id, course_id, part)
         return float(value) if value is not None else fallback

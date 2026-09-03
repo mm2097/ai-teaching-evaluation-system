@@ -67,7 +67,8 @@ export const SCORE_RULE_PRESETS = [
   { value: 'part_midterm', label: '期中考试（各题得分）', rule: { type: 'academic_part', part: 'midterm' } },
   { value: 'part_final', label: '期末考试（各题得分）', rule: { type: 'academic_part', part: 'final' } },
   { value: 'part_attendance', label: '考勤（到课率）', rule: { type: 'academic_part', part: 'attendance' } },
-  { value: 'part_other', label: '其他（作业/实验，占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
+  { value: 'part_homework', label: '作业（单项成绩，批次名含“作业”）', rule: { type: 'academic_part', part: 'homework' } },
+  { value: 'part_other', label: '其他（实验等，占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
   { value: 'attendance', label: '出勤率', rule: { type: 'attendance', full_score: 100 } },
   { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },
   { value: 'homework', label: '作业提交率', rule: { type: 'homework', full_score: 100 } },
@@ -162,6 +163,7 @@ export function formatScoreRule(rule: Record<string, unknown> | null | undefined
       midterm: '期中考试',
       final: '期末考试',
       attendance: '考勤',
+      homework: '作业',
       other: '其他（占比自动补足）',
     }
     return partLabels[part ?? ''] || '学业水平组成部分'

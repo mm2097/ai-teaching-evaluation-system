@@ -197,10 +197,31 @@ def _parse_score_rule(raw: str | dict | None) -> dict:
         return {}
 
 
+# 学业水平组成部分的规范展示顺序（「作业」在「其他」上方）
+ACADEMIC_PART_ORDER = {
+    "discussion": 0,
+    "midterm": 1,
+    "final": 2,
+    "attendance": 3,
+    "homework": 4,
+    "other": 5,
+}
+
+
+def _index_sort_key(index: EvalIndex) -> tuple:
+    """指标展示排序：学业水平内置组成部分按规范顺序，其余指标按创建顺序排在其后。"""
+    rule = _parse_score_rule(index.score_rule)
+    if rule.get("type") == "academic_part":
+        rank = ACADEMIC_PART_ORDER.get(str(rule.get("part", "")))
+        if rank is not None:
+            return (0, rank, index.index_id or 0)
+    return (1, 0, index.index_id or 0)
+
+
 def _dimension_to_dict(d: EvalDimension, indexes: list[EvalIndex]) -> dict:
     """序列化维度及其指标，包含权重校验信息。"""
     idx_list = []
-    for i in sorted(indexes, key=lambda x: x.index_id or 0):
+    for i in sorted(indexes, key=_index_sort_key):
         idx_list.append({
             "indexId": i.index_id,
             "indexName": i.index_name,

@@ -67,14 +67,14 @@ class TestPredict:
 
 class TestProfile:
     def test_academic_score(self, session):
-        """D02 学业水平（课程考核构成配比加权：小班讨论/期中/期末/考勤/其他）。"""
+        """D02 学业水平（课程考核构成配比加权：小班讨论/期中/期末/考勤/作业/其他）。"""
         from app.services.profile import compute_academic_score
         score = compute_academic_score(session, student_id=1, course_id=1)
         assert 0 <= score <= 100
-        # 张三：期中55（配比30）+ 考勤25（到课率25%×100，配比10）+ 其他(作业1/2均分80，配比20）；
-        # 无期末/小班讨论数据 → 有数据部分按配比归一化：
-        # (55*30 + 25*10 + 80*20) / 60 = 58.3
-        assert abs(score - 58.3) < 0.1
+        # 张三：期中55（配比30）+ 考勤25（到课率25%×100，配比10）+ 作业(作业1/2均分80，配比10）；
+        # 无期末/小班讨论/其他数据 → 有数据部分按配比归一化：
+        # (55*30 + 25*10 + 80*10) / 50 = 54.0
+        assert abs(score - 54.0) < 0.1
 
     def test_attitude_score(self, session):
         """D03 学习态度。"""

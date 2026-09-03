@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Generator
 from datetime import datetime
 
@@ -24,6 +25,7 @@ def init_db() -> None:
     _migrate_ai_question()
     _migrate_legacy_tables()
     _migrate_academic_parts()
+    _migrate_attitude_homework()
     _migrate_student_answers()
 
 
@@ -136,6 +138,97 @@ def _migrate_academic_parts() -> None:
                     score_rule=json.dumps({"type": "academic_part", "part": part}, ensure_ascii=False),
                 ))
             session.commit()
+
+
+def _migrate_attitude_homework() -> None:
+    """学习态度维度补建「作业提交」指标（幂等）。
+
+    - 已含作业指标（rule type=homework 或名称含"作业"）的维度跳过
+    - 旧默认配置（出勤率/课堂参与 各 50%）升级为新默认 40/30/30
+    - 教师自定义配置：作业提交固定 30%，其余指标按比例缩放补足 70%
+    - 迁移后重算受影响课程的画像与评价（失败不阻塞启动）
+    """
+    import json
+
+    from sqlmodel import select
+
+    from app.models import EvalDimension, EvalIndex
+
+    HOMEWORK_WEIGHT = 30.0
+    LEGACY_DEFAULT_WEIGHT = 50.0
+
+    def _rule_type(idx: EvalIndex) -> str:
+        try:
+            return str(json.loads(idx.score_rule or "{}").get("type", ""))
+        except (json.JSONDecodeError, TypeError):
+            return ""
+
+    with Session(engine) as session:
+        dims = session.exec(
+            select(EvalDimension).where(EvalDimension.dimension_name.contains("态度"))
+        ).all()
+        affected_courses: set[int] = set()
+        for dim in dims:
+            if dim.dimension_id is None:
+                continue
+            indexes = list(session.exec(
+                select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+            ).all())
+            if not indexes:
+                continue
+            if any(
+                _rule_type(idx) == "homework" or "作业" in (idx.index_name or "")
+                for idx in indexes
+            ):
+                continue
+
+            # 旧默认 50/50 → 直接升级为新默认 40/30/30；自定义配置按比例缩放留出 30%
+            if (
+                len(indexes) == 2
+                and all(float(idx.weight or 0) == LEGACY_DEFAULT_WEIGHT for idx in indexes)
+            ):
+                for idx in indexes:
+                    idx.weight = 40.0 if _rule_type(idx) == "attendance" else 30.0
+            else:
+                rest_sum = sum(float(idx.weight or 0) for idx in indexes)
+                scale = (100.0 - HOMEWORK_WEIGHT) / rest_sum if rest_sum > 0 else 1.0
+                for idx in indexes:
+                    idx.weight = round(float(idx.weight or 0) * scale, 1)
+                # 修正在首位指标上吸收舍入误差，保证合计恰为 100
+                scaled_sum = round(sum(float(idx.weight) for idx in indexes), 1)
+                indexes[0].weight = round(
+                    indexes[0].weight + (100.0 - HOMEWORK_WEIGHT - scaled_sum), 1
+                )
+            for idx in indexes:
+                idx.update_time = datetime.now()
+                session.add(idx)
+
+            session.add(EvalIndex(
+                dimension_id=dim.dimension_id,
+                index_name="作业提交",
+                weight=HOMEWORK_WEIGHT,
+                score_rule=json.dumps({"type": "homework", "full_score": 100}, ensure_ascii=False),
+            ))
+            if (dim.description or "") == "考勤和课堂参与度":
+                dim.description = "考勤、课堂参与度与作业提交率"
+                session.add(dim)
+            affected_courses.add(dim.course_id)
+
+        if not affected_courses:
+            return
+        session.commit()
+
+        # 权重变化影响画像（D03 态度分）与综合评价，重算受影响课程
+        try:
+            from app.services.analysis_refresh import refresh_course_evaluations
+
+            for course_id in sorted(affected_courses):
+                refresh_course_evaluations(session, course_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Attitude homework migration refresh failed (courses=%s)",
+                sorted(affected_courses),
+            )
 
 
 def _migrate_student_answers() -> None:

@@ -6,7 +6,9 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Document, Download, View } from '@element-plus/icons-vue'
-import type { ReportResponse } from '@/api/ai'
+import type { EChartsOption } from 'echarts'
+import type { ReportCharts, ReportResponse } from '@/api/ai'
+import BaseChart from '@/components/charts/BaseChart.vue'
 import {
   downloadReportFile,
   fetchReportHistory,
@@ -83,10 +85,10 @@ onMounted(async () => {
 })
 
 const reportTypes: ReportTypeOption[] = [
-  { id: 1, name: '班级学情分析报告', desc: '包含班级整体学情、成绩分布、预警名单', roles: ['teacher'] },
-  { id: 2, name: '学生个人学情报告', desc: '包含学生雷达图、知识点掌握、学习建议' },
-  { id: 3, name: '课程知识点分析报告', desc: '包含知识点热力图、薄弱项分析、改进建议' },
-  { id: 4, name: '学生学习质量报告', desc: '包含学习质量评价得分、维度分析' },
+  { id: 1, name: '班级学情分析报告', desc: '侧重班级人数、历次考核、分档与预警', roles: ['teacher'] },
+  { id: 2, name: '学生个人学情报告', desc: '侧重个人轨迹、画像标签与教师配置维度' },
+  { id: 3, name: '课程知识点分析报告', desc: '侧重模块/知识点掌握度，不展开班级均分' },
+  { id: 4, name: '学生学习质量报告', desc: '按教师自定义评价维度、指标权重出分' },
 ]
 
 const visibleReportTypes = computed(() =>
@@ -111,8 +113,273 @@ const genParams = ref<{
 
 const generating = ref(false)
 const previewVisible = ref(false)
+const chartsReady = ref(false)
 const reportData = ref<ReportResponse | null>(null)
 const dashboardStats = ref<DashboardStats>({})
+
+const reportCharts = computed<ReportCharts>(() => {
+  return reportData.value?.charts || dashboardStats.value.charts || {}
+})
+
+const chartFocus = computed(() => reportCharts.value.focus || 'class')
+const hasScoreChart = computed(() =>
+  ['class'].includes(chartFocus.value)
+  && (reportCharts.value.scoreBuckets ?? []).some((item) => (item.count ?? 0) > 0),
+)
+const hasKnowledgeChart = computed(() =>
+  ['knowledge', 'student'].includes(chartFocus.value)
+  && (reportCharts.value.knowledge ?? []).length > 0,
+)
+const hasRadarChart = computed(() =>
+  ['student', 'quality'].includes(chartFocus.value)
+  && Object.keys(reportCharts.value.radar ?? {}).length > 0,
+)
+const hasRateChart = computed(() => {
+  if (!['class'].includes(chartFocus.value)) return false
+  const rates = reportCharts.value.rates
+  const stats = dashboardStats.value
+  return [rates?.passRate, rates?.excellentRate, stats.passRate, stats.excellentRate, stats.attendanceRate]
+    .some((value) => typeof value === 'number')
+})
+const hasHistoryChart = computed(() =>
+  ['class', 'student'].includes(chartFocus.value)
+  && (reportCharts.value.scoreHistory ?? []).length >= 2,
+)
+const hasIndexChart = computed(() =>
+  chartFocus.value === 'quality' && (reportCharts.value.evalIndexes ?? []).length > 0,
+)
+const hasPartsChart = computed(() =>
+  chartFocus.value === 'quality'
+  && (reportCharts.value.academicParts ?? []).some((item) => item.score != null),
+)
+const hasAnyChart = computed(() =>
+  hasScoreChart.value
+  || hasKnowledgeChart.value
+  || hasRadarChart.value
+  || hasRateChart.value
+  || hasHistoryChart.value
+  || hasIndexChart.value
+  || hasPartsChart.value,
+)
+
+const reportMetrics = computed(() => ({
+  ...dashboardStats.value,
+  ...(reportData.value?.metrics ?? {}),
+}))
+
+const reportFindings = computed(() => reportData.value?.findings ?? [])
+const reportWarnings = computed(() => reportData.value?.warnings ?? [])
+const hasFindings = computed(() => reportFindings.value.length > 0)
+const hasWarnings = computed(() => reportWarnings.value.length > 0)
+
+const reportEvalScheme = computed(() => reportData.value?.evalScheme ?? [])
+const hasEvalScheme = computed(() => reportEvalScheme.value.length > 0)
+
+const cnNums = ['一', '二', '三', '四', '五', '六', '七', '八', '九']
+const sectionNums = computed(() => {
+  let index = 0
+  const next = () => cnNums[index++] || String(index)
+  return {
+    core: isStudent.value || chartFocus.value === 'knowledge' ? '' : next(),
+    chart: hasAnyChart.value ? next() : '',
+    scheme: hasEvalScheme.value && ['quality', 'student'].includes(chartFocus.value) ? next() : '',
+    findings: hasFindings.value ? next() : '',
+    warnings: hasWarnings.value ? next() : '',
+    summary: next(),
+    conclusion: next(),
+    suggestion: next(),
+  }
+})
+
+const rateBarOption = computed<EChartsOption>(() => {
+  const rates = reportCharts.value.rates
+  const stats = dashboardStats.value
+  const items = [
+    { name: '及格率', value: Number(rates?.passRate ?? stats.passRate ?? 0) },
+    { name: '优秀率', value: Number(rates?.excellentRate ?? stats.excellentRate ?? 0) },
+    { name: '出勤率', value: Number(rates?.attendanceRate ?? stats.attendanceRate ?? 0) },
+  ]
+  return {
+    tooltip: { trigger: 'axis', formatter: '{b}：{c}%' },
+    grid: { left: 56, right: 24, top: 16, bottom: 24 },
+    xAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: '#64748b', formatter: '{value}%' },
+    },
+    yAxis: {
+      type: 'category',
+      data: items.map((item) => item.name),
+      axisLabel: { color: '#64748b' },
+    },
+    series: [{
+      type: 'bar',
+      data: items.map((item) => ({
+        value: item.value,
+        itemStyle: {
+          color: item.value >= 85 ? '#10b981' : item.value >= 70 ? '#2563eb' : '#f59e0b',
+          borderRadius: [0, 6, 6, 0],
+        },
+      })),
+      barWidth: 16,
+    }],
+  }
+})
+
+const scorePieOption = computed<EChartsOption>(() => {
+  const buckets = reportCharts.value.scoreBuckets ?? []
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}：{c}人 ({d}%)' },
+    legend: { bottom: 0, textStyle: { color: '#64748b' } },
+    color: ['#ef4444', '#f97316', '#f59e0b', '#2563eb', '#10b981'],
+    series: [{
+      type: 'pie',
+      radius: ['42%', '68%'],
+      center: ['50%', '42%'],
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+      label: { formatter: '{d}%' },
+      data: buckets.map((item) => ({ name: item.label, value: item.count })),
+    }],
+  }
+})
+
+const knowledgeBarOption = computed<EChartsOption>(() => {
+  const points = [...(reportCharts.value.knowledge ?? [])].sort((a, b) => a.accuracy - b.accuracy)
+  return {
+    tooltip: { trigger: 'axis', formatter: '{b}：{c}%' },
+    grid: { left: 108, right: 24, top: 16, bottom: 24 },
+    xAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: '#64748b', formatter: '{value}%' },
+    },
+    yAxis: {
+      type: 'category',
+      data: points.map((item) => item.name),
+      axisLabel: { color: '#64748b', width: 96, overflow: 'truncate' },
+    },
+    series: [{
+      type: 'bar',
+      data: points.map((item) => ({
+        value: item.accuracy,
+        itemStyle: {
+          color: item.accuracy < 60 ? '#ef4444' : item.accuracy < 80 ? '#f59e0b' : '#10b981',
+          borderRadius: [0, 6, 6, 0],
+        },
+      })),
+      barWidth: 14,
+    }],
+  }
+})
+
+const radarOption = computed<EChartsOption>(() => {
+  const radar = reportCharts.value.radar ?? {}
+  const names = Object.keys(radar)
+  const values = names.map((name) => Number(radar[name] ?? 0))
+  return {
+    tooltip: {},
+    radar: {
+      indicator: names.map((name) => ({ name, max: 100 })),
+      shape: 'polygon',
+      center: ['50%', '55%'],
+      radius: '62%',
+      splitArea: { areaStyle: { color: ['#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1'] } },
+      axisName: { color: '#64748b' },
+    },
+    series: [{
+      type: 'radar',
+      data: [{
+        value: values,
+        name: '能力维度',
+        areaStyle: { color: 'rgba(37, 99, 235, 0.2)' },
+        lineStyle: { color: '#2563eb', width: 2 },
+        itemStyle: { color: '#2563eb' },
+      }],
+    }],
+  }
+})
+
+const trendLineOption = computed<EChartsOption>(() => {
+  const history = reportCharts.value.scoreHistory ?? []
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 48, right: 20, top: 24, bottom: 28 },
+    xAxis: {
+      type: 'category',
+      data: history.map((item) => item.name),
+      axisLabel: { color: '#64748b', rotate: history.length > 5 ? 20 : 0 },
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: '#64748b', formatter: '{value}分' },
+    },
+    series: [{
+      name: '成绩',
+      type: 'line',
+      smooth: true,
+      data: history.map((item) => item.score),
+      itemStyle: { color: '#2563eb' },
+      areaStyle: { color: 'rgba(37,99,235,0.08)' },
+    }],
+  }
+})
+
+function warningTagType(level: string): 'danger' | 'warning' | 'info' {
+  if (level === '高') return 'danger'
+  if (level === '中') return 'warning'
+  return 'info'
+}
+
+const indexBarOption = computed<EChartsOption>(() => {
+  const rows = [...(reportCharts.value.evalIndexes ?? [])].reverse()
+  return {
+    tooltip: { trigger: 'axis', formatter: '{b}：{c}分' },
+    grid: { left: 128, right: 24, top: 16, bottom: 24 },
+    xAxis: { type: 'value', max: 100, axisLabel: { color: '#64748b', formatter: '{value}' } },
+    yAxis: {
+      type: 'category',
+      data: rows.map((item) => item.name),
+      axisLabel: { color: '#64748b', width: 118, overflow: 'truncate' },
+    },
+    series: [{
+      type: 'bar',
+      data: rows.map((item) => ({
+        value: item.score,
+        itemStyle: {
+          color: item.score < 60 ? '#ef4444' : item.score < 80 ? '#f59e0b' : '#10b981',
+          borderRadius: [0, 6, 6, 0],
+        },
+      })),
+      barWidth: 14,
+    }],
+  }
+})
+
+const partsBarOption = computed<EChartsOption>(() => {
+  const rows = reportCharts.value.academicParts ?? []
+  return {
+    tooltip: { trigger: 'axis', formatter: '{b}：{c}分' },
+    grid: { left: 88, right: 24, top: 16, bottom: 24 },
+    xAxis: { type: 'value', max: 100, axisLabel: { color: '#64748b' } },
+    yAxis: {
+      type: 'category',
+      data: rows.map((item) => `${item.name}`),
+      axisLabel: { color: '#64748b' },
+    },
+    series: [{
+      type: 'bar',
+      data: rows.map((item) => ({
+        value: item.score ?? 0,
+        itemStyle: {
+          color: (item.score ?? 0) < 60 ? '#ef4444' : (item.score ?? 0) < 80 ? '#f59e0b' : '#2563eb',
+          borderRadius: [0, 6, 6, 0],
+        },
+      })),
+      barWidth: 16,
+    }],
+  }
+})
 
 const csCourses = computed(() => courses.value)
 const csClasses = computed(() => classes.value)
@@ -381,30 +648,185 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
       </el-col>
     </el-row>
 
-    <el-dialog v-model="previewVisible" title="报告预览" width="720px" top="5vh">
+    <div v-if="reportData && (hasAnyChart || hasFindings)" class="content-card report-charts-panel">
+      <div class="content-card__title">{{ hasAnyChart ? '报告数据可视化' : '现状要点' }}</div>
+      <p class="report-charts-hint">根据本次报告快照生成，便于快速对照成绩、知识点和能力维度。</p>
+      <el-row :gutter="16">
+        <el-col v-if="hasRateChart" :xs="24" :md="hasScoreChart || hasRadarChart ? 12 : 24">
+          <div class="chart-block">
+            <h4>核心比率</h4>
+            <BaseChart :option="rateBarOption" height="260px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasScoreChart" :xs="24" :md="12">
+          <div class="chart-block">
+            <h4>成绩分布</h4>
+            <BaseChart :option="scorePieOption" height="260px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasKnowledgeChart" :xs="24" :md="hasRadarChart ? 12 : 24">
+          <div class="chart-block">
+            <h4>知识点掌握度</h4>
+            <BaseChart :option="knowledgeBarOption" height="300px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasRadarChart" :xs="24" :md="12">
+          <div class="chart-block">
+            <h4>能力雷达</h4>
+            <BaseChart :option="radarOption" height="300px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasHistoryChart" :xs="24" :md="12">
+          <div class="chart-block">
+            <h4>成绩走势</h4>
+            <BaseChart :option="trendLineOption" height="260px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasIndexChart" :xs="24" :md="12">
+          <div class="chart-block">
+            <h4>教师配置指标得分</h4>
+            <BaseChart :option="indexBarOption" height="300px" />
+          </div>
+        </el-col>
+        <el-col v-if="hasPartsChart" :xs="24" :md="12">
+          <div class="chart-block">
+            <h4>学业构成（教师配比）</h4>
+            <BaseChart :option="partsBarOption" height="300px" />
+          </div>
+        </el-col>
+      </el-row>
+      <ol v-if="hasFindings" class="findings-list findings-list--page">
+        <li v-for="(item, index) in reportFindings" :key="index">{{ item }}</li>
+      </ol>
+    </div>
+
+    <el-dialog
+      v-model="previewVisible"
+      title="报告预览"
+      width="920px"
+      top="4vh"
+      @opened="chartsReady = true"
+      @closed="chartsReady = false"
+    >
       <div v-if="reportData" class="report-preview">
         <h2 style="text-align: center; margin-bottom: 20px">{{ previewTitle }}</h2>
 
-        <template v-if="!isStudent">
-        <h3>一、核心指标概览</h3>
+        <template v-if="!isStudent && chartFocus !== 'knowledge'">
+        <h3>{{ sectionNums.core }}、核心指标概览</h3>
         <el-descriptions :column="2" border style="margin: 16px 0">
-          <el-descriptions-item label="学生总数">{{ dashboardStats.studentCount ?? '-' }} 人</el-descriptions-item>
-          <el-descriptions-item label="课程数量">{{ dashboardStats.courseCount ?? '-' }} 门</el-descriptions-item>
-          <el-descriptions-item label="及格率">{{ dashboardStats.passRate ?? '-' }}%</el-descriptions-item>
-          <el-descriptions-item label="优秀率">{{ dashboardStats.excellentRate ?? '-' }}%</el-descriptions-item>
-          <el-descriptions-item label="平均出勤率">{{ dashboardStats.attendanceRate ?? '-' }}%</el-descriptions-item>
-          <el-descriptions-item label="预警学生">{{ dashboardStats.warningCount ?? '-' }} 人</el-descriptions-item>
+          <el-descriptions-item label="学生人数">{{ reportMetrics.studentCount ?? '-' }} 人</el-descriptions-item>
+          <el-descriptions-item label="最近考核">{{ reportMetrics.latestExam || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="均分">{{ reportMetrics.avgScore ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="中位数">{{ reportMetrics.scoreMedian ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="分数区间">
+            {{ reportMetrics.scoreMin ?? '-' }} – {{ reportMetrics.scoreMax ?? '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="及格率">{{ reportMetrics.passRate ?? '-' }}%</el-descriptions-item>
+          <el-descriptions-item label="优秀率">{{ reportMetrics.excellentRate ?? '-' }}%</el-descriptions-item>
+          <el-descriptions-item label="平均出勤率">{{ reportMetrics.attendanceRate ?? '-' }}%</el-descriptions-item>
+          <el-descriptions-item label="预警学生">{{ reportMetrics.warningCount ?? '-' }} 人</el-descriptions-item>
         </el-descriptions>
         </template>
 
-        <h3>{{ isStudent ? '一' : '二' }}、总体概述 <el-tag size="small" :type="reportSourceTag">{{ reportSourceLabel }}</el-tag></h3>
-        <p>{{ reportData.summary }}</p>
+        <template v-if="hasAnyChart">
+          <h3>{{ sectionNums.chart }}、图形化数据</h3>
+          <el-row v-if="chartsReady" :gutter="12">
+            <el-col v-if="hasRateChart" :span="hasScoreChart || hasRadarChart ? 12 : 24">
+              <div class="chart-block chart-block--compact">
+                <h4>核心比率</h4>
+                <BaseChart :option="rateBarOption" height="220px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasScoreChart" :span="12">
+              <div class="chart-block chart-block--compact">
+                <h4>成绩分布</h4>
+                <BaseChart :option="scorePieOption" height="220px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasKnowledgeChart" :span="hasRadarChart ? 12 : 24">
+              <div class="chart-block chart-block--compact">
+                <h4>知识点掌握度</h4>
+                <BaseChart :option="knowledgeBarOption" height="240px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasRadarChart" :span="12">
+              <div class="chart-block chart-block--compact">
+                <h4>能力雷达</h4>
+                <BaseChart :option="radarOption" height="240px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasHistoryChart" :span="12">
+              <div class="chart-block chart-block--compact">
+                <h4>成绩走势</h4>
+                <BaseChart :option="trendLineOption" height="220px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasIndexChart" :span="12">
+              <div class="chart-block chart-block--compact">
+                <h4>教师配置指标得分</h4>
+                <BaseChart :option="indexBarOption" height="240px" />
+              </div>
+            </el-col>
+            <el-col v-if="hasPartsChart" :span="12">
+              <div class="chart-block chart-block--compact">
+                <h4>学业构成（教师配比）</h4>
+                <BaseChart :option="partsBarOption" height="240px" />
+              </div>
+            </el-col>
+          </el-row>
+        </template>
 
-        <h3>{{ isStudent ? '二' : '三' }}、关键结论</h3>
-        <p>{{ reportData.conclusion }}</p>
+        <template v-if="hasEvalScheme && sectionNums.scheme">
+          <h3>{{ sectionNums.scheme }}、教师评价方案</h3>
+          <el-table :data="reportEvalScheme" border size="small" style="margin: 8px 0 16px">
+            <el-table-column prop="name" label="维度" width="120" />
+            <el-table-column label="得分" width="80" align="center">
+              <template #default="{ row }">{{ row.score ?? '—' }}</template>
+            </el-table-column>
+            <el-table-column label="指标（权重 / 得分）">
+              <template #default="{ row }">
+                {{
+                  (row.indexes || [])
+                    .map((item: { name: string; weight?: number; score?: number | null }) =>
+                      `${item.name} ${item.weight ?? 0}%${item.score != null ? ` / ${item.score}分` : ''}`,
+                    )
+                    .join('；') || '—'
+                }}
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
 
-        <h3>{{ isStudent ? '三' : '四' }}、建议措施</h3>
-        <p>{{ reportData.suggestion }}</p>
+        <template v-if="hasFindings">
+          <h3>{{ sectionNums.findings }}、现状要点</h3>
+          <ol class="findings-list">
+            <li v-for="(item, index) in reportFindings" :key="index">{{ item }}</li>
+          </ol>
+        </template>
+
+        <template v-if="hasWarnings">
+          <h3>{{ sectionNums.warnings }}、预警学生</h3>
+          <el-table :data="reportWarnings" border size="small" style="margin: 8px 0 16px">
+            <el-table-column prop="name" label="学生" width="110" />
+            <el-table-column label="等级" width="80" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="warningTagType(row.level)">{{ row.level }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="原因">
+              <template #default="{ row }">{{ (row.reasons || []).join('；') || '—' }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+
+        <h3>{{ sectionNums.summary }}、总体概述 <el-tag size="small" :type="reportSourceTag">{{ reportSourceLabel }}</el-tag></h3>
+        <p class="report-text">{{ reportData.summary }}</p>
+
+        <h3>{{ sectionNums.conclusion }}、关键结论</h3>
+        <p class="report-text">{{ reportData.conclusion }}</p>
+
+        <h3>{{ sectionNums.suggestion }}、建议措施</h3>
+        <p class="report-text">{{ reportData.suggestion }}</p>
 
         <el-alert
           v-if="reportData.source === 'llm'"
@@ -473,8 +895,57 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
     line-height: 1.8;
   }
 
+  .report-text {
+    white-space: pre-wrap;
+  }
+
   ol {
     padding-left: 20px;
+  }
+}
+
+.findings-list {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+  color: #334155;
+  line-height: 1.7;
+
+  li {
+    margin-bottom: 6px;
+  }
+
+  &--page {
+    margin-top: 16px;
+    font-size: 14px;
+  }
+}
+
+.report-charts-panel {
+  margin-top: 16px;
+}
+
+.report-charts-hint {
+  margin: -4px 0 12px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.chart-block {
+  margin-bottom: 8px;
+  padding: 12px 12px 4px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+
+  h4 {
+    margin: 0 0 4px;
+    font-size: 13px;
+    color: #334155;
+    font-weight: 600;
+  }
+
+  &--compact {
+    margin-bottom: 12px;
   }
 }
 </style>

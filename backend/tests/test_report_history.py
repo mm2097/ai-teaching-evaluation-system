@@ -78,6 +78,8 @@ def test_report_history_persists_and_downloads(report_session):
         assert created["parameters"]["semester"] == "2024-2025-1"
         assert created["data"]["report_type"] == 1
         assert created["stats"]["studentCount"] == 3
+        assert isinstance(created["data"].get("findings"), list)
+        assert created["data"].get("metrics")
 
         # A new client/session dependency still reads the database-backed record.
         refreshed_client = _client(session, 1)

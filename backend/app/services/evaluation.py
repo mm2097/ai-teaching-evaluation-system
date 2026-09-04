@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from math import isfinite
 
@@ -36,6 +37,15 @@ from app.models import (
 from app.services.mastery import compute_student_mastery
 from app.services.profile import ProfileScores, _academic_part_score, compute_profile
 
+
+ACADEMIC_PART_LABELS = {
+    "discussion": "小班讨论",
+    "midterm": "期中考试",
+    "final": "期末考试",
+    "attendance": "考勤",
+    "homework": "作业",
+    "other": "其他",
+}
 
 DEFAULT_WEIGHTS = {
     "academic": 0.4,
@@ -240,6 +250,193 @@ def _configured_dimension_scores(
             weighted_score += weight / total * indicator_score
         result[key] = round(max(0.0, min(100.0, weighted_score)), 1)
     return result
+
+
+def load_course_eval_scheme(session: Session, course_id: int) -> list[dict]:
+    """读取教师为该课程配置的评价维度与指标（名称、权重、计分规则原文）。"""
+    dimensions = session.exec(
+        select(EvalDimension)
+        .where(EvalDimension.course_id == course_id)
+        .order_by(EvalDimension.sort_num, EvalDimension.dimension_id)  # type: ignore[arg-type]
+    ).all()
+    scheme: list[dict] = []
+    for dim in dimensions:
+        indexes = session.exec(
+            select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
+        ).all()
+        scheme.append({
+            "id": dim.dimension_id,
+            "name": dim.dimension_name,
+            "description": dim.description or "",
+            "indexes": [
+                {
+                    "id": idx.index_id,
+                    "name": idx.index_name,
+                    "weight": float(idx.weight or 0),
+                    "score_rule": idx.score_rule or "{}",
+                }
+                for idx in indexes
+            ],
+        })
+    return scheme
+
+
+def _parse_score_rule(raw: str) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def score_eval_scheme_for_student(
+    session: Session, student_id: int, course_id: int, scheme: list[dict] | None = None,
+    profile: ProfileScores | None = None,
+) -> dict:
+    """按教师配置的指标规则，给学生打出各维度/指标分（维度名用配置原文）。"""
+    from app.services.profile import load_academic_parts
+
+    if scheme is None:
+        scheme = load_course_eval_scheme(session, course_id)
+    if profile is None:
+        profile = compute_profile(session, student_id, course_id)
+    masteries = compute_student_mastery(session, student_id, course_id)
+    mastery_score = (
+        sum(item.accuracy for item in masteries) / len(masteries) if masteries else 60.0
+    )
+    evaluation = compute_evaluation(session, student_id, course_id, profile=profile)
+    radar: dict[str, float] = {}
+    filled: list[dict] = []
+    for dim in scheme:
+        index_rows = []
+        weighted = 0.0
+        weight_total = sum(float(item["weight"]) for item in dim["indexes"]) or 100.0
+        for item in dim["indexes"]:
+            rule = _parse_score_rule(item.get("score_rule", "{}"))
+            score = round(float(_score_for_rule(
+                session, student_id, course_id, rule, 75.0, profile, mastery_score,
+            )), 1)
+            index_rows.append({
+                "id": item["id"],
+                "name": item["name"],
+                "weight": item["weight"],
+                "score": score,
+            })
+            weighted += float(item["weight"]) / weight_total * score
+        dim_score = round(weighted, 1) if dim["indexes"] else None
+        if dim_score is not None:
+            radar[dim["name"]] = dim_score
+        filled.append({
+            "id": dim["id"],
+            "name": dim["name"],
+            "description": dim.get("description") or "",
+            "score": dim_score,
+            "indexes": index_rows,
+        })
+    parts = load_academic_parts(session, course_id)
+    academic_parts = []
+    for part, weight in parts.items():
+        value = _academic_part_score(session, student_id, course_id, part)
+        academic_parts.append({
+            "part": part,
+            "name": ACADEMIC_PART_LABELS.get(part, part),
+            "weight": weight,
+            "score": round(float(value), 1) if value is not None else None,
+        })
+    return {
+        "scheme": filled,
+        "radar": radar,
+        "academicParts": academic_parts,
+        "total": evaluation.total_score,
+        "level": evaluation.level,
+        "source": "teacher_config",
+    }
+
+
+def class_eval_snapshot(
+    session: Session, course_id: int, student_ids: list[int], scheme: list[dict] | None = None,
+) -> dict:
+    """班级学习质量：维度分优先用已落库的教师方案评价，指标分用学业构成班级均值。"""
+    from app.services.profile import load_academic_parts, _academic_part_score
+
+    if scheme is None:
+        scheme = load_course_eval_scheme(session, course_id)
+    if not student_ids:
+        return {
+            "scheme": scheme, "radar": {}, "academicParts": [],
+            "totals": [], "levelDist": {}, "evalCount": 0, "source": "teacher_config",
+        }
+
+    results = session.exec(
+        select(StudentEvaluationResult).where(
+            StudentEvaluationResult.course_id == course_id,
+            StudentEvaluationResult.student_id.in_(student_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+    by_dim: dict[int, list[float]] = defaultdict(list)
+    eval_ids = [row.eval_id for row in results if row.eval_id]
+    if eval_ids:
+        for row in session.exec(
+            select(EvalDimensionScore).where(EvalDimensionScore.eval_id.in_(eval_ids))  # type: ignore[arg-type]
+        ).all():
+            by_dim[int(row.dimension_id)].append(float(row.dimension_score))
+
+    parts = load_academic_parts(session, course_id)
+    sample_ids = student_ids[:40]
+    academic_parts = []
+    part_score_map: dict[str, float | None] = {}
+    for part, weight in parts.items():
+        values = []
+        for sid in sample_ids:
+            value = _academic_part_score(session, sid, course_id, part)
+            if value is not None:
+                values.append(float(value))
+        avg = round(sum(values) / len(values), 1) if values else None
+        part_score_map[part] = avg
+        academic_parts.append({
+            "part": part,
+            "name": ACADEMIC_PART_LABELS.get(part, part),
+            "weight": weight,
+            "score": avg,
+        })
+
+    radar: dict[str, float] = {}
+    filled: list[dict] = []
+    for dim in scheme:
+        vals = by_dim.get(int(dim["id"] or 0), [])
+        dim_score = round(sum(vals) / len(vals), 1) if vals else None
+        if dim_score is not None:
+            radar[dim["name"]] = dim_score
+        index_rows = []
+        for item in dim["indexes"]:
+            rule = _parse_score_rule(item.get("score_rule", "{}"))
+            score = None
+            if rule.get("type") == "academic_part":
+                score = part_score_map.get(str(rule.get("part", "")).strip().lower())
+            index_rows.append({
+                "id": item["id"],
+                "name": item["name"],
+                "weight": item["weight"],
+                "score": score,
+            })
+        filled.append({
+            "id": dim["id"],
+            "name": dim["name"],
+            "description": dim.get("description") or "",
+            "score": dim_score,
+            "sampleSize": len(vals),
+            "indexes": index_rows,
+        })
+    totals = [float(row.total_score) for row in results]
+    return {
+        "scheme": filled,
+        "radar": radar,
+        "academicParts": academic_parts,
+        "totals": totals,
+        "levelDist": dict(Counter(row.eval_level for row in results)),
+        "evalCount": len(results),
+        "source": "teacher_config",
+    }
 
 
 def compute_evaluation(

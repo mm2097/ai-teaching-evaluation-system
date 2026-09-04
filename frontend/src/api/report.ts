@@ -1,5 +1,5 @@
 import request from '@/utils/request'
-import type { ReportResponse } from '@/api/ai'
+import type { ReportCharts, ReportResponse } from '@/api/ai'
 
 export interface DashboardStatsSnapshot {
   studentCount?: number
@@ -8,6 +8,7 @@ export interface DashboardStatsSnapshot {
   excellentRate?: number
   attendanceRate?: number
   warningCount?: number
+  charts?: ReportCharts
 }
 
 export interface ReportHistoryItem {

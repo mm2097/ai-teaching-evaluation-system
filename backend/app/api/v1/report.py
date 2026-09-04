@@ -22,6 +22,8 @@ from urllib.parse import quote
 
 import httpx
 import openpyxl
+from openpyxl.chart import BarChart, PieChart, Reference
+from openpyxl.chart.label import DataLabelList
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Query as QueryParam
 from fastapi.responses import HTMLResponse, Response
@@ -203,7 +205,68 @@ def _ctx_to_dict(ctx) -> dict:
         "risk_count": ctx.risk_count,
         "tags": ctx.tags,
         "radar": ctx.radar,
+        "knowledge_mastery": ctx.knowledge_mastery,
+        "score_buckets": ctx.score_buckets,
+        "student_count": ctx.student_count,
+        "attendance_rate": ctx.attendance_rate,
+        "latest_exam_name": ctx.latest_exam_name,
+        "score_min": ctx.score_min,
+        "score_max": ctx.score_max,
+        "score_median": ctx.score_median,
+        "warnings": ctx.warnings,
+        "evaluation": ctx.evaluation,
+        "score_history": ctx.score_history,
+        "predicted_score": ctx.predicted_score,
+        "findings": ctx.findings,
+        "eval_snapshot": ctx.eval_snapshot,
+        "exam_batches": ctx.exam_batches,
+        "report_type": ctx.report_type,
     }
+
+
+def _charts_from_ctx(ctx) -> dict:
+    """结构化图表数据；focus 控制前端按报告主题展示不同图。"""
+    snapshot = ctx.eval_snapshot or {}
+    indexes = []
+    for dim in snapshot.get("scheme") or []:
+        for item in dim.get("indexes") or []:
+            if item.get("score") is None:
+                continue
+            indexes.append({
+                "name": f"{dim.get('name', '')}-{item.get('name', '')}",
+                "score": item["score"],
+                "weight": item.get("weight", 0),
+            })
+    focus = {1: "class", 2: "student", 3: "knowledge", 4: "quality"}.get(ctx.report_type, "class")
+    return {
+        "focus": focus,
+        "scoreBuckets": ctx.score_buckets or [],
+        "knowledge": ctx.knowledge_mastery or [],
+        "radar": ctx.radar or {},
+        "evalIndexes": indexes,
+        "academicParts": snapshot.get("academicParts") or [],
+        "rates": {
+            "avgScore": ctx.avg_score,
+            "passRate": ctx.pass_rate,
+            "excellentRate": ctx.excellent_rate,
+            "attendanceRate": ctx.attendance_rate,
+        },
+        "scoreHistory": ctx.score_history or [],
+    }
+
+
+def _merge_saved_stats(dashboard_stats: dict | None, report: dict) -> dict:
+    """看板快照与本次报告指标合并：空值不覆盖已有数据。"""
+    merged = dict(dashboard_stats or {})
+    for key, value in (report.get("metrics") or {}).items():
+        if value in (None, ""):
+            continue
+        existing = merged.get(key)
+        if value in (0, 0.0) and existing not in (None, "", 0, 0.0):
+            continue
+        merged[key] = value
+    merged["charts"] = report.get("charts") or {}
+    return merged
 
 
 def _assemble_report(
@@ -238,9 +301,9 @@ def _assemble_report(
     if report_type == 2:
         if not _student_id:
             raise HTTPException(status_code=400, detail="学生个人报告必须提供 student_id")
-        ctx = build_student_context(session, _student_id, course_id)
+        ctx = build_student_context(session, _student_id, course_id, report_type)
     elif report_type in (3, 4) and _student_id:
-        ctx = build_student_context(session, _student_id, course_id)
+        ctx = build_student_context(session, _student_id, course_id, report_type)
         scope = "student"
     else:
         ctx = build_class_context(session, course_id, _class_id, report_type)
@@ -248,13 +311,25 @@ def _assemble_report(
     ctx.scope = scope
     template = render_report(ctx)
 
+    charts = _charts_from_ctx(ctx)
+    detail = {
+        "findings": template.get("findings") or ctx.findings,
+        "metrics": template.get("metrics") or {},
+        "warnings": template.get("warnings") if "warnings" in template else ctx.warnings,
+        "evalScheme": template.get("evalScheme") or [],
+        "academicParts": template.get("academicParts") or [],
+        "charts": charts,
+        "report_type": report_type,
+        "report_type_name": type_name,
+    }
     if not use_llm:
-        return {**template, "report_type": report_type, "report_type_name": type_name}, ctx
+        return {**template, **detail}, ctx
 
     ctx_dict = _ctx_to_dict(ctx)
     ctx_dict["report_type"] = report_type
     ctx_dict["report_type_name"] = type_name
-    return _enhance_with_llm(scope, report_type, ctx_dict, template), ctx
+    enhanced = _enhance_with_llm(scope, report_type, ctx_dict, template)
+    return {**enhanced, **detail}, ctx
 
 
 def _history_to_dict(history: ReportHistory, include_snapshot: bool = False) -> dict:
@@ -334,7 +409,7 @@ def _snapshot_workbook(history: ReportHistory) -> bytes:
         ws.cell(row=row_index, column=1).font = title_font
         ws.cell(row=row_index, column=1).fill = title_fill
         ws.cell(row=row_index, column=2).alignment = wrap
-        ws.row_dimensions[row_index].height = 72
+        ws.row_dimensions[row_index].height = 132
     ws.column_dimensions["A"].width = 16
     ws.column_dimensions["B"].width = 90
 
@@ -344,10 +419,146 @@ def _snapshot_workbook(history: ReportHistory) -> bytes:
         for cell in stats_ws[1]:
             cell.font = title_font
             cell.fill = title_fill
+        skip_keys = {"charts"}
         for key, value in stats.items():
+            if key in skip_keys or isinstance(value, (dict, list)):
+                continue
             stats_ws.append([key, value])
         stats_ws.column_dimensions["A"].width = 24
         stats_ws.column_dimensions["B"].width = 24
+
+    charts = report.get("charts") or stats.get("charts") or {}
+    score_buckets = [item for item in (charts.get("scoreBuckets") or []) if item.get("count")]
+    knowledge = charts.get("knowledge") or []
+    radar = charts.get("radar") or {}
+
+    if score_buckets:
+        dist_ws = wb.create_sheet("成绩分布")
+        dist_ws.append(["成绩段", "人数"])
+        for cell in dist_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for item in score_buckets:
+            dist_ws.append([item.get("label", ""), item.get("count", 0)])
+        dist_ws.column_dimensions["A"].width = 22
+        dist_ws.column_dimensions["B"].width = 12
+        pie = PieChart()
+        pie.title = "成绩分布"
+        labels = Reference(dist_ws, min_col=1, min_row=2, max_row=1 + len(score_buckets))
+        data = Reference(dist_ws, min_col=2, min_row=1, max_row=1 + len(score_buckets))
+        pie.add_data(data, titles_from_data=True)
+        pie.set_categories(labels)
+        pie.dataLabels = DataLabelList()
+        pie.dataLabels.showPercent = True
+        pie.dataLabels.showVal = False
+        pie.dataLabels.showCatName = True
+        pie.width = 14
+        pie.height = 8
+        dist_ws.add_chart(pie, "D2")
+
+    if knowledge:
+        kp_ws = wb.create_sheet("知识点掌握")
+        kp_ws.append(["知识点", "掌握度(%)", "等级"])
+        for cell in kp_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for item in knowledge:
+            kp_ws.append([item.get("name", ""), item.get("accuracy", 0), item.get("level", "")])
+        kp_ws.column_dimensions["A"].width = 24
+        kp_ws.column_dimensions["B"].width = 14
+        kp_ws.column_dimensions["C"].width = 12
+        bar = BarChart()
+        bar.type = "bar"
+        bar.title = "知识点掌握度"
+        bar.y_axis.title = None
+        bar.x_axis.title = "掌握度(%)"
+        bar.x_axis.scaling.max = 100
+        data = Reference(kp_ws, min_col=2, min_row=1, max_row=1 + len(knowledge))
+        cats = Reference(kp_ws, min_col=1, min_row=2, max_row=1 + len(knowledge))
+        bar.add_data(data, titles_from_data=True)
+        bar.set_categories(cats)
+        bar.shape = 4
+        bar.legend = None
+        bar.width = 16
+        bar.height = max(8, min(18, 1.2 * len(knowledge)))
+        kp_ws.add_chart(bar, "E2")
+
+    if radar:
+        radar_ws = wb.create_sheet("能力雷达")
+        radar_ws.append(["维度", "得分"])
+        for cell in radar_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for name, value in radar.items():
+            radar_ws.append([name, value])
+        radar_ws.column_dimensions["A"].width = 18
+        radar_ws.column_dimensions["B"].width = 12
+        radar_bar = BarChart()
+        radar_bar.type = "col"
+        radar_bar.title = "能力维度得分"
+        radar_bar.y_axis.scaling.max = 100
+        data = Reference(radar_ws, min_col=2, min_row=1, max_row=1 + len(radar))
+        cats = Reference(radar_ws, min_col=1, min_row=2, max_row=1 + len(radar))
+        radar_bar.add_data(data, titles_from_data=True)
+        radar_bar.set_categories(cats)
+        radar_bar.legend = None
+        radar_bar.width = 12
+        radar_bar.height = 8
+        radar_ws.add_chart(radar_bar, "D2")
+
+    scheme_rows = report.get("evalScheme") or []
+    if scheme_rows:
+        scheme_ws = wb.create_sheet("教师评价方案")
+        scheme_ws.append(["维度", "维度得分", "指标", "权重(%)", "指标得分"])
+        for cell in scheme_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for dim in scheme_rows:
+            indexes = dim.get("indexes") or [{}]
+            for item in indexes:
+                scheme_ws.append([
+                    dim.get("name", ""),
+                    dim.get("score"),
+                    item.get("name", ""),
+                    item.get("weight"),
+                    item.get("score"),
+                ])
+        scheme_ws.column_dimensions["A"].width = 16
+        scheme_ws.column_dimensions["B"].width = 12
+        scheme_ws.column_dimensions["C"].width = 18
+        scheme_ws.column_dimensions["D"].width = 12
+        scheme_ws.column_dimensions["E"].width = 12
+
+    findings = report.get("findings") or []
+    if findings:
+        find_ws = wb.create_sheet("现状要点")
+        find_ws.append(["序号", "要点"])
+        for cell in find_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for index, text in enumerate(findings, start=1):
+            find_ws.append([index, text])
+            find_ws.cell(row=index + 1, column=2).alignment = wrap
+            find_ws.row_dimensions[index + 1].height = 36
+        find_ws.column_dimensions["A"].width = 8
+        find_ws.column_dimensions["B"].width = 100
+
+    warning_rows = report.get("warnings") or []
+    if warning_rows:
+        warn_ws = wb.create_sheet("预警名单")
+        warn_ws.append(["学生", "等级", "原因"])
+        for cell in warn_ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for item in warning_rows:
+            warn_ws.append([
+                item.get("name", ""),
+                item.get("level", ""),
+                "；".join(item.get("reasons") or []),
+            ])
+        warn_ws.column_dimensions["A"].width = 16
+        warn_ws.column_dimensions["B"].width = 10
+        warn_ws.column_dimensions["C"].width = 70
 
     output = _io.BytesIO()
     wb.save(output)
@@ -399,17 +610,23 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
     ]
 
     stat_labels = {
-        "studentCount": "学生总数", "courseCount": "课程数量",
+        "studentCount": "学生人数", "avgScore": "均分",
+        "scoreMedian": "中位数", "scoreMin": "最低分", "scoreMax": "最高分",
         "passRate": "及格率", "excellentRate": "优秀率",
         "attendanceRate": "平均出勤率", "warningCount": "预警学生",
+        "latestExam": "最近考核", "courseCount": "课程数量",
     }
-    if stats:
-        story.append(_paragraph("一、核心指标概览", heading_style))
-        table_data = [["指标", "数值"]]
-        for key, label in stat_labels.items():
-            if key in stats:
-                suffix = "%" if key in {"passRate", "excellentRate", "attendanceRate"} else ""
-                table_data.append([label, f"{stats[key]}{suffix}"])
+    has_core_stats = bool(stats) and any(key in stats for key in stat_labels)
+    charts = report.get("charts") or (stats.get("charts") if isinstance(stats, dict) else {}) or {}
+    focus = charts.get("focus") or {1: "class", 2: "student", 3: "knowledge", 4: "quality"}.get(history.report_type, "class")
+    score_buckets = [item for item in (charts.get("scoreBuckets") or []) if item.get("count")] if focus == "class" else []
+    knowledge = charts.get("knowledge") or [] if focus in ("knowledge", "student") else []
+    radar = charts.get("radar") or {} if focus in ("student", "quality") else {}
+    has_charts = bool(score_buckets or knowledge or radar or (charts.get("evalIndexes") if focus == "quality" else None))
+    if focus == "knowledge":
+        has_core_stats = False
+
+    def _styled_table(table_data: list[list[str]]) -> Table:
         table = Table(table_data, colWidths=[55 * mm, 90 * mm], repeatRows=1)
         table.setStyle(TableStyle([
             ("FONTNAME", (0, 0), (-1, -1), font_name),
@@ -423,16 +640,82 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
-        story.extend([table, Spacer(1, 3 * mm)])
+        return table
 
-    offset = 1 if stats else 0
-    section_numbers = ("二", "三", "四") if offset else ("一", "二", "三")
-    for number, label, key in zip(
-        section_numbers,
-        ("总体概述", "关键结论", "建议措施"),
-        ("summary", "conclusion", "suggestion"),
-    ):
-        story.append(_paragraph(f"{number}、{label}", heading_style))
+    section_index = 0
+    cn_nums = ("一", "二", "三", "四", "五", "六", "七", "八")
+
+    if has_core_stats:
+        story.append(_paragraph(f"{cn_nums[section_index]}、核心指标概览", heading_style))
+        section_index += 1
+        table_data = [["指标", "数值"]]
+        for key, label in stat_labels.items():
+            if key in stats:
+                suffix = "%" if key in {"passRate", "excellentRate", "attendanceRate"} else ""
+                table_data.append([label, f"{stats[key]}{suffix}"])
+        story.extend([_styled_table(table_data), Spacer(1, 3 * mm)])
+
+    if has_charts:
+        story.append(_paragraph(f"{cn_nums[section_index]}、图形化数据", heading_style))
+        section_index += 1
+        if score_buckets:
+            story.append(_paragraph("成绩分布", body_style))
+            dist_rows = [["成绩段", "人数"]]
+            dist_rows.extend([[item.get("label", ""), str(item.get("count", 0))] for item in score_buckets])
+            story.extend([_styled_table(dist_rows), Spacer(1, 2 * mm)])
+        if knowledge:
+            story.append(_paragraph("知识点掌握度", body_style))
+            kp_rows = [["知识点", "掌握度"]]
+            kp_rows.extend([
+                [item.get("name", ""), f"{item.get('accuracy', 0)}%"]
+                for item in knowledge
+            ])
+            story.extend([_styled_table(kp_rows), Spacer(1, 2 * mm)])
+        if radar:
+            story.append(_paragraph("能力维度", body_style))
+            radar_rows = [["维度", "得分"]]
+            radar_rows.extend([[str(name), str(value)] for name, value in radar.items()])
+            story.extend([_styled_table(radar_rows), Spacer(1, 2 * mm)])
+
+    scheme_rows = report.get("evalScheme") or []
+    if scheme_rows:
+        story.append(_paragraph(f"{cn_nums[section_index]}、教师评价方案", heading_style))
+        section_index += 1
+        scheme_table = [["维度", "指标 / 权重 / 得分"]]
+        for dim in scheme_rows:
+            indexes = dim.get("indexes") or []
+            index_text = "；".join(
+                f"{item.get('name', '')} {item.get('weight', 0)}%"
+                + (f" / {item['score']}分" if item.get("score") is not None else "")
+                for item in indexes
+            ) or "未设指标"
+            dim_score = dim.get("score")
+            dim_label = f"{dim.get('name', '')}" + (f"（{dim_score}分）" if dim_score is not None else "")
+            scheme_table.append([dim_label, index_text])
+        story.extend([_styled_table(scheme_table), Spacer(1, 2 * mm)])
+
+    findings = [str(item) for item in (report.get("findings") or []) if item]
+    if findings:
+        story.append(_paragraph(f"{cn_nums[section_index]}、现状要点", heading_style))
+        section_index += 1
+        for index, text in enumerate(findings, start=1):
+            story.append(_paragraph(f"{index}. {text}", body_style))
+
+    warning_rows = report.get("warnings") or []
+    if warning_rows:
+        story.append(_paragraph(f"{cn_nums[section_index]}、预警学生", heading_style))
+        section_index += 1
+        warn_table = [["学生", "等级 / 原因"]]
+        for item in warning_rows:
+            warn_table.append([
+                item.get("name", ""),
+                f"{item.get('level', '')}：{'；'.join(item.get('reasons') or [])}",
+            ])
+        story.extend([_styled_table(warn_table), Spacer(1, 2 * mm)])
+
+    for label, key in (("总体概述", "summary"), ("关键结论", "conclusion"), ("建议措施", "suggestion")):
+        story.append(_paragraph(f"{cn_nums[section_index]}、{label}", heading_style))
+        section_index += 1
         story.append(_paragraph(report.get(key, ""), body_style))
 
     def _draw_footer(canvas, doc):
@@ -566,7 +849,7 @@ def generate_and_save_report(
         student_name=student.real_name if student else ctx.student_name,
         parameter_snapshot=json.dumps(parameters, ensure_ascii=False),
         report_snapshot=json.dumps(report, ensure_ascii=False),
-        stats_snapshot=json.dumps(payload.dashboard_stats, ensure_ascii=False),
+        stats_snapshot=json.dumps(_merge_saved_stats(payload.dashboard_stats, report), ensure_ascii=False),
         created_at=datetime.now(),
     )
     session.add(history)

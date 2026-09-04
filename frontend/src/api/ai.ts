@@ -21,6 +21,48 @@ export interface GeneratedQuestion {
 }
 
 /** 报告 API 返回类型 */
+export interface ReportChartKnowledge {
+  name: string
+  accuracy: number
+  level?: string
+}
+
+export interface ReportChartBucket {
+  label: string
+  count: number
+}
+
+export interface ReportCharts {
+  focus?: 'class' | 'student' | 'knowledge' | 'quality'
+  scoreBuckets?: ReportChartBucket[]
+  knowledge?: ReportChartKnowledge[]
+  radar?: Record<string, number>
+  evalIndexes?: { name: string; score: number; weight?: number }[]
+  academicParts?: { name: string; weight?: number; score?: number | null; part?: string }[]
+  rates?: {
+    avgScore?: number
+    passRate?: number
+    excellentRate?: number
+    attendanceRate?: number
+  }
+  scoreHistory?: { name: string; score: number }[]
+}
+
+export interface ReportEvalIndex {
+  id?: number
+  name: string
+  weight?: number
+  score?: number | null
+}
+
+export interface ReportEvalDimension {
+  id?: number
+  name: string
+  description?: string
+  score?: number | null
+  indexes?: ReportEvalIndex[]
+}
+
 export interface ReportResponse {
   summary: string
   conclusion: string
@@ -30,6 +72,19 @@ export interface ReportResponse {
   report_type?: number
   report_type_name?: string
   error?: string
+  charts?: ReportCharts
+  findings?: string[]
+  warnings?: ReportWarningItem[]
+  metrics?: Record<string, string | number>
+  evalScheme?: ReportEvalDimension[]
+  academicParts?: { name: string; weight?: number; score?: number | null }[]
+}
+
+export interface ReportWarningItem {
+  student_id?: number
+  name: string
+  level: string
+  reasons?: string[]
 }
 
 export interface ReportHistoryItem {

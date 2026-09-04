@@ -27,11 +27,14 @@ SYSTEM_PROMPT = """你是一名资深的「教学分析报告撰写助手」，�
 你的任务：基于结构化统计数据与模板初稿，改写成自然、专业、可执行的分析报告。
 
 铁律：
-1. **严禁编造**：所有数字、人名、知识点必须来自输入的统计数据，不得增减。
-2. **保留模板要点**：模板中的薄弱知识点、建议措施必须出现在改写稿中。
-3. **风格**：客观、简练、专业，避免空话。班级报告 ≤ 200 字，学生报告 ≤ 150 字。
-4. **结构**：summary（总体概述）+ conclusion（关键结论）+ suggestion（具体可执行建议）。
-5. 输出严格 JSON：{"summary": "...", "conclusion": "...", "suggestion": "..."}
+1. **严禁编造**：所有数字、人名、知识点、维度名、指标名必须来自输入数据，不得增减。
+2. **听主题**：不同类型报告侧重点不同，禁止写成同一篇。
+   - 1 班级学情：人数、历次考核、分档、出勤、预警；知识点只附带一句。
+   - 2 学生个人学情：该生轨迹、画像标签、教师配置维度得分。
+   - 3 知识点分析：按模块/知识点掌握度；不要展开及格率或预警名单。
+   - 4 学习质量：必须用教师自定义的维度名、指标名和权重，引用 eval_snapshot；禁止擅自改成「学业成绩/学习态度」等默认叫法。
+3. **写细**：400–700 字。suggestion 用 1. 2. 3. 换行，每条对应具体数据。
+4. 输出严格 JSON：{"summary": "...", "conclusion": "...", "suggestion": "..."}
 """
 
 
@@ -86,12 +89,19 @@ def enhance_report(scope: str, template: dict, context: dict) -> dict:
 
 def _build_user_prompt(scope: str, template: dict, context: dict) -> str:
     """拼装用户指令。"""
-    scope_cn = "班级整体报告" if scope == "class" else "学生个人报告"
+    type_name = context.get("report_type_name") or ("班级整体报告" if scope == "class" else "学生个人报告")
+    report_type = context.get("report_type")
+    focus = {
+        1: "只写班级学情（考核、分档、出勤、预警）。",
+        2: "只写该生个人学情（轨迹、标签、教师配置维度）。",
+        3: "只写知识点/模块掌握度。",
+        4: "只写教师自定义评价方案下的学习质量，保留维度与指标原名。",
+    }.get(int(report_type) if report_type is not None else 0, "按模板主题改写。")
     return (
-        f"请改写以下{scope_cn}初稿为专业自然语言报告。\n\n"
+        f"请改写以下「{type_name}」初稿。{focus}\n\n"
         f"【模板初稿】\n{json.dumps(template, ensure_ascii=False, indent=2)}\n\n"
         f"【统计数据】\n{json.dumps(context, ensure_ascii=False, indent=2)}\n\n"
-        f"要求：保留所有关键数字与知识点名称；输出严格 JSON："
+        f"要求：保留关键数字、教师配置的维度/指标名称与权重；建议分条；输出严格 JSON："
         f"{{\"summary\":\"...\",\"conclusion\":\"...\",\"suggestion\":\"...\"}}"
     )
 

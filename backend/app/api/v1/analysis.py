@@ -18,6 +18,7 @@ from app.services.predict import predict_student_scores
 from app.services.mastery import compute_assignment_accuracy_index, compute_mastery_index_with_fallback
 from app.services.warning import scan_course_warnings, persist_warnings
 from app.services.profile import compute_profile
+from app.services.evaluation import compute_evaluation
 
 router = APIRouter()
 
@@ -276,10 +277,16 @@ def get_student_profile(
 
     # 雷达五轴：实时计算，保证上传考勤/课堂参与后立即同步到雷达图
     computed = compute_profile(session, student_id, profile.course_id)
-    comprehensive = (
-        eval_result.total_score if eval_result is not None
-        else profile.total_profile_score
-    )
+    if eval_result is not None:
+        comprehensive = eval_result.total_score
+    else:
+        # 无落库结果时用综合评价新口径（含维度占比配置与回退逻辑），保持雷达口径一致
+        try:
+            comprehensive = compute_evaluation(
+                session, student_id, profile.course_id, profile=computed
+            ).total_score
+        except Exception:
+            comprehensive = profile.total_profile_score
 
     return {
         "viewType": "student",

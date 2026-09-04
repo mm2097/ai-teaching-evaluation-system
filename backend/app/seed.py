@@ -693,13 +693,12 @@ def seed() -> None:
         print(f"  答题任务: {len(tasks)} 个，答题记录: {len(answers)} 条")
 
         # ========== 15. 评价维度 & 指标 ==========
+        # 默认维度只有两个：学业水平 60% + 学习态度 40%，需要时可新增其他维度
         dimensions = [
-            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
-            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
-            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
-            EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
+            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
+            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
         ]
         session.add_all(dimensions)
         session.commit()

@@ -26,6 +26,7 @@ def init_db() -> None:
     _migrate_legacy_tables()
     _migrate_academic_parts()
     _migrate_attitude_homework()
+    _migrate_dimension_weight()
     _migrate_evaluation_levels()
     _migrate_student_answers()
 
@@ -256,6 +257,102 @@ def _migrate_attitude_homework() -> None:
                 "Attitude homework migration refresh failed (courses=%s)",
                 sorted(affected_courses),
             )
+
+
+def _migrate_dimension_weight() -> None:
+    """eval_dimension 增加 weight 列并回填默认维度占比（幂等）。
+
+    默认维度只有两个：学业水平 60% + 学习态度 40%（合计 100%，直接生效）。
+    - 建列当次回填：学业成绩/学业水平→60、学习态度→40，
+      其余（学习进步/知识掌握/自定义维度）保持 0，由教师自行分配
+    - 已有维度但缺「学习态度」的课程自动补建该维度与三个标准指标
+      （出勤率 40 / 课堂参与 30 / 作业提交 30，同 _migrate_academic_parts 补建学业水平的模式）
+    - 回填/补建影响综合评价口径与维度分落库 → 重算受影响课程（失败不阻塞启动）
+    """
+    import json
+
+    from sqlmodel import select
+
+    from app.models import Course, EvalDimension, EvalIndex
+
+    # 1) 建列（幂等；仅建列当次回填，避免重启覆盖教师手改的占比）
+    column_added = False
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "eval_dimension" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("eval_dimension")}
+        if "weight" not in columns:
+            connection.execute(text(
+                "ALTER TABLE eval_dimension ADD COLUMN weight FLOAT NOT NULL DEFAULT 0"
+            ))
+            column_added = True
+
+    DEFAULT_SHARE = {"学业成绩": 60.0, "学业水平": 60.0, "学习态度": 40.0}
+    ATTITUDE_INDEXES = [
+        ("出勤率", 40.0, {"type": "attendance", "full_score": 100}),
+        ("课堂参与", 30.0, {"type": "interaction", "full_score": 100}),
+        ("作业提交", 30.0, {"type": "homework", "full_score": 100}),
+    ]
+    refreshed: set[int] = set()
+
+    with Session(engine) as session:
+        dims = session.exec(select(EvalDimension)).all()
+
+        # 2) 建列当次回填 canonical 默认占比
+        if column_added:
+            for dim in dims:
+                share = DEFAULT_SHARE.get((dim.dimension_name or "").strip())
+                if share is not None and float(dim.weight or 0) != share:
+                    dim.weight = share
+                    dim.update_time = datetime.now()
+                    session.add(dim)
+                    if dim.course_id is not None:
+                        refreshed.add(dim.course_id)
+
+        # 3) 补建默认「学习态度」维度（幂等，每次启动检查）
+        attitude_course_ids = {
+            d.course_id for d in dims if "态度" in (d.dimension_name or "")
+        }
+        for course_id in session.exec(select(Course.course_id)).all():
+            if course_id in attitude_course_ids:
+                continue
+            dim = EvalDimension(
+                course_id=course_id,
+                dimension_name="学习态度",
+                description="考勤、课堂参与度与作业提交率",
+                sort_num=2,
+                weight=40.0,
+            )
+            session.add(dim)
+            session.commit()
+            session.refresh(dim)
+            for name, weight, rule in ATTITUDE_INDEXES:
+                session.add(EvalIndex(
+                    dimension_id=dim.dimension_id,
+                    index_name=name,
+                    weight=weight,
+                    score_rule=json.dumps(rule, ensure_ascii=False),
+                ))
+            session.commit()
+            refreshed.add(course_id)
+
+        session.commit()
+
+    # 4) 重算受影响课程（占比口径变化 + 新维度得分落库）
+    if not refreshed:
+        return
+    try:
+        from app.services.analysis_refresh import refresh_course_evaluations
+
+        for course_id in sorted(refreshed):
+            with Session(engine) as bg_session:
+                refresh_course_evaluations(bg_session, course_id)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Dimension weight migration refresh failed (courses=%s)",
+            sorted(refreshed),
+        )
 
 
 def _migrate_student_answers() -> None:

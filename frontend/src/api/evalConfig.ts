@@ -18,6 +18,8 @@ export interface EvalDimensionItem {
   dimensionName: string
   description?: string | null
   sortNum: number
+  /** 维度在综合得分中的占比（%），全维度合计 100% 时生效 */
+  weight: number
   indexes: EvalIndexItem[]
   weightSum: number
   weightValid: boolean
@@ -27,18 +29,22 @@ export interface EvalConfigResponse {
   courseId: number
   courseName: string
   dimensions: EvalDimensionItem[]
+  dimensionWeightSum: number
+  dimensionWeightValid: boolean
 }
 
 export interface CreateDimensionParams {
   dimensionName: string
   description?: string
   sortNum?: number
+  weight?: number
 }
 
 export interface UpdateDimensionParams {
   dimensionName?: string
   description?: string
   sortNum?: number
+  weight?: number
 }
 
 export interface CreateIndexParams {
@@ -79,6 +85,43 @@ export const SCORE_RULE_PRESETS = [
 ] as const
 
 export type ScoreRulePresetValue = (typeof SCORE_RULE_PRESETS)[number]['value']
+
+/** 数据来源下拉分组（六类已有数据靠前，兼容存量配置置后） */
+export const SCORE_RULE_PRESET_GROUPS: ReadonlyArray<{
+  label: string
+  options: ReadonlyArray<{ value: ScoreRulePresetValue; label: string }>
+}> = [
+  {
+    label: '已有成绩数据',
+    options: [
+      { value: 'part_discussion', label: '小班讨论（单项成绩）' },
+      { value: 'part_midterm', label: '期中考试（各题得分）' },
+      { value: 'part_final', label: '期末考试（各题得分）' },
+      { value: 'part_homework', label: '作业（单项成绩，批次名含“作业”）' },
+    ],
+  },
+  {
+    label: '过程数据',
+    options: [
+      { value: 'part_attendance', label: '考勤（到课率）' },
+      { value: 'interaction', label: '课堂参与（参与度）' },
+      { value: 'attendance', label: '出勤率' },
+      { value: 'homework', label: '作业提交率' },
+    ],
+  },
+  {
+    label: '其他',
+    options: [{ value: 'part_other', label: '其他（实验等，占比自动补足）' }],
+  },
+  {
+    label: '旧版直读（兼容存量）',
+    options: [
+      { value: 'score_daily', label: '平时成绩（旧）' },
+      { value: 'score_mid', label: '期中/测验成绩（旧）' },
+      { value: 'score_final', label: '期末成绩（旧）' },
+    ],
+  },
+]
 
 /** 是否为「其他」自动补足指标（占比 = 100 − 其余指标权重和） */
 export function isAutoFillOtherRule(rule: Record<string, unknown> | null | undefined): boolean {
@@ -126,6 +169,7 @@ function toDimensionQuery(
   if (params.dimensionName !== undefined) q.dimension_name = params.dimensionName
   if (params.description !== undefined) q.description = params.description
   if (params.sortNum !== undefined) q.sort_num = params.sortNum
+  if (params.weight !== undefined) q.weight = params.weight
   return q
 }
 
@@ -309,6 +353,39 @@ export async function saveDimensionWeights(
     }
 
     return { weightSum: lastSum, weightValid: lastValid }
+  })
+}
+
+/** 批量保存各维度在综合得分中的占比（先降后升，单次排队提交，与指标权重保存同模式） */
+export async function saveDimensionShares(
+  dimensions: EvalDimensionItem[],
+  draftShares: Record<number, number>,
+): Promise<{ dimensionWeightSum: number; dimensionWeightValid: boolean }> {
+  return runEvalConfigTask(async () => {
+    const tasks: { dimensionId: number; weight: number; oldWeight: number }[] = []
+    for (const dim of dimensions) {
+      const next = draftShares[dim.dimensionId]
+      if (next === undefined || next === (dim.weight ?? 0)) continue
+      tasks.push({ dimensionId: dim.dimensionId, weight: next, oldWeight: dim.weight ?? 0 })
+    }
+    const sum = calcWeightSum(
+      dimensions.map((d) => draftShares[d.dimensionId] ?? (d.weight ?? 0)),
+    )
+    if (!tasks.length) {
+      return { dimensionWeightSum: sum, dimensionWeightValid: Math.abs(sum - 100) < 0.01 }
+    }
+
+    // 先降后升，避免中途合计超过 100 被后端拒绝
+    const ordered = [
+      ...tasks.filter((t) => t.weight < t.oldWeight),
+      ...tasks.filter((t) => t.weight > t.oldWeight),
+    ]
+    for (const task of ordered) {
+      await request.put(`/v1/eval-config/dimensions/${task.dimensionId}`, null, {
+        params: { weight: task.weight },
+      })
+    }
+    return { dimensionWeightSum: sum, dimensionWeightValid: Math.abs(sum - 100) < 0.01 }
   })
 }
 

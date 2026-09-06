@@ -22,6 +22,7 @@ const props = withDefaults(
 const chartRef = ref<HTMLDivElement>()
 /** ECharts 实例（浅响应式，避免深度代理影响性能） */
 const chartInstance = shallowRef<echarts.ECharts>()
+let resizeObserver: ResizeObserver | undefined
 
 /**
  * 初始化或更新图表
@@ -44,9 +45,14 @@ function handleResize(): void {
 onMounted(() => {
   renderChart()
   window.addEventListener('resize', handleResize)
+  if (chartRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => handleResize())
+    resizeObserver.observe(chartRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
   window.removeEventListener('resize', handleResize)
   chartInstance.value?.dispose()
 })

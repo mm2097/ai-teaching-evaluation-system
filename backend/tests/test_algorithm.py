@@ -345,6 +345,40 @@ class TestReport:
         assert report["scope"] == "student"
         assert "张三" in report["summary"]
 
+    def test_four_report_types_have_distinct_focus(self, session):
+        """四类报告侧重点必须分开，并带上教师配置维度名。"""
+        from app.models import EvalDimension, EvalIndex
+        from app.services.report_template import (
+            build_class_context, build_student_context, render_report,
+        )
+
+        dim = EvalDimension(course_id=1, dimension_name="学业水平", sort_num=1)
+        session.add(dim)
+        session.flush()
+        session.add(EvalIndex(
+            dimension_id=dim.dimension_id, index_name="期末考试", weight=100,
+            score_rule='{"type":"academic_part","part":"final"}',
+        ))
+        session.commit()
+
+        class_ctx = build_class_context(session, course_id=1, report_type=1)
+        student_ctx = build_student_context(session, student_id=1, course_id=1, report_type=2)
+        knowledge_ctx = build_class_context(session, course_id=1, report_type=3)
+        quality_ctx = build_class_context(session, course_id=1, report_type=4)
+        reports = {
+            1: render_report(class_ctx),
+            2: render_report(student_ctx),
+            3: render_report(knowledge_ctx),
+            4: render_report(quality_ctx),
+        }
+        assert "【班级学情】" in reports[1]["findings"][0]
+        assert "【个人学情】" in reports[2]["findings"][0]
+        assert "【知识点分析】" in reports[3]["findings"][0]
+        assert "【学习质量】" in reports[4]["findings"][0]
+        assert "不展开班级及格率" in reports[3]["conclusion"]
+        assert reports[3]["warnings"] == []
+        assert any("学业水平" in str(item) for item in reports[4]["findings"])
+
 
 def test_warning_w4_homework_missing_uses_interaction_records(session):
     from datetime import date

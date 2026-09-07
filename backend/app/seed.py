@@ -14,7 +14,8 @@ from sqlmodel import Session, SQLModel, select
 from app.core.database import engine, init_db
 from app.core.security import hash_password
 from app.models import (
-    SysUser, SysRole, Teacher, Student, ClassInfo, Course, CourseStudent,
+    SysUser, SysRole, Teacher, TeachingAssistant, CourseAssistant,
+    Student, ClassInfo, Course, CourseStudent,
     KnowledgeModule, KnowledgePoint,
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
@@ -33,11 +34,62 @@ def reset() -> None:
     print("[seed] 数据库已重建")
 
 
+def ensure_assistant_seed() -> None:
+    """为已有数据库幂等补建助教角色、演示账号和课程授权。"""
+    init_db()
+    with Session(engine) as session:
+        role = session.exec(select(SysRole).where(SysRole.role_code == "assistant")).first()
+        if not role:
+            role = SysRole(
+                role_name="课程助教", role_code="assistant",
+                description="协助授权课程的数据采集与维护",
+            )
+            session.add(role)
+            session.commit()
+            session.refresh(role)
+
+        user = session.exec(select(SysUser).where(SysUser.username == "assistant")).first()
+        if not user:
+            user = SysUser(
+                username="assistant", password=hash_password("123456"),
+                real_name="周助教", role_id=role.role_id, status=1, college="计算机学院",
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+
+        assistant = session.exec(
+            select(TeachingAssistant).where(TeachingAssistant.user_id == user.user_id)
+        ).first()
+        if not assistant:
+            assistant = TeachingAssistant(
+                assistant_no="A001", real_name=user.real_name, user_id=user.user_id,
+                college=user.college or "计算机学院",
+                phone="13800000004", email="assistant@edu.cn",
+            )
+            session.add(assistant)
+            session.commit()
+            session.refresh(assistant)
+
+        course_ids = session.exec(select(Course.course_id).order_by(Course.course_id).limit(2)).all()
+        assigned = set(session.exec(
+            select(CourseAssistant.course_id).where(
+                CourseAssistant.assistant_id == assistant.assistant_id
+            )
+        ).all())
+        for course_id in course_ids:
+            if course_id not in assigned:
+                session.add(CourseAssistant(course_id=course_id, assistant_id=assistant.assistant_id))
+        session.commit()
+
+
 def seed() -> None:
     init_db()
     with Session(engine) as session:
         existing = session.exec(select(SysRole)).first()
         if existing:
+            session.close()
+            ensure_assistant_seed()
             print("[seed] 数据已存在，跳过")
             return
 
@@ -46,6 +98,7 @@ def seed() -> None:
             SysRole(role_name="系统管理员", role_code="admin", description="管理系统所有功能"),
             SysRole(role_name="任课教师", role_code="teacher", description="管理课程、查看学情分析"),
             SysRole(role_name="学生", role_code="student", description="查看个人成绩、答题、评价"),
+            SysRole(role_name="课程助教", role_code="assistant", description="协助授权课程的数据采集与维护"),
         ]
         session.add_all(roles)
         session.commit()
@@ -154,6 +207,13 @@ def seed() -> None:
         session.commit()
         print(f"  测试学生用户: {len(test_student_users)} 条")
 
+        assistant_user = SysUser(
+            username="assistant", password=hash_password("123456"),
+            real_name="周助教", role_id=4, status=1, college="计算机学院",
+        )
+        session.add(assistant_user)
+        session.commit()
+
         # ========== 3. 教师（4人，不同职称） ==========
         teachers = [
             Teacher(teacher_no="T001", real_name="王建国", title="教授",
@@ -166,6 +226,14 @@ def seed() -> None:
         session.add_all(teachers)
         session.commit()
         print(f"  教师: {len(teachers)} 条")
+
+        assistant = TeachingAssistant(
+            assistant_no="A001", real_name="周助教", user_id=assistant_user.user_id,
+            college="计算机学院", phone="13800000004", email="assistant@edu.cn",
+        )
+        session.add(assistant)
+        session.commit()
+        print("  助教: 1 条")
 
         # ========== 4. 班级（5个） ==========
         classes = [
@@ -313,6 +381,13 @@ def seed() -> None:
         session.add_all(courses)
         session.commit()
         print(f"  课程: {len(courses)} 条")
+
+        session.add_all([
+            CourseAssistant(course_id=1, assistant_id=assistant.assistant_id),
+            CourseAssistant(course_id=2, assistant_id=assistant.assistant_id),
+        ])
+        session.commit()
+        print("  助教课程授权: 2 条")
 
         # ========== 7. 选修关系（差异化：不同学生选不同课） ==========
         course_students = [
@@ -693,19 +768,18 @@ def seed() -> None:
         print(f"  答题任务: {len(tasks)} 个，答题记录: {len(answers)} 条")
 
         # ========== 15. 评价维度 & 指标 ==========
+        # 默认维度只有两个：学业水平 60% + 学习态度 40%，需要时可新增其他维度
         dimensions = [
-            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
-            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/其他）", sort_num=1),
-            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤和课堂参与度", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
-            EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
+            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
+            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
         ]
         session.add_all(dimensions)
         session.commit()
 
         def _academic_part_indexes(dim_id: int) -> list:
-            """学业水平组成部分指标：小班讨论/期中/期末/考勤/其他（占比自动补足）。"""
+            """学业水平组成部分指标：小班讨论/期中/期末/考勤/作业/其他（占比自动补足）。"""
             return [
                 EvalIndex(dimension_id=dim_id, index_name="小班讨论", weight=10,
                           score_rule='{"type":"academic_part","part":"discussion"}'),
@@ -715,7 +789,9 @@ def seed() -> None:
                           score_rule='{"type":"academic_part","part":"final"}'),
                 EvalIndex(dimension_id=dim_id, index_name="考勤", weight=10,
                           score_rule='{"type":"academic_part","part":"attendance"}'),
-                EvalIndex(dimension_id=dim_id, index_name="其他", weight=20,
+                EvalIndex(dimension_id=dim_id, index_name="作业", weight=10,
+                          score_rule='{"type":"academic_part","part":"homework"}'),
+                EvalIndex(dimension_id=dim_id, index_name="其他", weight=10,
                           score_rule='{"type":"academic_part","part":"other"}'),
             ]
 
@@ -739,14 +815,14 @@ def seed() -> None:
         session.commit()
         print(f"  评价维度: {len(dimensions)} 个，指标: {len(indexes)} 个")
 
-        # ========== 16. 评价结果（差异化：优秀/良好/中等/及格/不及格） ==========
+        # ========== 16. 评价结果（差异化：优秀/良好/中等/合格/不合格 五档） ==========
         eval_results = [
             # 计算机网络课 5 名学生
-            StudentEvaluationResult(course_id=1, student_id=1, total_score=89.5, eval_level="优秀"),
+            StudentEvaluationResult(course_id=1, student_id=1, total_score=89.5, eval_level="良好"),
             StudentEvaluationResult(course_id=1, student_id=2, total_score=72.0, eval_level="中等"),
-            StudentEvaluationResult(course_id=1, student_id=3, total_score=52.5, eval_level="不及格"),
+            StudentEvaluationResult(course_id=1, student_id=3, total_score=52.5, eval_level="不合格"),
             StudentEvaluationResult(course_id=1, student_id=4, total_score=80.8, eval_level="良好"),
-            StudentEvaluationResult(course_id=1, student_id=5, total_score=55.0, eval_level="不及格"),
+            StudentEvaluationResult(course_id=1, student_id=5, total_score=55.0, eval_level="不合格"),
             # 数据结构课
             StudentEvaluationResult(course_id=3, student_id=2, total_score=94.2, eval_level="优秀"),
             StudentEvaluationResult(course_id=3, student_id=7, total_score=70.5, eval_level="中等"),
@@ -1362,6 +1438,9 @@ def inject_analysis_data() -> None:
         total_warnings = 0
         total_answers = 0
 
+        # 评价等级五档映射（与 score_to_level / 看板等级分布口径一致）
+        from app.services.evaluation import score_to_level
+
         for sid in existing_ids:
             tier = _student_tier(sid)
             trend = _tier_trend(tier, sid)
@@ -1456,12 +1535,8 @@ def inject_analysis_data() -> None:
             total_profiles += 1
 
             # --- 2e. StudentEvaluationResult + EvalDimensionScore ---
-            # 先获取 eval_id
-            eval_level = "优" if total_profile_score >= 85 else (
-                "良" if total_profile_score >= 75 else (
-                    "中" if total_profile_score >= 60 else "差"
-                )
-            )
+            # 先获取 eval_id（五档等级与 score_to_level 口径一致）
+            eval_level = score_to_level(total_profile_score)
             er = StudentEvaluationResult(
                 course_id=course_id,
                 student_id=sid,
@@ -1564,14 +1639,33 @@ def inject_analysis_data() -> None:
         print("  所有数据已就绪，前端可直接展示！")
 
 
+def _seed_ai_teaching() -> None:
+    """注入 AI 教学演示数据（题库/练习任务/答题记录，幂等可重复执行）。"""
+    from app.seed_ai_teaching_data import seed_ai_teaching_data
+
+    seed_ai_teaching_data()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="灌入演示数据")
     parser.add_argument("--reset", action="store_true", help="删库重建后再灌入")
     parser.add_argument("--inject-analysis", action="store_true",
                         help="为所有学生注入智能分析数据（学情画像/成绩趋势/知识点/预警）")
+    parser.add_argument("--ai-teaching", action="store_true",
+                        help="注入 AI 教学演示数据（题库/练习任务/答题记录，幂等）")
+    parser.add_argument("--all", action="store_true",
+                        help="一键全量注入：基础数据 + 分析数据 + AI 教学数据")
     args = parser.parse_args()
-    if args.inject_analysis:
+
+    if args.all:
+        # 一键注入：基础数据 → 分析数据 → AI 教学数据（各自幂等/守卫，可重复执行）
+        seed()
         inject_analysis_data()
+        _seed_ai_teaching()
+    elif args.inject_analysis:
+        inject_analysis_data()
+    elif args.ai_teaching:
+        _seed_ai_teaching()
     elif args.reset:
         reset()
         seed()
@@ -1580,7 +1674,8 @@ def main() -> None:
         with Session(engine) as session:
             existing = session.exec(select(SysRole)).first()
         if existing:
-            print("数据已存在。使用 --reset 重建，或 --inject-analysis 注入分析数据")
+            print("数据已存在。使用 --reset 重建，--all 一键注入全部演示数据，"
+                  "或 --inject-analysis / --ai-teaching 单独补充注入")
         else:
             seed()
 

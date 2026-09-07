@@ -15,7 +15,7 @@ from app import models  # noqa: F401  确保所有表注册到 metadata
 from app.api.v1.auth import create_token, router as auth_router
 from app.core.database import get_session
 from app.core.security import hash_password
-from app.models import ClassInfo, Student, SysOperationLog, SysRole, SysUser
+from app.models import ClassInfo, Student, SysOperationLog, SysRole, SysUser, Teacher
 
 import pytest
 from fastapi import FastAPI
@@ -31,6 +31,7 @@ def engine():
     )
     SQLModel.metadata.create_all(eng)
     with Session(eng) as s:
+        s.add(SysRole(role_id=1, role_name="管理员", role_code="admin"))
         s.add(SysRole(role_id=2, role_name="教师", role_code="teacher"))
         s.add(SysRole(role_id=3, role_name="学生", role_code="student"))
         s.add(ClassInfo(class_id=1, class_name="软件1801班", college="计算机学院"))
@@ -41,6 +42,14 @@ def engine():
         s.add(SysUser(
             user_id=2, username="student1", password=hash_password("123456"),
             real_name="赵同学", role_id=3, status=1,
+        ))
+        s.add(SysUser(
+            user_id=3, username="admin", password=hash_password("123456"),
+            real_name="管理员", role_id=1, status=1,
+        ))
+        s.add(Teacher(
+            teacher_id=1, teacher_no="T001", real_name="王老师",
+            college="计算机学院", user_id=1,
         ))
         s.add(Student(
             student_id=1, student_no="S001", real_name="赵同学",
@@ -140,12 +149,28 @@ def _student_auth(client) -> dict[str, str]:
     return {"Authorization": f"Bearer {resp.json()['token']}"}
 
 
-def test_update_contact_requires_student_role(client):
-    """非学生角色修改联系方式 → 403。"""
+def test_update_contact_for_teacher(client, engine):
+    """教师可更新本人手机号/邮箱，写入教师表。"""
     # 直接签发教师 token（前面用例已修改教师密码，不能再用旧密码登录）
     headers = {"Authorization": f"Bearer {create_token(1, 'teacher')}"}
     resp = client.put("/api/profile/contact", json={
         "phone": "13800000000", "email": "t@hunnu.edu.cn",
+    }, headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["phone"] == "13800000000"
+    assert resp.json()["email"] == "t@hunnu.edu.cn"
+
+    with Session(engine) as s:
+        teacher = s.exec(select(Teacher).where(Teacher.user_id == 1)).first()
+        assert teacher.phone == "13800000000"
+        assert teacher.email == "t@hunnu.edu.cn"
+
+
+def test_update_contact_forbidden_for_admin(client):
+    """管理员（无学生/教师档案）修改联系方式 → 403。"""
+    headers = {"Authorization": f"Bearer {create_token(3, 'admin')}"}
+    resp = client.put("/api/profile/contact", json={
+        "phone": "13800000000", "email": "a@hunnu.edu.cn",
     }, headers=headers)
     assert resp.status_code == 403
 

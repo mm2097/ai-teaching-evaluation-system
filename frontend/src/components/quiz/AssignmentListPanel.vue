@@ -1,16 +1,17 @@
 <!--
   练习列表面板（从 QuizManageView 拆出）
-  详情 / 关闭 / 重新开启 / 延期 / 查看权限开关 / 截止时间
+  详情 / 编辑 / 关闭 / 重新开启 / 延期 / 删除 / 查看权限开关 / 截止时间
 -->
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { View, CircleClose, RefreshRight, Edit } from '@element-plus/icons-vue'
+import { View, CircleClose, RefreshRight, Edit, Delete } from '@element-plus/icons-vue'
 import {
   fetchQuizAssignments,
   closeQuizAssignment,
   reopenQuizAssignment,
   updateReviewPolicy,
+  deleteQuizAssignment,
   type QuizAssignmentRecord,
 } from '@/api/quiz'
 
@@ -48,6 +49,17 @@ async function handleCloseAssignment(row: AssignmentItem) {
   await closeQuizAssignment(row.id)
   await loadAssignments()
   ElMessage.success('练习已关闭')
+}
+
+async function handleDeleteAssignment(row: AssignmentItem) {
+  await ElMessageBox.confirm(
+    `确定删除练习「${row.title}」？删除后教师端与学生端将同步清除该练习及其全部答题记录，操作不可恢复。`,
+    '删除确认',
+    { type: 'warning', confirmButtonText: '删除', confirmButtonClass: 'el-button--danger' },
+  )
+  const result = await deleteQuizAssignment(row.id)
+  await loadAssignments()
+  ElMessage.success(result.message || '练习已删除')
 }
 
 function viewAssignment(row: AssignmentItem) {
@@ -129,7 +141,7 @@ defineExpose({ loadAssignments })
           </span>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="300" fixed="right" align="center">
+      <el-table-column label="操作" width="340" fixed="right" align="center">
         <template #default="{ row }">
           <el-button type="primary" link size="small" :icon="View" @click="viewAssignment(row)">详情</el-button>
           <el-button
@@ -186,6 +198,16 @@ defineExpose({ loadAssignments })
             @click="handleCloseAssignment(row)"
           >
             关闭
+          </el-button>
+          <!-- 删除：所有状态可删，教师端与学生端同步清除 -->
+          <el-button
+            type="danger"
+            link
+            size="small"
+            :icon="Delete"
+            @click="handleDeleteAssignment(row)"
+          >
+            删除
           </el-button>
         </template>
       </el-table-column>

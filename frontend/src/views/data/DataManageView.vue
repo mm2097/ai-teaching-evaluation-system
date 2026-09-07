@@ -8,8 +8,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
-import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords, createInteractionRecord } from '@/api/teachingData'
+import { fetchSemesters, fetchDepartments, fetchCourses, fetchMyCourses } from '@/api/dict'
+import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords, clearTeachingDataByType } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
 import { useUserStore } from '@/stores/user'
@@ -47,6 +47,7 @@ async function loadTeachingData(): Promise<void> {
       courseName,
     )
     tableData.value = list
+    enrichRowIds()
   } catch {
     tableData.value = []
   } finally {
@@ -54,14 +55,25 @@ async function loadTeachingData(): Promise<void> {
   }
 }
 
+/** 用院系/专业字典把行数据的名称字段映射为筛选 ID（后端只返回班级 ID 与名称） */
+function enrichRowIds(): void {
+  const deptIdByName = new Map(departmentOptions.value.map((d) => [d.label, d.value]))
+  const majorIdByName = new Map(majorOptions.value.map((m) => [m.label, m.value]))
+  tableData.value = tableData.value.map((row) => ({
+    ...row,
+    deptId: row.college ? (deptIdByName.get(row.college) ?? 0) : 0,
+    majorId: row.major ? (majorIdByName.get(row.major) ?? 0) : 0,
+  }))
+}
+
 onMounted(async () => {
   try {
     const [semRes, deptRes, courses] = await Promise.all([
       fetchSemesters(),
       fetchDepartments(),
-      fetchCourses({
-        teacherId: userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined,
-      }),
+      userStore.userInfo?.role === 'assistant'
+        ? fetchMyCourses()
+        : fetchCourses({ teacherId: userStore.userInfo?.teacherId }),
     ])
     semesterOptions.value = semRes.map(s => ({ label: s.semesterName, value: s.semesterCode }))
     departmentOptions.value = deptRes.map(d => ({ label: d.deptName, value: d.id, id: d.id }))
@@ -80,9 +92,40 @@ const query = ref({
   sourceFile: '',
 })
 
+/**
+ * 课程筛选（合并下拉选择与名称输入）：
+ * - 下拉选中课程，或输入内容与课程名完全一致 → 切换 courseId 并重新加载数据
+ * - 输入其他文本 → 作为课程名称关键词，过滤当前已加载的数据
+ */
+const courseQuery = computed<string | number | undefined>({
+  get: () => query.value.courseName || courseId.value,
+  set: (val) => {
+    if (val === undefined || val === null || val === '') {
+      courseId.value = undefined
+      query.value.courseName = ''
+      return
+    }
+    if (typeof val === 'number') {
+      courseId.value = val
+      query.value.courseName = ''
+      return
+    }
+    const matched = courseOptions.value.find((c) => c.label === val)
+    if (matched) {
+      courseId.value = matched.value
+      query.value.courseName = ''
+    } else {
+      query.value.courseName = val
+    }
+  },
+})
+
 const selectedStudentId = ref<string | number | undefined>()
 
 const tableData = ref<TeachingDataRecord[]>([])
+
+/** 字典加载完成后重新补全行数据的院系/专业 ID（避免与字典接口的加载时序竞争） */
+watch([departmentOptions, majorOptions], () => enrichRowIds())
 
 /** 是否属于各题扣分子行（如"期中考试-第1大题"），这类行只在详情弹窗中展示 */
 function isQuestionDetailRow(row: TeachingDataRecord): boolean {
@@ -125,7 +168,7 @@ function formatRate(rate: number): string {
 }
 
 /** 编辑弹窗中不可修改的字段（标识信息） */
-const READONLY_FIELDS = new Set(['编号', '课程号', '课程名称', '学期', '测试名称', '学号', '姓名'])
+const READONLY_FIELDS = new Set(['编号', '课程号', '课程名称', '学期', '测试名称', '学号', '姓名', '来源文件'])
 
 function isReadonlyField(key: string): boolean {
   return READONLY_FIELDS.has(key)
@@ -292,6 +335,33 @@ async function handleBatchDelete(): Promise<void> {
   }
 }
 
+/** 一键清空当前课程某一数据类型的全部记录（需先在筛选栏选择数据类型） */
+async function handleClearAll(): Promise<void> {
+  if (!courseId.value) {
+    ElMessage.warning('请先选择课程')
+    return
+  }
+  if (!query.value.dataType) {
+    ElMessage.warning('请先在「数据类型」筛选中选择要清空的类型（成绩/考勤/课堂参与）')
+    return
+  }
+  const typeName = dataTypeLabels[query.value.dataType]
+  const courseName = courseOptions.value.find((c) => c.value === courseId.value)?.label || ''
+  await ElMessageBox.confirm(
+    `将删除课程「${courseName}」的全部「${typeName}」数据（含各考核批次下的记录），该操作不可恢复，是否继续？`,
+    '清空确认',
+    { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' },
+  )
+  try {
+    const { deleted } = await clearTeachingDataByType(courseId.value, query.value.dataType)
+    selectedRows.value = []
+    ElMessage.success(`已清空「${typeName}」数据（${deleted} 条）`)
+    await loadTeachingData()
+  } catch {
+    ElMessage.error('清空失败，请稍后重试')
+  }
+}
+
 // --------------------------------------------------------------------------
 // 详情弹窗
 // --------------------------------------------------------------------------
@@ -366,66 +436,6 @@ function filterByCurrentFile(): void {
   query.value.sourceFile = query.value.sourceFile === 'current' ? '' : 'current'
 }
 
-// --------------------------------------------------------------------------
-// 课堂互动打分
-// --------------------------------------------------------------------------
-const interactionVisible = ref(false)
-const interactionSubmitting = ref(false)
-const interactionFormRef = ref()
-const interactionForm = ref({
-  studentId: undefined as number | undefined,
-  interactionType: 1,
-  score: 80,
-  interactionDate: '',
-  remark: '',
-})
-const interactionRules = {
-  studentId: [{ required: true, message: '请选择学生', trigger: 'change' }],
-  interactionType: [{ required: true, message: '请选择互动类型', trigger: 'change' }],
-  score: [{ required: true, message: '请输入得分', trigger: 'blur' }],
-}
-const courseNameLabel = computed(() => {
-  const c = courses.value.find((x) => x.id === courseId.value)
-  return c?.courseName || `课程ID ${courseId.value || '?'}`
-})
-
-function openInteractionDialog(): void {
-  if (!courseId.value) {
-    ElMessage.warning('请先选择课程')
-    return
-  }
-  interactionForm.value = {
-    studentId: undefined,
-    interactionType: 1,
-    score: 80,
-    interactionDate: '',
-    remark: '',
-  }
-  interactionVisible.value = true
-}
-
-async function submitInteraction(): Promise<void> {
-  if (!interactionFormRef.value) return
-  await interactionFormRef.value.validate()
-  interactionSubmitting.value = true
-  try {
-    await createInteractionRecord({
-      courseId: courseId.value!,
-      studentId: interactionForm.value.studentId!,
-      interactionType: interactionForm.value.interactionType,
-      score: interactionForm.value.score,
-      interactionDate: interactionForm.value.interactionDate || undefined,
-      remark: interactionForm.value.remark || undefined,
-    })
-    ElMessage.success('互动打分已记录')
-    interactionVisible.value = false
-    await loadTeachingData()
-  } catch {
-    // 错误提示由 request 拦截器处理
-  } finally {
-    interactionSubmitting.value = false
-  }
-}
 </script>
 
 <template>
@@ -435,18 +445,20 @@ async function submitInteraction(): Promise<void> {
     <div class="content-card">
       <div class="table-toolbar">
         <div class="filter-bar" style="margin-bottom: 0">
-          <el-select v-model="courseId" placeholder="课程" style="width: 200px">
+          <el-select
+            v-model="courseQuery"
+            placeholder="课程（可下拉或输入名称）"
+            filterable
+            allow-create
+            default-first-option
+            clearable
+            style="width: 240px"
+          >
             <el-option v-for="c in courseOptions" :key="c.value" :label="c.label" :value="c.value" />
           </el-select>
           <StudentLinkedPicker
             v-model="selectedStudentId"
             :students="studentPickerOptions"
-          />
-          <el-input
-            v-model="query.courseName"
-            placeholder="课程"
-            clearable
-            style="width: 140px"
           />
           <el-select v-model="query.semester" placeholder="学期" clearable style="width: 200px">
             <el-option v-for="s in semesterOptions" :key="s.value" :label="s.label" :value="s.value" />
@@ -481,8 +493,8 @@ async function submitInteraction(): Promise<void> {
             {{ dataFlowStore.currentImportLog.fileName }}
           </el-button>
           <el-button type="danger" :icon="Delete" plain @click="handleBatchDelete">批量删除</el-button>
+          <el-button type="danger" :icon="Delete" plain @click="handleClearAll">清空全部</el-button>
           <el-button type="primary" :icon="Download" :loading="exporting" @click="handleExport">导出 Excel</el-button>
-          <el-button type="warning" plain @click="openInteractionDialog">课堂互动打分</el-button>
         </div>
       </div>
 
@@ -603,45 +615,5 @@ async function submitInteraction(): Promise<void> {
       </template>
     </el-dialog>
 
-    <!-- 课堂互动打分弹窗 -->
-    <el-dialog v-model="interactionVisible" title="课堂互动打分" width="520px" destroy-on-close>
-      <el-form :model="interactionForm" label-width="90px" ref="interactionFormRef" :rules="interactionRules">
-        <el-form-item label="课程">
-          <span>{{ courseNameLabel }}</span>
-        </el-form-item>
-        <el-form-item label="学生" prop="studentId">
-          <el-select v-model="interactionForm.studentId" filterable placeholder="选择学生" style="width: 100%">
-            <el-option
-              v-for="s in studentPickerOptions"
-              :key="s.id"
-              :label="`${s.name}（${s.id}）`"
-              :value="Number(s.id)"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="互动类型" prop="interactionType">
-          <el-select v-model="interactionForm.interactionType" style="width: 100%">
-            <el-option :value="1" label="课堂提问" />
-            <el-option :value="2" label="小组讨论" />
-            <el-option :value="4" label="课堂测验" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="得分" prop="score">
-          <el-input-number v-model="interactionForm.score" :min="0" :max="100" :step="1" style="width: 100%" />
-          <span style="color: #94a3b8; font-size: 12px; margin-left: 8px">0-100</span>
-        </el-form-item>
-        <el-form-item label="日期">
-          <el-date-picker v-model="interactionForm.interactionDate" type="date" value-format="YYYY-MM-DD" placeholder="默认今天" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="interactionForm.remark" maxlength="100" placeholder="如：回答准确" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="interactionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="interactionSubmitting" @click="submitInteraction">提交</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
-

@@ -103,7 +103,8 @@ def test_database_index_weights_affect_dimension_and_total_score(
     try:
         result = evaluation.compute_evaluation(session, 1, COURSE_ID)
         assert result.dimensions["academic"] == 40.0
-        assert result.total_score == 27.0
+        # 维度占比未配置（合计 0）→ 回退默认占比：学业水平 0.6 / 学习态度 0.4
+        assert result.total_score == 24.0  # 0.6×40 + 0.4×0
 
         indexes = session.exec(
             select(EvalIndex).join(EvalDimension).where(
@@ -117,7 +118,7 @@ def test_database_index_weights_affect_dimension_and_total_score(
 
         changed = evaluation.compute_evaluation(session, 1, COURSE_ID)
         assert changed.dimensions["academic"] == 80.0
-        assert changed.total_score == 43.0
+        assert changed.total_score == 48.0  # 0.6×80 + 0.4×0
     finally:
         _remove_config(session)
 
@@ -128,8 +129,9 @@ def test_invalid_dimension_weight_sum_falls_back_independently(
     _add_academic_config(session, midterm_weight=40, final_weight=50)
     try:
         result = evaluation.compute_evaluation(session, 1, COURSE_ID)
+        # 指标权重合计 90 != 100 → 维度分回退基础分 100
         assert result.dimensions["academic"] == 100.0
-        assert result.total_score == 51.0
+        assert result.total_score == 60.0  # 0.6×100 + 0.4×0
     finally:
         _remove_config(session)
 

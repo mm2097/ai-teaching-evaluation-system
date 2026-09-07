@@ -82,6 +82,9 @@ function applySavedConfig(config: GenerateConfig) {
     questionCount: config.questionCount,
     difficultyDistribution: config.difficultyDistribution,
     extraRequirements: config.extraRequirements,
+    totalScore: config.totalScore,
+    typeRatios: config.typeRatios,
+    typeCounts: config.typeCounts,
   }
 }
 
@@ -117,6 +120,9 @@ async function handleGenerate(
         questionCount: config.questionCount,
         difficultyDistribution: config.difficultyDistribution,
         extraRequirements: config.extraRequirements,
+        totalScore: config.totalScore,
+        typeRatios: config.typeRatios,
+        typeCounts: config.typeCounts,
       },
       {
         onStage: (stage, difficulty) => {
@@ -127,11 +133,19 @@ async function handleGenerate(
         onQuestion: (q) => {
           visibleQuestions.value = [...visibleQuestions.value, q]
         },
-        onDone: (refs, _total, meta) => {
+        onDone: (refs, _total, meta, questions) => {
           if (append && refs?.length) {
             ragReferences.value = [...ragReferences.value, ...refs]
           } else {
             ragReferences.value = refs || []
+          }
+          // 用后端「总分 × 题型占比」重算后的分数覆写每题分数
+          if (Array.isArray(questions) && questions.length) {
+            const byId = new Map<number, QuizQuestion>(questions.map((q) => [q.id, q]))
+            visibleQuestions.value = visibleQuestions.value.map((q) => {
+              const scored = byId.get(q.id)
+              return scored ? { ...q, score: scored.score } : q
+            })
           }
           if (meta) genMeta.value = meta
           generating.value = false
@@ -164,6 +178,7 @@ function handleSupplementConfirm(partial: {
   questionCount: number
   difficultyDistribution: DifficultyDistribution
   extraRequirements: string
+  typeCounts: Record<ExerciseType, number>
 }) {
   if (!savedConfig.value) return
   handleGenerate(
@@ -172,6 +187,21 @@ function handleSupplementConfirm(partial: {
       classId: savedConfig.value.classId,
       title: savedConfig.value.title,
       ...partial,
+      totalScore: lastGenerateConfig.value?.totalScore ?? 100,
+      typeRatios: lastGenerateConfig.value?.typeRatios ?? {
+        single_choice: 0,
+        multi_choice: 0,
+        judge: 0,
+        fill_blank: 0,
+        short_answer: 0,
+      },
+      typeCounts: partial.typeCounts ?? lastGenerateConfig.value?.typeCounts ?? {
+        single_choice: 1,
+        multi_choice: 1,
+        judge: 1,
+        fill_blank: 1,
+        short_answer: 1,
+      },
     },
     { append: true },
   )

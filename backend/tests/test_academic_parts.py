@@ -1,7 +1,7 @@
-"""学业水平五部分配比（小班讨论/期中/期末/考勤/其他）测试。
+"""学业水平六部分配比（小班讨论/期中/期末/考勤/作业/其他）测试。
 
 覆盖:
-- 组成部分按批次名称关键字识别（讨论/期中/期末/其他/考勤）
+- 组成部分按批次名称关键字识别（讨论/期中/期末/作业/其他/考勤）
 - 配比加权计算与无数据部分归一化
 - 配比从评价配置读取（academic_part 指标），无效配置回退默认
 - 评价配置接口：「其他」指标权重自动补足 = 100 − 其余
@@ -92,33 +92,36 @@ def engine():
 
 
 def test_part_score_keyword_matching(engine):
-    """五个组成部分按批次名称关键字正确识别。"""
+    """六个组成部分按批次名称关键字正确识别。"""
     with Session(engine) as s:
         assert _academic_part_score(s, 1, 1, "discussion") == 90.0   # 小班讨论
         assert _academic_part_score(s, 1, 1, "midterm") == 75.0      # 期中（各题得分表）
         assert _academic_part_score(s, 1, 1, "final") == 85.0        # 期末（各题得分表）
         assert _academic_part_score(s, 1, 1, "attendance") == 75.0   # 到课率 0.75×100
-        assert _academic_part_score(s, 1, 1, "other") == 75.0        # 其他 = (80+70)/2
+        assert _academic_part_score(s, 1, 1, "homework") == 80.0     # 平时作业
+        assert _academic_part_score(s, 1, 1, "other") == 70.0        # 其他 = 实验报告（不再含作业）
 
 
 def test_compute_academic_score_weighted(engine):
     """学业水平 = Σ(组成分 × 配比)，配比合计 100%。"""
     with Session(engine) as s:
         score = compute_academic_score(s, 1, 1)
-        # 默认配比 10/30/30/10/20：
-        # 0.1*90 + 0.3*75 + 0.3*85 + 0.1*75 + 0.2*75 = 9 + 22.5 + 25.5 + 7.5 + 15 = 79.5
+        # 默认配比 10/30/30/10/10/10：
+        # 0.1*90 + 0.3*75 + 0.3*85 + 0.1*75 + 0.1*80 + 0.1*70
+        #   = 9 + 22.5 + 25.5 + 7.5 + 8 + 7 = 79.5
         assert abs(score - 79.5) < 0.1
 
 
 def test_compute_academic_score_normalizes_missing_parts(engine):
     """无数据的部分按配比归一化分摊。"""
     with Session(engine) as s:
-        # 只给期中/期末配比（各 50），讨论/考勤/其他无数据
+        # 只给期中/期末配比（各 50），讨论/考勤/作业/其他无数据
         score = compute_academic_score(
             s, 1, 1,
-            parts={"discussion": 0, "midterm": 50, "final": 50, "attendance": 0, "other": 0},
+            parts={"discussion": 0, "midterm": 50, "final": 50,
+                   "attendance": 0, "homework": 0, "other": 0},
         )
-        # 讨论/考勤/其他配比为 0 不参与；期中 75 + 期末 85 → (75+85)/2 = 80
+        # 讨论/考勤/作业/其他配比为 0 不参与；期中 75 + 期末 85 → (75+85)/2 = 80
         assert score == 80.0
 
 
@@ -138,14 +141,16 @@ def test_load_academic_parts_from_config(engine):
                       score_rule='{"type":"academic_part","part":"final"}'),
             EvalIndex(dimension_id=dim.dimension_id, index_name="考勤", weight=10,
                       score_rule='{"type":"academic_part","part":"attendance"}'),
-            EvalIndex(dimension_id=dim.dimension_id, index_name="其他", weight=20,
+            EvalIndex(dimension_id=dim.dimension_id, index_name="作业", weight=10,
+                      score_rule='{"type":"academic_part","part":"homework"}'),
+            EvalIndex(dimension_id=dim.dimension_id, index_name="其他", weight=10,
                       score_rule='{"type":"academic_part","part":"other"}'),
         ])
         s.commit()
 
         parts = load_academic_parts(s, 1)
         assert parts == {"discussion": 20.0, "midterm": 20.0, "final": 30.0,
-                         "attendance": 10.0, "other": 20.0}
+                         "attendance": 10.0, "homework": 10.0, "other": 10.0}
 
         # 合计不为 100 → 回退默认
         s.exec(select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)).first().weight = 50
@@ -227,7 +232,7 @@ def test_other_index_weight_auto_fill(client):
 
 
 def test_migrate_academic_parts(monkeypatch, tmp_path):
-    """启动迁移：旧「期末/平时/期中」配置 → 五部分默认；缺失维度课程自动补建。"""
+    """启动迁移：旧「期末/平时/期中」配置 → 六部分默认；缺失维度课程自动补建。"""
     import json
     import app.core.database as db_module
     from app.models import Course
@@ -255,20 +260,20 @@ def test_migrate_academic_parts(monkeypatch, tmp_path):
     db_module._migrate_academic_parts()
 
     with Session(eng) as s:
-        # 课程1：旧指标迁移为五部分，维度更名「学业水平」
+        # 课程1：旧指标迁移为六部分，维度更名「学业水平」
         dim1 = s.get(EvalDimension, 1)
         assert dim1.dimension_name == "学业水平"
         indexes = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == 1)).all()
         names = [i.index_name for i in indexes]
-        assert names == ["小班讨论", "期中考试", "期末考试", "考勤", "其他"]
+        assert names == ["小班讨论", "期中考试", "期末考试", "考勤", "作业", "其他"]
         assert sum(i.weight for i in indexes) == 100.0
         parts = sorted(json.loads(i.score_rule)["part"] for i in indexes)
-        assert parts == ["attendance", "discussion", "final", "midterm", "other"]
-        # 课程2：无配置 → 自动补建默认维度与五部分
+        assert parts == ["attendance", "discussion", "final", "homework", "midterm", "other"]
+        # 课程2：无配置 → 自动补建默认维度与六部分
         dim2 = s.exec(select(EvalDimension).where(EvalDimension.course_id == 2)).first()
         assert dim2 is not None and dim2.dimension_name == "学业水平"
         indexes2 = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == dim2.dimension_id)).all()
-        assert len(indexes2) == 5
+        assert len(indexes2) == 6
         assert sum(i.weight for i in indexes2) == 100.0
 
     # 幂等：再次执行不产生重复指标
@@ -277,4 +282,79 @@ def test_migrate_academic_parts(monkeypatch, tmp_path):
         dims = s.exec(select(EvalDimension).where(EvalDimension.course_id == 1)).all()
         assert len(dims) == 1
         indexes = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == 1)).all()
-        assert len(indexes) == 5
+        assert len(indexes) == 6
+
+
+def test_index_display_order_homework_above_other(client):
+    """「作业」指标展示顺序固定在「其他」上方（与创建顺序无关）。"""
+    resp = client.post(
+        "/api/v1/eval-config/1/dimensions",
+        params={"dimension_name": "学业水平2", "sort_num": 3},
+        headers=_auth(),
+    )
+    assert resp.status_code == 200
+    dim_id = resp.json()["dimensionId"]
+
+    def add_index(name, rule):
+        return client.post(
+            f"/api/v1/eval-config/dimensions/{dim_id}/indexes",
+            params={"index_name": name, "weight": 0, "score_rule": rule},
+            headers=_auth(),
+        )
+
+    add_index("期中考试", '{"type":"academic_part","part":"midterm"}')
+    add_index("其他", '{"type":"academic_part","part":"other"}')    # 先创建「其他」
+    add_index("作业", '{"type":"academic_part","part":"homework"}')  # 「作业」最后创建
+    add_index("自定义", '{"type":"direct","source":"score_record","batch_type":1}')
+
+    dims = client.get("/api/v1/eval-config/1", headers=_auth()).json()["dimensions"]
+    indexes = next(d for d in dims if d["dimensionId"] == dim_id)["indexes"]
+    names = [i["indexName"] for i in indexes]
+    # 内置组成部分按规范顺序（作业在其他上方），自定义指标排在最后
+    assert names == ["期中考试", "作业", "其他", "自定义"]
+
+
+def test_migrate_academic_parts_upgrades_five_part_config(monkeypatch, tmp_path):
+    """存量五部分配置（缺「作业」）自动补建作业指标，权重从「其他」让出。"""
+    import json
+    import app.core.database as db_module
+    from app.models import Course
+
+    eng = create_engine(
+        f"sqlite:///{tmp_path / 'five_part.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    SQLModel.metadata.create_all(eng)
+    with Session(eng) as s:
+        s.add(Course(course_id=1, course_code="CS101", course_name="计算机网络",
+                     teacher_id=1, semester="2025-2026-1", college="计算机学院"))
+        s.add(EvalDimension(dimension_id=1, course_id=1, dimension_name="学业水平"))
+        for name, weight, part in [
+            ("小班讨论", 10, "discussion"),
+            ("期中考试", 30, "midterm"),
+            ("期末考试", 30, "final"),
+            ("考勤", 10, "attendance"),
+            ("其他", 20, "other"),
+        ]:
+            s.add(EvalIndex(dimension_id=1, index_name=name, weight=weight,
+                            score_rule=json.dumps({"type": "academic_part", "part": part},
+                                                  ensure_ascii=False)))
+        s.commit()
+
+    monkeypatch.setattr(db_module, "engine", eng)
+    db_module._migrate_academic_parts()
+
+    with Session(eng) as s:
+        indexes = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == 1)).all()
+        assert len(indexes) == 6
+        assert sum(i.weight for i in indexes) == 100.0
+        by_name = {i.index_name: i for i in indexes}
+        assert json.loads(by_name["作业"].score_rule)["part"] == "homework"
+        assert by_name["作业"].weight == 10.0   # 从「其他」让出
+        assert by_name["其他"].weight == 10.0
+
+    # 幂等：再次执行不重复补建
+    db_module._migrate_academic_parts()
+    with Session(eng) as s:
+        indexes = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == 1)).all()
+        assert len(indexes) == 6

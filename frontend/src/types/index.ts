@@ -3,7 +3,7 @@
  */
 
 /** 用户角色枚举 */
-export type UserRole = 'admin' | 'teacher' | 'student'
+export type UserRole = 'admin' | 'teacher' | 'assistant' | 'student'
 
 /** 分析/评价对象类型（对应 t_analysis_result.target_type） */
 export type TargetType = 'student' | 'class'
@@ -22,9 +22,11 @@ export interface UserInfo {
   studentId?: number
   studentNo?: string
   teacherId?: number
+  assistantId?: number
+  assistantNo?: string
   classId?: number
   avatar?: string
-  /** 学生联系方式（可空） */
+  /** 联系方式（学生/教师/助教，可空） */
   phone?: string
   email?: string
 }
@@ -44,11 +46,13 @@ export interface SystemUser {
   gender?: number | null
   /** 教工号（教师角色，存于教师表） */
   teacherNo?: string
+  /** 助教工号（助教角色，存于助教档案表） */
+  assistantNo?: string
   /** 职称（教师角色，可空） */
   title?: string
-  /** 手机号（学生/教师档案，可空） */
+  /** 手机号（学生/教师/助教档案，可空） */
   phone?: string
-  /** 邮箱（学生/教师档案，可空） */
+  /** 邮箱（学生/教师/助教档案，可空） */
   email?: string
   status: boolean
   createTime: string
@@ -152,6 +156,9 @@ export interface TeachingDataRecord {
   deptId: number
   majorId: number
   classId: number
+  /** 院系/专业名称（后端返回，用于前端映射筛选 ID） */
+  college?: string
+  major?: string
   score?: number
   attendance?: string
   homework?: string
@@ -371,6 +378,8 @@ export interface QuizQuestion {
   explanation?: string
   difficulty: DifficultyLevel
   knowledgePoint: string
+  /** 题目所属章节/单元 */
+  chapter?: string
   score: number
   status?: ExerciseStatus
   source?: ExerciseSource
@@ -480,6 +489,8 @@ export interface QuizSubmission {
   assignmentId: number
   studentId: number
   studentName: string
+  /** 学号（存于学生表） */
+  studentNo: string
   score: number
   totalScore: number
   submitTime: string
@@ -490,6 +501,7 @@ export interface QuizSubmission {
 export const RoleLabels: Record<UserRole, string> = {
   admin: '系统管理员',
   teacher: '任课教师',
+  assistant: '课程助教',
   student: '学生用户',
 }
 

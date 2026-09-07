@@ -385,6 +385,79 @@ def test_teaching_data_delete_and_batch_delete_persist(session):
     assert session.get(AttendanceRecord, attendance.attendance_id) is None
     assert session.get(ScoreRecord, other_score.score_id) is None
 
+
+def test_teaching_data_clear_by_type_persist(session, monkeypatch):
+    from app.models import (
+        AttendanceSheet,
+        Course,
+        CourseTestDetail,
+        ExamBatch,
+        IndividualScore,
+        ParticipationSheet,
+    )
+
+    # 清空后会触发后台分析刷新，测试中替换为空操作避免污染真实库
+    monkeypatch.setattr(teaching_data, "_refresh_analysis_in_background", lambda course_id: None)
+
+    # 使用独立课程 99 测试清空，避免清掉共享测试库中课程 1 的种子数据
+    session.add(Course(course_id=99, course_name="清空测试课", course_code="CS999",
+                        teacher_id=1, semester="2024-2025-1", college="计算机学院",
+                        credit=3, status=1))
+    session.add(ExamBatch(batch_id=99, course_id=99, batch_name="清空批次", batch_type=1,
+                           full_score=100, create_by=1))
+    session.commit()
+    session.add(ScoreRecord(course_id=99, student_id=1, batch_id=99, score=88, is_pass=1, create_by=1))
+    session.add(IndividualScore(student_id=1, exam_batch_id=99, score=95, create_by=1))
+    session.add(CourseTestDetail(student_id=1, exam_batch_id=99, total_score=92, create_by=1))
+    session.add(AttendanceRecord(course_id=99, student_id=1, attendance_date=datetime.now().date(), status=0, create_by=1))
+    session.add(AttendanceSheet(student_id=1, exam_batch_id=99, total_count=32, present_count=30, create_by=1))
+    session.add(ParticipationSheet(student_id=1, exam_batch_id=99, total_count=32, participation_rate=0.9, create_by=1))
+    session.commit()
+
+    course1_score_count = len(session.exec(select(ScoreRecord).where(ScoreRecord.course_id == 1)).all())
+
+    # 成绩：删除三张成绩表，考勤表与考核批次保留，且不影响其他课程
+    response = teaching_data.clear_teaching_data(
+        {"courseId": 99, "dataType": "score"},
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert response["deleted"] == 3
+    assert not session.exec(select(ScoreRecord).where(ScoreRecord.course_id == 99)).all()
+    assert not session.exec(select(IndividualScore).where(IndividualScore.exam_batch_id == 99)).all()
+    assert not session.exec(select(CourseTestDetail).where(CourseTestDetail.exam_batch_id == 99)).all()
+    assert session.get(ExamBatch, 99) is not None  # 批次保留
+    assert len(session.exec(select(ScoreRecord).where(ScoreRecord.course_id == 1)).all()) == course1_score_count
+    assert session.exec(select(AttendanceRecord).where(AttendanceRecord.course_id == 99)).all()
+
+    # 考勤：删除两张考勤表
+    response = teaching_data.clear_teaching_data(
+        {"courseId": 99, "dataType": "attendance"},
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert response["deleted"] == 2
+    assert not session.exec(select(AttendanceRecord).where(AttendanceRecord.course_id == 99)).all()
+    assert not session.exec(select(AttendanceSheet).where(AttendanceSheet.exam_batch_id == 99)).all()
+
+    # 课堂参与
+    response = teaching_data.clear_teaching_data(
+        {"courseId": 99, "dataType": "participation"},
+        session=session,
+        current_user=_user(session, 1),
+    )
+    assert response["deleted"] == 1
+    assert not session.exec(select(ParticipationSheet).where(ParticipationSheet.exam_batch_id == 99)).all()
+
+    # 非法数据类型
+    with pytest.raises(HTTPException) as exc_info:
+        teaching_data.clear_teaching_data(
+            {"courseId": 99, "dataType": "interaction"},
+            session=session,
+            current_user=_user(session, 1),
+        )
+    assert exc_info.value.status_code == 422
+
 def test_warning_filters_and_status_update_persist(session):
     from app.api.v1 import analysis
     from app.models import StudyWarning

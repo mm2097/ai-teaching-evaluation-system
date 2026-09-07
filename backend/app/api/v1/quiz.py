@@ -5,6 +5,7 @@
     POST /api/v1/answer-tasks              创建/保存答题任务
     POST /api/v1/answer-tasks/{id}/publish 发布任务
     POST /api/v1/answer-tasks/{id}/close   关闭任务
+    DELETE /api/v1/answer-tasks/{id}       删除任务（含答题记录级联清除）
     GET  /api/v1/answer-records            答题记录列表（按任务/学生聚合）
     POST /api/v1/self-practice/start        学生创建自主练习
     POST /api/v1/self-practice/submit       学生提交自主练习
@@ -34,6 +35,7 @@ from app.models import (
     ClassInfo,
     Course,
     CourseStudent,
+    KnowledgeMastery,
     KnowledgeModule,
     KnowledgePoint,
     Student,
@@ -724,7 +726,7 @@ def _call_ai_judge(
         "max_score": 10.0,
     }
     try:
-        resp = httpx.post("http://127.0.0.1:8001/judge_answer", json=payload, timeout=30.0)
+        resp = httpx.post("http://127.0.0.1:8001/judge_answer", json=payload, timeout=90.0)
         resp.raise_for_status()
         data = resp.json()
     except (httpx.HTTPError, ValueError):
@@ -1097,6 +1099,95 @@ def close_answer_task(
     return {"id": task.task_id, "status": "closed", "message": "已关闭"}
 
 
+@router.delete("/answer-tasks/{task_id}", tags=["答题管理"])
+def delete_answer_task(
+    task_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """删除答题任务（教师端与学生端一并清除）。
+
+    级联删除：
+      - task_question 任务-题目关联
+      - answer_task_class 目标班级关联
+      - student_answer_record 学生答题记录（错题本/答题记录随之消失）
+    题库题目（ai_question）保留，可被其他任务继续复用。
+
+    删除记录后同步修正知识点掌握度持久化数据：
+      - 无剩余答题记录的 (学生, 知识点) 删除其掌握度行
+      - 仍有剩余记录的按剩余记录重算（refresh_student_mastery）
+    """
+    task = session.get(AnswerTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if _role_code(current_user, session) != "teacher":
+        raise HTTPException(status_code=403, detail="无权删除答题任务")
+    _require_course_access(current_user, task.course_id, session)
+    if _is_self_practice(task):
+        raise HTTPException(status_code=409, detail="自主练习由学生本人管理，无法在此删除")
+
+    course_id = task.course_id
+    # 受影响的 (学生, 知识点)：来自被删答题记录，用于掌握度修正
+    affected_pairs = set(session.exec(
+        select(StudentAnswerRecord.student_id, AiQuestion.point_id)
+        .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+        .where(StudentAnswerRecord.task_id == task_id)
+    ).all())
+
+    for link in session.exec(
+        select(TaskQuestion).where(TaskQuestion.task_id == task_id)
+    ).all():
+        session.delete(link)
+    for link in session.exec(
+        select(AnswerTaskClass).where(AnswerTaskClass.task_id == task_id)
+    ).all():
+        session.delete(link)
+    records = session.exec(
+        select(StudentAnswerRecord).where(StudentAnswerRecord.task_id == task_id)
+    ).all()
+    record_count = len(records)
+    for record in records:
+        session.delete(record)
+    session.delete(task)
+    session.commit()
+
+    # 掌握度修正：先删无剩余记录的持久化行，再按剩余记录重算受影响学生
+    for sid, point_id in affected_pairs:
+        remaining = session.exec(
+            select(func.count(StudentAnswerRecord.answer_id))
+            .join(AiQuestion, StudentAnswerRecord.question_id == AiQuestion.question_id)
+            .where(
+                StudentAnswerRecord.student_id == sid,
+                AiQuestion.point_id == point_id,
+            )
+        ).one()
+        if remaining:
+            continue
+        km = session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == course_id,
+                KnowledgeMastery.student_id == sid,
+                KnowledgeMastery.point_id == point_id,
+            )
+        ).first()
+        if km:
+            session.delete(km)
+    affected_students = {sid for sid, _ in affected_pairs}
+    for sid in affected_students:
+        refresh_student_mastery(session, sid, course_id)
+    session.commit()
+
+    return {
+        "id": task_id,
+        "deletedRecords": record_count,
+        "message": (
+            f"已删除练习「{task.task_name}」及 {record_count} 条答题记录"
+            if record_count
+            else f"已删除练习「{task.task_name}」"
+        ),
+    }
+
+
 class UpdateReviewPolicyRequest(BaseModel):
     """修改查看权限请求。"""
     allowReview: bool
@@ -1236,6 +1327,45 @@ class GenerateExercisesRequest(BaseModel):
     difficulty: Literal["easy", "medium", "hard"] = "medium"  # 单一难度（兼容旧前端）
     difficultyDistribution: dict[str, int] | None = None  # {"easy": 2, "medium": 2, "hard": 1}
     extraRequirements: str = ""
+    totalScore: int = Field(default=100, ge=1, le=1000)
+    typeRatios: dict[str, float] | None = None  # {"single_choice": 60, "short_answer": 40}，单位 %
+    typeCounts: dict[str, int] | None = None  # {"single_choice":4,"short_answer":2}，每题型数量（题型数量优先模式）
+
+
+def _assign_scores_by_ratios(
+    questions: list[dict],
+    total_score: int,
+    type_ratios: dict[str, float] | None,
+) -> None:
+    """按「总分 × 题型占比 ÷ 该题型题数」为每题赋分，整数等分、余数归该题型靠前题。
+
+    未传占比时退化为按总分均分，保证旧调用/前端不传占比也正常。
+    """
+    if not questions:
+        return
+    if not type_ratios:
+        per = round(total_score / len(questions), 1)
+        for q in questions:
+            q["score"] = per
+        return
+    from collections import defaultdict
+
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for q in questions:
+        by_type[q.get("type", "single_choice")].append(q)
+    ratio_sum = sum(type_ratios.values()) or 0.0
+    for t, type_qs in by_type.items():
+        if not type_qs:
+            continue
+        ratio = type_ratios.get(t, 0) or 0.0
+        type_total = round(total_score * (ratio / ratio_sum), 1) if ratio_sum else 0
+        n = len(type_qs)
+        base = int(type_total // n)
+        rem_total = int(round(type_total - base * n))
+        for i, q in enumerate(type_qs):
+            q["score"] = float(base + (1 if i < rem_total else 0))
+    for q in questions:
+        q["score"] = round(float(q["score"]), 1)
 
 
 def _distribute_question_types(total: int, types: list[str]) -> dict[str, int]:
@@ -1306,6 +1436,56 @@ def _plan_batches_with_types(
     return planned
 
 
+def _plan_batches_by_type_counts(
+    type_counts: dict[str, int],
+    difficulty_weights: dict[str, int] | None,
+) -> list[tuple[str, dict[str, int]]]:
+    """题型数量优先模式：把每种题型按难度权重（简单:中等:困难 比例）拆分到各难度批次。
+
+    返回 [(difficulty, {type: count}), ...]，仅包含题数 >0 的批次。
+    未给难度权重时按 easy/medium/hard 均分 1:1:1。
+    """
+    difficulty_weights = difficulty_weights or {}
+    weights = {d: max(0, int(difficulty_weights.get(d, 0))) for d in ("easy", "medium", "hard")}
+    total_w = sum(weights.values()) or len([d for d in weights.values() if d > 0])
+    order = [d for d in ("easy", "medium", "hard") if weights.get(d, 0) > 0]
+    if not order:
+        order = ["easy"]
+        weights = {"easy": 1, "medium": 0, "hard": 0}
+        total_w = 1
+
+    plan: dict[str, dict[str, int]] = {d: {} for d in order}
+
+    def _largest_remainder(c: int, total_weights: int) -> dict[str, int]:
+        exact = {d: c * weights[d] / total_weights for d in order}
+        floors = {d: int(exact[d]) for d in order}
+        remaining = c - sum(floors.values())
+        for d in sorted(order, key=lambda x: exact[x] - floors[x], reverse=True):
+            if remaining <= 0:
+                break
+            floors[d] += 1
+            remaining -= 1
+        return floors
+
+    for t, c in type_counts.items():
+        c = max(0, int(c))
+        if c <= 0:
+            continue
+        per_d = _largest_remainder(c, total_w)
+        for d in order:
+            if per_d[d] > 0:
+                plan[d][t] = per_d[d]
+
+    return [(d, plan[d]) for d in order if plan[d]]
+
+
+def _is_type_count_mode(req: "GenerateExercisesRequest") -> bool:
+    """是否处于题型数量优先模式（typeCounts 中至少一个有效题数）。"""
+    if not req.typeCounts:
+        return False
+    return any(int(c) > 0 for c in req.typeCounts.values())
+
+
 def _call_algo_generate(
     course_id: int,
     course_name: str,
@@ -1329,7 +1509,7 @@ def _call_algo_generate(
         "reference_questions": reference_questions,
     }
     try:
-        resp = httpx.post("http://127.0.0.1:8001/generate_exercises", json=payload, timeout=60.0)
+        resp = httpx.post("http://127.0.0.1:8001/generate_exercises", json=payload, timeout=180.0)
         resp.raise_for_status()
         data = resp.json()
         return data.get("questions", []), data.get("meta", {}) or {}
@@ -1436,7 +1616,28 @@ def _generate_exercises(
     total_elapsed_ms = 0
     model_name = ""
 
-    if req.difficultyDistribution:
+    # 选择批次规划：题型数量优先 > 难度分布 > 单一难度
+    if _is_type_count_mode(req):
+        # ===== 题型数量优先模式：每种题型按难度权重拆分到 easy/medium/hard 分批 =====
+        plan = _plan_batches_by_type_counts(req.typeCounts, req.difficultyDistribution)
+        if not plan:
+            raise HTTPException(status_code=422, detail="请至少设定一种题型的提问数量")
+        for difficulty, type_map in plan:
+            ref_qs, ref_metas = _retrieve_reference_questions(
+                session, req.courseId, req.knowledgePoints or [], difficulty
+            )
+            for r in ref_metas:
+                if r.get("questionId") not in seen_qids:
+                    seen_qids.add(r.get("questionId"))
+                    rag_references.append(r)
+            batch, batch_meta = _call_algo_generate(
+                req.courseId, course_name, knowledge_points, difficulty,
+                type_map, ref_qs, extra,
+            )
+            total_elapsed_ms += int(batch_meta.get("elapsed_ms", 0) or 0)
+            model_name = model_name or batch_meta.get("model", "")
+            raw_questions.extend((difficulty, q) for q in batch)
+    elif req.difficultyDistribution:
         # ===== 难度分布模式：全局分配题型后再按 easy/medium/hard 分批生成 =====
         batches = [
             (d, c) for d, c in req.difficultyDistribution.items() if c and c > 0
@@ -1479,6 +1680,9 @@ def _generate_exercises(
         item["difficulty"] = target_difficulty
         questions.append(item)
 
+    # 按「总分 × 题型占比」重算每题分数（未传占比时退化为均分）
+    _assign_scores_by_ratios(questions, req.totalScore, req.typeRatios)
+
     usage.success = 1
     session.add(usage)
     session.commit()
@@ -1509,6 +1713,7 @@ def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str
         "explanation": q.get("explanation", ""),
         "difficulty": q.get("difficulty", difficulty_fallback),
         "knowledgePoint": q.get("knowledge_point", ""),
+        "chapter": q.get("chapter", ""),
         "score": round(100.0 / max(total, 1), 1),
         "status": "draft",
         "source": "ai",
@@ -1558,15 +1763,26 @@ def generate_exercises_stream(
         model_name = ""
 
         try:
-            # 构建生成计划：[(difficulty, count), ...]
-            if req.difficultyDistribution:
-                plan = [(d, c) for d, c in req.difficultyDistribution.items() if c and c > 0]
+            # 构建生成计划：题型数量优先 > 难度分布 > 单一难度
+            if _is_type_count_mode(req):
+                type_plan = _plan_batches_by_type_counts(
+                    req.typeCounts, req.difficultyDistribution
+                )
+                if not type_plan:
+                    yield _sse({"type": "error", "message": "请至少设定一种题型的提问数量"})
+                    return
+                plan = type_plan
+            elif req.difficultyDistribution:
+                plan = _plan_batches_with_types(
+                    [(d, c) for d, c in req.difficultyDistribution.items() if c and c > 0],
+                    types,
+                )
             else:
-                plan = [(req.difficulty, req.questionCount)]
+                plan = [(req.difficulty, _distribute_question_types(req.questionCount, types))]
 
-            total_planned = sum(c for _, c in plan)
+            total_planned = sum(sum(m.values()) for _, m in plan)
 
-            for difficulty, type_map in _plan_batches_with_types(plan, types):
+            for difficulty, type_map in plan:
                 # 推送阶段事件
                 yield _sse({"type": "stage", "stage": "generating", "difficulty": difficulty})
 
@@ -1593,10 +1809,8 @@ def generate_exercises_stream(
                     qidx += 1
                     yield _sse({"type": "question", "question": question})
 
-            # 重算分数
-            total = max(len(all_questions), 1)
-            for q in all_questions:
-                q["score"] = round(100.0 / total, 1)
+            # 按「总分 × 题型占比」重算每题分数（未传占比时退化为均分）
+            _assign_scores_by_ratios(all_questions, req.totalScore, req.typeRatios)
 
             usage.success = 1
             session.add(usage)
@@ -1605,6 +1819,7 @@ def generate_exercises_stream(
                 "type": "done",
                 "ragReferences": rag_references,
                 "totalCount": len(all_questions),
+                "questions": all_questions,
                 "meta": {
                     "model": model_name or "AI 模型",
                     "elapsedMs": total_elapsed_ms,

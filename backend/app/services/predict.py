@@ -162,6 +162,9 @@ def predict_student_scores(
         return {
             "current": 70,
             "predicted": "65-75",
+            "predicted_low": 65,
+            "predicted_high": 75,
+            "predicted_mid": 70,
             "trend": "稳定",
             "confidence": 50,
             "slope": 0.0,

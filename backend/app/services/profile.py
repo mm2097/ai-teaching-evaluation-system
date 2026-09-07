@@ -3,7 +3,8 @@
 所有函数输入 (session, student_id, course_id)，返回 0-100 分。
 - D02 学业水平：按课程考核构成配比加权（教师可调，合计固定 100%）——
     小班讨论（单项成绩）/ 期中考试（各题得分）/ 期末考试（各题得分）/
-    考勤（到课率）/ 其他（作业、实验等单项成绩，占比自动补足 100−其余）
+    考勤（到课率）/ 作业（单项成绩，批次名含"作业"）/
+    其他（实验等其余单项成绩，占比自动补足 100−其余）
 - D03：学习态度 = 0.5×考勤(到课率) + 0.5×课堂参与度（内部合计固定 100%）
 - D04：复用 predict.slope_to_progress_score
 """
@@ -43,7 +44,8 @@ ACADEMIC_PARTS_DEFAULT: dict[str, float] = {
     "midterm": 30.0,      # 期中考试（各题得分，批次名含"期中"）
     "final": 30.0,        # 期末考试（各题得分，批次名含"期末"）
     "attendance": 10.0,   # 考勤（到课率×100）
-    "other": 20.0,        # 其他（作业/实验等其余单项成绩，占比自动补足）
+    "homework": 10.0,     # 作业（单项成绩，批次名含"作业"）
+    "other": 10.0,        # 其他（实验等其余单项成绩，占比自动补足）
 }
 
 
@@ -182,7 +184,8 @@ def _academic_part_score(
       - midterm    期中考试：批次名含"期中"（各题得分表优先）
       - final      期末考试：批次名含"期末"（各题得分表优先）
       - attendance 考勤：到课率×100（无考勤数据返回 None）
-      - other      其他：作业/实验等其余单项成绩（批次名不含 讨论/期中/期末）
+      - homework   作业：批次名含"作业"（单项成绩）
+      - other      其他：实验等其余单项成绩（批次名不含 讨论/期中/期末/作业）
     """
     part = (part or "").strip().lower()
     if part == "discussion":
@@ -197,13 +200,15 @@ def _academic_part_score(
         if not _has_attendance_data(session, student_id, course_id):
             return None
         return round(_attendance_rate(session, student_id, course_id) * 100.0, 1)
+    if part == "homework":
+        return _batch_scores_by_keyword(session, student_id, course_id, "作业")
     if part == "other":
-        # 其他（作业/实验等）：批次名不含 讨论/期中/期末 的成绩
+        # 其他（实验等）：批次名不含 讨论/期中/期末/作业 的成绩
         others = [
             b for b in session.exec(
                 select(ExamBatch).where(ExamBatch.course_id == course_id)
             ).all()
-            if not any(k in (b.batch_name or "") for k in ("讨论", "期中", "期末"))
+            if not any(k in (b.batch_name or "") for k in ("讨论", "期中", "期末", "作业"))
         ]
         if not others:
             return None

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    APP_NAME: str = "AI 教学评价系统"
+    APP_NAME: str = "数智化教学分析评价"
     APP_VERSION: str = "0.1.0"
     DATABASE_URL: str = "sqlite:///./app.db"
     LOG_LEVEL: str = "INFO"

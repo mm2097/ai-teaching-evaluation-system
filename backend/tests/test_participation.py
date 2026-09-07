@@ -87,7 +87,7 @@ def _teacher_auth() -> dict[str, str]:
 
 def test_import_participation_file(engine):
     """课堂参与测试数据导入 → ParticipationSheet 落库。"""
-    file_path = os.path.join(TEST_DATA_DIR, "计算机网络课堂参与情况测试数据.xlsx")
+    file_path = os.path.join(TEST_DATA_DIR, "计算机网络_课堂参与情况_课堂参与.xlsx")
     assert os.path.exists(file_path), f"测试数据不存在: {file_path}"
 
     with Session(engine) as s:

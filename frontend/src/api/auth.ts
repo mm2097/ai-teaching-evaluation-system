@@ -9,7 +9,9 @@ export const authApi = {
   async login(username: string, password: string): Promise<{ token: string; user: UserInfo }> {
     const res = await request.post('/login', { username, password })  // → POST /api/login
     const data = res.data
-    const roleMap: Record<string, UserRole> = { admin: 'admin', teacher: 'teacher', student: 'student' }
+    const roleMap: Record<string, UserRole> = {
+      admin: 'admin', teacher: 'teacher', assistant: 'assistant', student: 'student',
+    }
     return {
       token: data.token,
       user: {
@@ -22,8 +24,10 @@ export const authApi = {
         studentNo: data.user.student_no ?? undefined,
         classId: data.user.class_id ?? undefined,
         teacherId: data.user.teacher_id ?? undefined,
-        phone: data.user.student_phone ?? '',
-        email: data.user.student_email ?? '',
+        assistantId: data.user.assistant_id ?? undefined,
+        assistantNo: data.user.assistant_no ?? undefined,
+        phone: data.user.student_phone ?? data.user.teacher_phone ?? data.user.assistant_phone ?? '',
+        email: data.user.student_email ?? data.user.teacher_email ?? data.user.assistant_email ?? '',
       },
     }
   },
@@ -33,7 +37,7 @@ export const authApi = {
     await request.post('/password/change', { old_password: oldPassword, new_password: newPassword })
   },
 
-  /** 学生修改本人联系方式（手机号/邮箱，空串表示清空） */
+  /** 学生/教师修改本人联系方式（手机号/邮箱，空串表示清空） */
   async updateContact(phone: string, email: string): Promise<void> {
     await request.put('/profile/contact', { phone, email })
   },

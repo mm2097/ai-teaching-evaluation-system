@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     llm_model: str = Field(default="qwen-plus", description="模型名")
 
     # ---------- 调用参数 ----------
-    llm_timeout: int = Field(default=30, description="单次调用超时（秒）")
+    llm_timeout: int = Field(default=90, description="单次调用超时（秒）")
     llm_max_retry: int = Field(default=2, description="失败重试次数")
     llm_temperature: float = Field(default=0.7, description="采样温度")
     llm_max_tokens: int = Field(default=4000, description="单次最大输出 token")

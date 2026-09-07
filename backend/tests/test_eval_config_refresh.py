@@ -161,8 +161,8 @@ def test_weight_change_refreshes_persisted_attitude_score(session, attitude_conf
     # 学生1：100%×25 = 25.0（课堂参与不再计入）
     assert attitude_after == 25.0
     assert attitude_after != attitude_before
-    # 总分变化 = 学习态度默认权重 0.2 × 维度分变化
-    assert total_after == round(total_before + 0.2 * (attitude_after - attitude_before), 1)
+    # 总分变化 = 学习态度默认占比 0.4 × 维度分变化（占比未配置 → 回退默认 学业水平0.6/学习态度0.4）
+    assert total_after == round(total_before + 0.4 * (attitude_after - attitude_before), 1)
 
 
 def test_config_changes_debounce_into_single_refresh(monkeypatch):

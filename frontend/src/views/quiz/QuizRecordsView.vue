@@ -131,6 +131,7 @@ function scoreRate(row: QuizSubmission): number {
 
       <el-table v-loading="loading" :data="filteredSubmissions" stripe border>
         <el-table-column prop="studentName" label="学生" width="120" />
+        <el-table-column prop="studentNo" label="学号" width="130" />
         <el-table-column prop="studentId" label="学生ID" width="90" align="center" />
         <el-table-column label="练习" min-width="200">
           <template #default="{ row }">

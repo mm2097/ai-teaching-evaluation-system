@@ -15,7 +15,13 @@ from app.models import (
     EvalIndex, Student, StudentEvaluationResult, SysRole, SysUser, Teacher,
 )
 from app.api.v1.analysis import _check_course_access
-from app.services.evaluation import compute_evaluation, load_dimension_weights
+from app.services.evaluation import (
+    DEFAULT_WEIGHTS,
+    compute_evaluation,
+    custom_dimension_key,
+    dimension_key,
+    load_dimension_shares,
+)
 
 router = APIRouter()
 
@@ -66,53 +72,31 @@ def _check_eval_self_or_course(
 # 实时评价序列化
 # ============================================================================
 
-_DIMENSION_META = [
-    ("academic", "学业成绩"),
-    ("attitude", "学习态度"),
-    ("progress", "学习进步"),
-    ("mastery", "知识掌握"),
-]
-
-
-def _dimension_key_from_name(name: str) -> str | None:
-    compact = (name or "").replace(" ", "")
-    if "学业" in compact or "成绩" in compact:
-        return "academic"
-    if "态度" in compact:
-        return "attitude"
-    if "进步" in compact:
-        return "progress"
-    if "知识" in compact or "掌握" in compact:
-        return "mastery"
-    return None
+def _applied_dimension_weights(session: Session, course_id: int) -> dict[str, float]:
+    """当前生效的维度占比（0-1）：配置合计=100 用配置，否则回退默认权重（严格不生效）。"""
+    shares = load_dimension_shares(session, course_id)
+    return shares if shares is not None else dict(DEFAULT_WEIGHTS)
 
 
 def _computed_dimensions(session: Session, course_id: int, result) -> list[dict]:
-    weights = load_dimension_weights(session, course_id)
+    """各维度得分：仅展示配置中的维度（含自定义），无配置时为空列表。"""
     configured = session.exec(
-        select(EvalDimension).where(EvalDimension.course_id == course_id)
+        select(EvalDimension)
+        .where(EvalDimension.course_id == course_id)
+        .order_by(EvalDimension.sort_num)
     ).all()
     rows: list[dict] = []
     seen: set[str] = set()
     for dim in configured:
-        key = _dimension_key_from_name(dim.dimension_name)
-        if not key or key in seen:
-            continue
+        key = dimension_key(dim.dimension_name) or custom_dimension_key(dim.dimension_id or 0)
+        if key in seen:
+            continue  # 同名 canonical 维度去重
         seen.add(key)
         rows.append({
             "dimensionId": dim.dimension_id or 0,
             "name": dim.dimension_name,
             "score": round(float(result.dimensions.get(key, 0)), 1),
-            "weight": round(weights.get(key, 0) * 100, 1),
-        })
-    for index, (key, name) in enumerate(_DIMENSION_META, start=1):
-        if key in seen:
-            continue
-        rows.append({
-            "dimensionId": -index,
-            "name": name,
-            "score": round(float(result.dimensions.get(key, 0)), 1),
-            "weight": round(weights.get(key, 0) * 100, 1),
+            "weight": round(result.dimension_weights.get(key, 0.0) * 100, 1),
         })
     return rows
 
@@ -141,42 +125,50 @@ def _db_dimension_scores(
     """批量读取已落库的维度分，按 eval_id 分组。
 
     返回 {eval_id: [{dimensionId, name, score, weight}, ...]}。
-    维度名来自 EvalDimension；weight 来自 load_dimension_weights（仅展示）。
+    维度名来自 EvalDimension；weight 为当前生效占比（仅展示）。
+    每个 eval_id 覆盖课程的全部配置维度，缺落库行补 score=0。
     """
     if not eval_ids:
         return {}
+    applied = _applied_dimension_weights(session, course_id)
+    configured = session.exec(
+        select(EvalDimension)
+        .where(EvalDimension.course_id == course_id)
+        .order_by(EvalDimension.sort_num)
+    ).all()
+
+    def _entry(dim: EvalDimension, score: float) -> dict:
+        key = dimension_key(dim.dimension_name) or custom_dimension_key(dim.dimension_id or 0)
+        return {
+            "dimensionId": dim.dimension_id or 0,
+            "name": dim.dimension_name,
+            "score": round(float(score), 1),
+            "weight": round(applied.get(key, 0.0) * 100, 1),
+        }
+
+    # 每个 eval_id 先补齐全部配置维度（score=0），再用落库行覆盖
+    grouped: dict[int, list[dict]] = {
+        eid: [_entry(dim, 0.0) for dim in configured] for eid in eval_ids
+    }
     rows = session.exec(
         select(EvalDimensionScore, EvalDimension)
         .join(EvalDimension, EvalDimensionScore.dimension_id == EvalDimension.dimension_id, isouter=True)
         .where(EvalDimensionScore.eval_id.in_(eval_ids))  # type: ignore[arg-type]
     ).all()
-    weights = load_dimension_weights(session, course_id)
-    grouped: dict[int, list[dict]] = {}
     seen: dict[int, set[str]] = {}
     for score_row, dim in rows:
-        key = _dimension_key_from_name(dim.dimension_name) if dim else None
-        if key and key in seen.setdefault(score_row.eval_id, set()):
+        if dim is None:
+            continue  # 孤儿行（维度已删除），跳过
+        key = dimension_key(dim.dimension_name) or custom_dimension_key(dim.dimension_id or 0)
+        if key in seen.setdefault(score_row.eval_id, set()):
             continue
-        if key:
-            seen[score_row.eval_id].add(key)
-        grouped.setdefault(score_row.eval_id, []).append({
-            "dimensionId": dim.dimension_id if dim else 0,
-            "name": dim.dimension_name if dim else "",
-            "score": round(float(score_row.dimension_score), 1),
-            "weight": round(weights.get(key, 0) * 100, 1) if key else 0.0,
-        })
-    # 对落库维度不全的，补齐默认四维（与 _computed_dimensions 一致）
-    for eid, items in grouped.items():
-        seen_keys = {_dimension_key_from_name(it["name"]) for it in items}
-        for index, (key, name) in enumerate(_DIMENSION_META, start=1):
-            if key in seen_keys:
-                continue
-            items.append({
-                "dimensionId": -index,
-                "name": name,
-                "score": 0.0,
-                "weight": round(weights.get(key, 0) * 100, 1),
-            })
+        seen[score_row.eval_id].add(key)
+        items = grouped.setdefault(score_row.eval_id, [])
+        entry = next((it for it in items if it["dimensionId"] == dim.dimension_id), None)
+        if entry is None:
+            items.append(_entry(dim, score_row.dimension_score))
+        else:
+            entry["score"] = round(float(score_row.dimension_score), 1)
     return grouped
 
 
@@ -227,7 +219,7 @@ def _course_students(session: Session, course_id: int, student_id: int | None = 
 @router.get("/evaluations", tags=["评价管理"])
 def list_evaluations(
     course_id: int | None = Query(default=None),
-    eval_level: str | None = Query(default=None, description="优/良/中/差"),
+    eval_level: str | None = Query(default=None, description="优秀/良好/中等/合格/不合格"),
     student_id: int | None = Query(default=None, description="按数据库 student_id 筛选"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
@@ -389,8 +381,8 @@ def get_evaluation_distribution(
 ) -> dict:
     """班级评价结果分布统计（Eval.Student.Distribute）。
 
-    返回等级分布（优/良/中/差）、分数统计（均值/中位数/标准差/极值），
-    支持按班级筛选。
+    返回等级分布（优秀/良好/中等/合格/不合格五档，与分数段分布口径一致）、
+    分数统计（均值/中位数/标准差/极值），支持按班级筛选。
 
     权限（Eval.Student.UserValid）：仅课程授课教师可查看。
     """
@@ -449,8 +441,8 @@ def get_evaluation_distribution(
     variance = sum((s - mean) ** 2 for s in scores) / n
     std_dev = variance ** 0.5
 
-    # 等级分布
-    level_count = {"优": 0, "良": 0, "中": 0, "差": 0}
+    # 等级分布（五档，与 scoreDistribution 分数段口径一致）
+    level_count = {"优秀": 0, "良好": 0, "中等": 0, "合格": 0, "不合格": 0}
     for r in computed_results:
         level = r["grade"]
         level_count[level] = level_count.get(level, 0) + 1

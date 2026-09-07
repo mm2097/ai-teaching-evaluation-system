@@ -67,14 +67,14 @@ class TestPredict:
 
 class TestProfile:
     def test_academic_score(self, session):
-        """D02 学业水平（课程考核构成配比加权：小班讨论/期中/期末/考勤/其他）。"""
+        """D02 学业水平（课程考核构成配比加权：小班讨论/期中/期末/考勤/作业/其他）。"""
         from app.services.profile import compute_academic_score
         score = compute_academic_score(session, student_id=1, course_id=1)
         assert 0 <= score <= 100
-        # 张三：期中55（配比30）+ 考勤25（到课率25%×100，配比10）+ 其他(作业1/2均分80，配比20）；
-        # 无期末/小班讨论数据 → 有数据部分按配比归一化：
-        # (55*30 + 25*10 + 80*20) / 60 = 58.3
-        assert abs(score - 58.3) < 0.1
+        # 张三：期中55（配比30）+ 考勤25（到课率25%×100，配比10）+ 作业(作业1/2均分80，配比10）；
+        # 无期末/小班讨论/其他数据 → 有数据部分按配比归一化：
+        # (55*30 + 25*10 + 80*10) / 50 = 54.0
+        assert abs(score - 54.0) < 0.1
 
     def test_attitude_score(self, session):
         """D03 学习态度。"""
@@ -192,17 +192,22 @@ class TestTag:
 class TestEvaluation:
     def test_score_to_level(self):
         from app.services.evaluation import score_to_level
-        assert score_to_level(90) == "优"
-        assert score_to_level(80) == "良"
-        assert score_to_level(65) == "中"
-        assert score_to_level(50) == "差"
+        assert score_to_level(95) == "优秀"
+        assert score_to_level(90) == "优秀"
+        assert score_to_level(85) == "良好"
+        assert score_to_level(80) == "良好"
+        assert score_to_level(75) == "中等"
+        assert score_to_level(70) == "中等"
+        assert score_to_level(65) == "合格"
+        assert score_to_level(60) == "合格"
+        assert score_to_level(50) == "不合格"
 
     def test_compute_evaluation(self, session):
         """综合评价。"""
         from app.services.evaluation import compute_evaluation
         result = compute_evaluation(session, student_id=2, course_id=1)
         assert 0 <= result.total_score <= 100
-        assert result.level in ("优", "良", "中", "差")
+        assert result.level in ("优秀", "良好", "中等", "合格", "不合格")
         assert "academic" in result.dimensions
         assert "attitude" in result.dimensions
         assert "mastery" in result.dimensions
@@ -339,6 +344,40 @@ class TestReport:
         report = render_report(ctx)
         assert report["scope"] == "student"
         assert "张三" in report["summary"]
+
+    def test_four_report_types_have_distinct_focus(self, session):
+        """四类报告侧重点必须分开，并带上教师配置维度名。"""
+        from app.models import EvalDimension, EvalIndex
+        from app.services.report_template import (
+            build_class_context, build_student_context, render_report,
+        )
+
+        dim = EvalDimension(course_id=1, dimension_name="学业水平", sort_num=1)
+        session.add(dim)
+        session.flush()
+        session.add(EvalIndex(
+            dimension_id=dim.dimension_id, index_name="期末考试", weight=100,
+            score_rule='{"type":"academic_part","part":"final"}',
+        ))
+        session.commit()
+
+        class_ctx = build_class_context(session, course_id=1, report_type=1)
+        student_ctx = build_student_context(session, student_id=1, course_id=1, report_type=2)
+        knowledge_ctx = build_class_context(session, course_id=1, report_type=3)
+        quality_ctx = build_class_context(session, course_id=1, report_type=4)
+        reports = {
+            1: render_report(class_ctx),
+            2: render_report(student_ctx),
+            3: render_report(knowledge_ctx),
+            4: render_report(quality_ctx),
+        }
+        assert "【班级学情】" in reports[1]["findings"][0]
+        assert "【个人学情】" in reports[2]["findings"][0]
+        assert "【知识点分析】" in reports[3]["findings"][0]
+        assert "【学习质量】" in reports[4]["findings"][0]
+        assert "不展开班级及格率" in reports[3]["conclusion"]
+        assert reports[3]["warnings"] == []
+        assert any("学业水平" in str(item) for item in reports[4]["findings"])
 
 
 def test_warning_w4_homework_missing_uses_interaction_records(session):

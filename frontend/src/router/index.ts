@@ -9,6 +9,7 @@ import { useUserStore } from '@/stores/user'
 function defaultPathForRole(role?: string): string {
   if (role === 'admin') return '/admin/dashboard'
   if (role === 'student') return '/student/dashboard'
+  if (role === 'assistant') return '/data/import'
   return '/dashboard'
 }
 
@@ -45,13 +46,13 @@ const router = createRouter({
           path: 'data/import',
           name: 'DataImport',
           component: () => import('@/views/data/DataImportView.vue'),
-          meta: { title: '数据上传', roles: ['teacher'] },
+          meta: { title: '数据上传', roles: ['teacher', 'assistant'] },
         },
         {
           path: 'data/manage',
           name: 'DataManage',
           component: () => import('@/views/data/DataManageView.vue'),
-          meta: { title: '数据管理', roles: ['teacher'] },
+          meta: { title: '数据管理', roles: ['teacher', 'assistant'] },
         },
         // ---- AI 分析 ----
         {
@@ -84,7 +85,7 @@ const router = createRouter({
           component: () => import('@/views/analysis/DiagnosisView.vue'),
           meta: { title: 'AI 学情分析', roles: ['teacher'] },
         },
-        // ---- AI 智能辅助教学 ----
+        // ---- 数智化教学分析评价 ----
         {
           path: 'quiz/bank',
           name: 'QuestionBank',

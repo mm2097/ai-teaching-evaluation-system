@@ -18,7 +18,9 @@ const breadcrumbs = computed(() => {
     ? '/admin/dashboard'
     : userStore.userInfo?.role === 'student'
       ? '/student/dashboard'
-      : '/dashboard'
+      : userStore.userInfo?.role === 'assistant'
+        ? '/data/import'
+        : '/dashboard'
   const items: { title: string; path?: string }[] = [{ title: '首页', path: homePath }]
 
   const parent = routeParentMap[path]

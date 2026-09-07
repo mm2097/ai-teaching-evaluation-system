@@ -15,9 +15,11 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 import openpyxl
@@ -36,6 +38,7 @@ from app.models import (
     Student,
     SysUser,
 )
+from app.services.knowledge_utils import split_knowledge_names
 
 
 # ============================================================================
@@ -391,6 +394,45 @@ def parse_txt(file_path: str) -> dict[str, list[dict[str, Any]]]:
     return result
 
 
+def parse_sqlite(file_path: str) -> dict[str, list[dict[str, Any]]]:
+    """只读解析 SQLite 表，结果结构与 Excel 的 Sheet 数据一致。"""
+    with open(file_path, "rb") as file_obj:
+        if file_obj.read(16) != b"SQLite format 3\x00":
+            raise ValueError("文件不是有效的 SQLite 3 数据库")
+
+    database_uri = f"{Path(file_path).resolve().as_uri()}?mode=ro"
+    result: dict[str, list[dict[str, Any]]] = {}
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(database_uri, uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 51"
+        ).fetchall()
+        if len(tables) > 50:
+            raise ValueError("数据库数据表超过 50 个，请拆分后导入")
+
+        for table in tables:
+            table_name = str(table["name"])
+            quoted_name = '"' + table_name.replace('"', '""') + '"'
+            rows = connection.execute(f"SELECT * FROM {quoted_name} LIMIT 10001").fetchall()
+            if len(rows) > 10000:
+                raise ValueError(f"数据表「{table_name}」超过 10000 行，请拆分后导入")
+            if rows:
+                result[table_name] = [
+                    {"_excel_row": row_index, **dict(row)}
+                    for row_index, row in enumerate(rows, start=2)
+                ]
+    except sqlite3.DatabaseError as exc:
+        raise ValueError(f"SQLite 数据库读取失败：{exc}") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+    return result
+
+
 # ============================================================================
 # 数据导入辅助
 # ============================================================================
@@ -569,15 +611,16 @@ def _collect_and_ensure_knowledge_points(
 ) -> dict[str, KnowledgePoint]:
     """从课程测试数据行中收集所有知识点名称并确保其存在。
 
-    返回 {知识点名称: KnowledgePoint} 映射。
+    一格多个知识点（如「传输时延、TCP/UDP协议」）按分隔符拆分为
+    独立知识点建点；返回 {知识点名称: KnowledgePoint} 映射。
     """
     knowledge_names: set[str] = set()
     for row_data in rows:
         for qn in range(1, 6):
             col_name = f"第 {qn} 大题扣分的主要知识点"
             kn_str = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
-            if kn_str:
-                knowledge_names.add(kn_str)
+            for name in split_knowledge_names(kn_str):
+                knowledge_names.add(name)
 
     result: dict[str, KnowledgePoint] = {}
     for name in knowledge_names:
@@ -596,6 +639,7 @@ def _import_exam_deduction(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入模板1数据：课程测试各题扣分情况 → CourseTestDetail。
 
@@ -647,6 +691,8 @@ def _import_exam_deduction(
             # 过滤内部字段和不需要的列
             source = {k: v for k, v in row_data.items()
                       if not k.startswith("_") and k != "所考查的知识点"}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 获取或创建考核批次
@@ -729,6 +775,7 @@ def _import_simple_score(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入单项成绩 → IndividualScore。
 
@@ -782,6 +829,8 @@ def _import_simple_score(
                 continue
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 获取或创建考试批次
@@ -832,6 +881,7 @@ def _import_attendance(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入成绩考勤情况 → AttendanceSheet。
 
@@ -882,6 +932,8 @@ def _import_attendance(
             _ensure_course_student(session, course_id, student.student_id)
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 解析 32 次考勤
@@ -979,6 +1031,7 @@ def _import_participation(
     course_id: int,
     create_by: int,
     tmpl: TemplateDef,
+    file_name: str = "",
 ) -> ImportResult:
     """导入课堂参与情况 → ParticipationSheet。
 
@@ -1029,6 +1082,8 @@ def _import_participation(
             _ensure_course_student(session, course_id, student.student_id)
 
             source = {k: v for k, v in row_data.items() if not k.startswith("_")}
+            if file_name:
+                source["来源文件"] = file_name
             source_json = json.dumps(source, ensure_ascii=False, default=str)
 
             # 解析 32 次课堂参与
@@ -1102,21 +1157,33 @@ def import_file(
     file_ext: str,
     course_id: int,
     create_by: int,
+    file_name: str = "",
 ) -> ImportResult:
     """主导入流程：解析文件 → 按 Sheet 检测模板 → 校验 → 导入。
 
     每个 Sheet 独立检测模板并导入，同一文件可包含多种模板数据。
+    file_name 会写入每行 sourceData 的保留字段「来源文件」。
     """
     # 1. 解析文件
     if file_ext == ".xlsx":
         sheet_data = parse_xlsx(file_path)
     elif file_ext == ".txt":
         sheet_data = parse_txt(file_path)
+    elif file_ext in {".db", ".sqlite", ".sqlite3"}:
+        try:
+            sheet_data = parse_sqlite(file_path)
+        except ValueError as exc:
+            result = ImportResult()
+            result.errors.append(ImportError(
+                sheet="", row=0, field=None, message=str(exc),
+            ))
+            result.error_count = 1
+            return result
     else:
         result = ImportResult()
         result.errors.append(ImportError(
             sheet="", row=0, field=None,
-            message=f"不支持的文件格式「{file_ext}」，仅支持 .xlsx 和 .txt",
+            message=f"不支持的文件格式「{file_ext}」，仅支持 .xlsx、.txt 和 SQLite 数据库",
         ))
         result.error_count = 1
         return result
@@ -1156,7 +1223,8 @@ def import_file(
         result.errors.append(ImportError(
             sheet="", row=0, field=None,
             message=(
-                f"无法识别文件模板。支持的模板：课程测试各题扣分情况、单项成绩、成绩考勤情况。"
+                "无法识别文件模板。支持的模板：课程测试各题扣分情况、单项成绩、"
+                "成绩考勤情况、课堂参与情况。"
                 f"各Sheet表头：{all_headers}"
             ),
         ))
@@ -1186,7 +1254,7 @@ def import_file(
 
         # 取第一个 sheet 对应的模板定义
         first_tmpl = sheet_templates[next(iter(sheets))][0]
-        partial = handler(session, sheets, course_id, create_by, first_tmpl)
+        partial = handler(session, sheets, course_id, create_by, first_tmpl, file_name)
         merged.success_count += partial.success_count
         merged.error_count += partial.error_count
         merged.errors.extend(partial.errors)

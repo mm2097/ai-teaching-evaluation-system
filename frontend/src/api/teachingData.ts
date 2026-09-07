@@ -83,6 +83,9 @@ interface TeachingDataApiRow {
   studentName: string
   courseId: number
   courseName?: string
+  classId?: number
+  college?: string
+  major?: string
   semester?: string
   score?: number
   status?: string
@@ -90,15 +93,23 @@ interface TeachingDataApiRow {
   batchId?: number
   remark?: string
   sourceData?: string
+  sourceFileName?: string
   attendanceDate?: string | null
   participationRate?: number
   totalCount?: number
 }
 
+/** 后端查询 data_type 与落库 recordType 的映射（participation 查询实际落在 participation_sheet 表） */
+const RECORD_TYPE_ALIASES: Record<'score' | 'attendance' | 'participation', TeachingRecordType> = {
+  score: 'score',
+  attendance: 'attendance',
+  participation: 'participation_sheet',
+}
+
 function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): TeachingDataRecord {
   return {
     id: row.recordId,
-    recordType: row.recordType || row.dataType,
+    recordType: row.recordType || RECORD_TYPE_ALIASES[row.dataType],
     studentId: row.studentId,
     studentName: row.studentName,
     courseId: String(row.courseId),
@@ -107,7 +118,9 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     semesterId: 0,
     deptId: 0,
     majorId: 0,
-    classId: 0,
+    classId: row.classId || 0,
+    college: row.college,
+    major: row.major,
     dataType: row.dataType,
     subType: row.subType,
     score: row.dataType === 'score' ? row.score : undefined,
@@ -118,6 +131,7 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     participationRate: row.dataType === 'participation' ? row.participationRate : undefined,
     totalCount: row.dataType === 'participation' ? row.totalCount : undefined,
     sourceData: row.sourceData,
+    sourceFileName: row.sourceFileName,
   }
 }
 
@@ -176,6 +190,15 @@ export async function batchDeleteTeachingDataRecords(
   records: { recordType: TeachingRecordType; recordId: number }[],
 ): Promise<{ deleted: number }> {
   const res = await request.post('/v1/teaching-data/batch-delete', { records })
+  return res.data as { deleted: number }
+}
+
+/** 一键清空当前课程某一数据类型的全部记录（成绩/考勤/课堂参与，后端按类型删除对应各表） */
+export async function clearTeachingDataByType(
+  courseId: number,
+  dataType: 'score' | 'attendance' | 'participation',
+): Promise<{ deleted: number }> {
+  const res = await request.post('/v1/teaching-data/clear', { courseId, dataType })
   return res.data as { deleted: number }
 }
 

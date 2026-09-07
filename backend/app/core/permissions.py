@@ -46,4 +46,6 @@ def require_roles(*allowed_roles: str) -> Callable[..., SysUser]:
 
 require_admin = require_roles("admin")
 require_teacher = require_roles("teacher")
+require_assistant = require_roles("assistant")
+require_teaching_staff = require_roles("teacher", "assistant")
 require_teaching_user = require_roles("teacher", "student")

@@ -28,13 +28,14 @@ const classOptions = ref<{ label: string; value: number }[]>([])
 const allEvalList = ref<StudentEvaluationItem[]>([])
 const distribution = ref<EvaluationDistribution | null>(null)
 
-/** 与实时评价算法等级一致（优 / 良 / 中 / 差） */
+/** 与综合评价算法等级一致（五档：优秀≥90 / 良好80-89 / 中等70-79 / 合格60-69 / 不合格<60） */
 const levelOptions = [
   { label: '全部', value: '' },
-  { label: '优', value: '优' },
-  { label: '良', value: '良' },
-  { label: '中', value: '中' },
-  { label: '差', value: '差' },
+  { label: '优秀', value: '优秀' },
+  { label: '良好', value: '良好' },
+  { label: '中等', value: '中等' },
+  { label: '合格', value: '合格' },
+  { label: '不合格', value: '不合格' },
 ]
 
 /** 将 10 分档合并为 5 档，避免横坐标拥挤 */
@@ -164,12 +165,26 @@ async function onQuery(): Promise<void> {
   await loadData()
 }
 
+/** 等级配色：与「分数段分布」各分数段颜色一一对应 */
+const LEVEL_COLORS: Record<string, string> = {
+  优秀: '#10b981',
+  良好: '#2563eb',
+  中等: '#f59e0b',
+  合格: '#f97316',
+  不合格: '#ef4444',
+}
+
 const pieOption = computed<EChartsOption>(() => {
   const dist = distribution.value?.levelDistribution ?? {}
   const ratio = distribution.value?.levelRatio ?? {}
   const data = Object.entries(dist)
     .filter(([, count]) => count > 0)
-    .map(([name, value]) => ({ name, value, ratio: ratio[name] }))
+    .map(([name, value]) => ({
+      name,
+      value,
+      ratio: ratio[name],
+      itemStyle: { color: LEVEL_COLORS[name] },
+    }))
   return {
     tooltip: {
       trigger: 'item',
@@ -180,7 +195,6 @@ const pieOption = computed<EChartsOption>(() => {
       },
     },
     legend: { bottom: 0 },
-    color: ['#10b981', '#2563eb', '#f59e0b', '#ef4444'],
     series: [{
       type: 'pie',
       radius: ['40%', '65%'],

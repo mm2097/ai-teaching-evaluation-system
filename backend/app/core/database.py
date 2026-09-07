@@ -23,10 +23,11 @@ def init_db() -> None:
     SQLModel.metadata.create_all(engine)
     _migrate_answer_task()
     _migrate_ai_question()
+    # 先加 eval_dimension.weight 列，后续迁移（academic_parts 等）查询该表时才不会报缺列
+    _migrate_dimension_weight()
     _migrate_legacy_tables()
     _migrate_academic_parts()
     _migrate_attitude_homework()
-    _migrate_dimension_weight()
     _migrate_evaluation_levels()
     _migrate_student_answers()
     _migrate_split_combined_knowledge_points()

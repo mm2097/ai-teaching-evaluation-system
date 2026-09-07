@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from app.models import (
     AttendanceRecord,
+    AttendanceSheet,
     CourseStudent,
     CourseTestDetail,
     ExamBatch,
@@ -121,17 +122,37 @@ def generate_tags(
         if max_v >= TAG_CONFIG["good_module"] and min_v < TAG_CONFIG["weak_module"]:
             tags.append("偏科型")
 
-    # 5. 出勤风险
-    atts = session.exec(
-        select(AttendanceRecord).where(
-            AttendanceRecord.student_id == student_id,
-            AttendanceRecord.course_id == course_id,
+    # 5. 出勤风险（优先新表 AttendanceSheet，旧表 AttendanceRecord 兜底）
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+    sheets = session.exec(
+        select(AttendanceSheet).where(
+            AttendanceSheet.student_id == student_id,
+            AttendanceSheet.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
         )
     ).all()
-    if atts:
+    total = 0
+    absent = 0
+    for sheet in sheets:
+        for i in range(1, 33):
+            val = getattr(sheet, f"attendance_{i}")
+            if val is None:
+                continue
+            total += 1
+            if "缺" in str(val):
+                absent += 1
+    if not total:
+        atts = session.exec(
+            select(AttendanceRecord).where(
+                AttendanceRecord.student_id == student_id,
+                AttendanceRecord.course_id == course_id,
+            )
+        ).all()
+        total = len(atts)
         absent = sum(1 for r in atts if r.status == 3)
-        if absent / len(atts) > TAG_CONFIG["absence_rate"]:
-            tags.append("出勤风险")
+    if total and absent / total > TAG_CONFIG["absence_rate"]:
+        tags.append("出勤风险")
 
     # 6. 互动积极（已禁用）
     # own_int = sum(

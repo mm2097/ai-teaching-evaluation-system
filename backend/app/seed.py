@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import date, datetime, timedelta
 
 from sqlmodel import Session, SQLModel, select
@@ -26,6 +27,235 @@ from app.models import (
     Notification,
     SysOperationLog,
 )
+
+
+# 提前注入数据在 sourceData「来源文件」字段中的统一标识（便于与上传文件区分）
+PRE_INJECT_SOURCE = "提前注入"
+
+# 考勤状态 → 测试数据「考勤情况」模板取值（0出勤 1迟到 2早退 3缺勤 4请假）
+_ATT_LABELS = {0: "到", 1: "迟到", 2: "早退", 3: "缺", 4: "请假"}
+_ATT_REMARKS = {1: "迟到", 2: "早退", 3: "未到", 4: "请假"}
+_ATT_SLOTS = 32  # 模板固定 32 次考勤槽位
+
+
+def _get_or_create_attendance_batch(
+    session: Session, course: Course, create_by: int
+) -> ExamBatch:
+    """获取或创建课程「考勤情况」批次（batch_type=5，命名与文件导入一致）。"""
+    batch_name = f"{course.course_name}-考勤情况"
+    batch = session.exec(
+        select(ExamBatch).where(
+            ExamBatch.course_id == course.course_id,
+            ExamBatch.batch_name == batch_name,
+            ExamBatch.semester == course.semester,
+        )
+    ).first()
+    if not batch:
+        batch = ExamBatch(
+            course_id=course.course_id, batch_name=batch_name, batch_type=5,
+            semester=course.semester, batch_weight=5.0, create_by=create_by,
+        )
+        session.add(batch)
+        session.commit()
+        session.refresh(batch)
+    return batch
+
+
+def _attendance_status_pattern(student_id: int, tier: int) -> list[int]:
+    """按学生档位生成 32 次考勤状态（确定性、差异化）。
+
+    状态: 0出勤 1迟到 2早退 3缺勤 4请假。沿用原 6 次考勤注入的差异化规则，
+    扩展到测试数据「考勤」模板的 32 个槽位。
+    """
+    seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
+    statuses: list[int] = []
+    for i in range(_ATT_SLOTS):
+        if tier == 0:  # S: 全勤
+            status = 0
+        elif tier == 1:  # A: 偶尔迟到
+            status = 1 if (seed_val + i) % 7 == 0 else 0
+        elif tier == 2:  # B: 少量迟到或缺勤
+            if (seed_val + i) % 5 == 0:
+                status = 3
+            elif (seed_val + i) % 7 == 0:
+                status = 1
+            else:
+                status = 0
+        elif tier == 3:  # C: 缺勤偏多
+            if (seed_val + i) % 4 == 0:
+                status = 3
+            elif (seed_val + i) % 6 == 0:
+                status = 1
+            elif (seed_val + i) % 11 == 0:
+                status = 4
+            else:
+                status = 0
+        else:  # D: 缺勤严重
+            if (seed_val + i) % 3 == 0:
+                status = 3
+            elif (seed_val + i) % 5 == 0:
+                status = 1
+            else:
+                status = 0
+        statuses.append(status)
+    return statuses
+
+
+def _build_attendance_sheet(
+    *,
+    student: Student,
+    course: Course,
+    exam_batch_id: int,
+    statuses: list[int],
+    row_no: int,
+    create_by: int,
+) -> AttendanceSheet:
+    """按测试数据「考勤情况」模板的行格式构造一条考勤单。
+
+    32 个考勤槽位（到/迟到/缺/请假/早退）+ 汇总列，sourceData 列结构与
+    上传文件解析结果一致，「来源文件」固定为「提前注入」。
+    """
+    labels = [_ATT_LABELS.get(s, "到") for s in statuses[:_ATT_SLOTS]]
+    present = labels.count("到")
+    rate = round(present / len(labels), 4) if labels else 0.0
+
+    source: dict[str, object] = {
+        "编号": row_no,
+        "课程号": course.course_id,
+        "课程名称": course.course_name,
+        "学期": course.semester,
+        "学号": student.student_no,
+        "姓名": student.real_name,
+    }
+    source.update({f"考勤{i}": label for i, label in enumerate(labels, start=1)})
+    source.update({
+        "考勤总数": len(labels),
+        "到课数": present,
+        "请假数": labels.count("请假"),
+        "早退数": labels.count("早退"),
+        "迟到数": labels.count("迟到"),
+        "到课率": rate,
+        "来源文件": PRE_INJECT_SOURCE,
+    })
+
+    sheet = AttendanceSheet(
+        student_id=student.student_id,
+        exam_batch_id=exam_batch_id,
+        total_count=len(labels),
+        present_count=present,
+        leave_count=labels.count("请假"),
+        late_count=labels.count("迟到"),
+        early_leave_count=labels.count("早退"),
+        attendance_rate=rate,
+        source_data=json.dumps(source, ensure_ascii=False),
+        create_by=create_by,
+    )
+    for i, label in enumerate(labels, start=1):
+        setattr(sheet, f"attendance_{i}", label)
+    return sheet
+
+
+def _attendance_events(statuses: list[int], start: date) -> list[dict]:
+    """将 32 次考勤状态展开为学情画像/预警生成所需的事件列表。"""
+    return [
+        {"date": start + timedelta(weeks=i), "status": s, "remark": _ATT_REMARKS.get(s)}
+        for i, s in enumerate(statuses)
+    ]
+
+
+def _pre_inject_source(fields: dict[str, object]) -> str:
+    """为提前注入的数据构造 sourceData，列结构对齐上传模板，
+    「来源文件」统一标记为「提前注入」便于与上传文件区分。"""
+    payload = dict(fields)
+    payload["来源文件"] = PRE_INJECT_SOURCE
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _score_source_fields(
+    batch: ExamBatch, course: Course, student: Student, score: float, row_no: int,
+) -> dict[str, object]:
+    """成绩行 sourceData 字段（列结构对齐成绩类上传模板）。"""
+    return {
+        "编号": row_no,
+        "课程号": course.course_id,
+        "课程名称": course.course_name,
+        "学期": batch.semester,
+        "测试名称": batch.batch_name,
+        "学号": student.student_no,
+        "姓名": student.real_name,
+        "总成绩": score,
+    }
+
+
+def _participation_source_fields(
+    batch: ExamBatch, course: Course, student: Student,
+    total_count: int | None, participation_rate: float | None, row_no: int,
+) -> dict[str, object]:
+    """课堂参与行 sourceData 字段（列结构对齐课堂参与上传模板）。"""
+    return {
+        "编号": row_no,
+        "课程号": course.course_id,
+        "课程名称": course.course_name,
+        "学期": batch.semester,
+        "学号": student.student_no,
+        "姓名": student.real_name,
+        "课堂总数": total_count,
+        "课堂参与度": participation_rate,
+    }
+
+
+def backfill_pre_inject_source() -> tuple[int, int]:
+    """为旧版 seed 产生、缺少 sourceData 的成绩/课堂参与行补写「提前注入」标记。
+
+    幂等：仅处理 source_data 为空的行，文件导入的数据不受影响。
+    返回 (补写成绩行数, 补写课堂参与行数)。
+    """
+    filled_scores = 0
+    filled_parts = 0
+    with Session(engine) as session:
+        course_map = {c.course_id: c for c in session.exec(select(Course)).all()}
+        batch_map = {b.batch_id: b for b in session.exec(select(ExamBatch)).all()}
+        student_map = {s.student_id: s for s in session.exec(select(Student)).all()}
+
+        score_nos: dict[tuple[int, int], int] = {}
+        for score in session.exec(
+            select(ScoreRecord).where(ScoreRecord.source_data.is_(None))  # type: ignore
+        ).all():
+            batch = batch_map.get(score.batch_id)
+            course = course_map.get(score.course_id)
+            student = student_map.get(score.student_id)
+            if not (batch and course and student):
+                continue
+            key = (score.course_id, score.batch_id)
+            score_nos[key] = score_nos.get(key, 0) + 1
+            score.source_data = _pre_inject_source(_score_source_fields(
+                batch, course, student, float(score.score), score_nos[key],
+            ))
+            session.add(score)
+            filled_scores += 1
+
+        for part_row_no, part in enumerate(
+            session.exec(
+                select(ParticipationSheet).where(
+                    ParticipationSheet.source_data.is_(None)  # type: ignore
+                )
+            ).all(),
+            start=1,
+        ):
+            batch = batch_map.get(part.exam_batch_id)
+            course = course_map.get(batch.course_id) if batch else None
+            student = student_map.get(part.student_id)
+            if not (batch and course and student):
+                continue
+            part.source_data = _pre_inject_source(_participation_source_fields(
+                batch, course, student,
+                part.total_count, part.participation_rate, part_row_no,
+            ))
+            session.add(part)
+            filled_parts += 1
+
+        session.commit()
+    return filled_scores, filled_parts
 
 
 def reset() -> None:
@@ -562,60 +792,62 @@ def seed() -> None:
             ScoreRecord(course_id=3, student_id=6, batch_id=9,  score=68, is_pass=1, create_by=3),
             ScoreRecord(course_id=3, student_id=6, batch_id=10, score=74, is_pass=1, create_by=3),
         ]
+        student_map = {s.student_id: s for s in session.exec(select(Student)).all()}
+        course_map = {c.course_id: c for c in session.exec(select(Course)).all()}
+        batch_map = {b.batch_id: b for b in session.exec(select(ExamBatch)).all()}
+
+        # 提前注入的成绩行写入 sourceData（列结构对齐成绩模板，来源文件=提前注入）
+        score_row_nos: dict[tuple[int, int], int] = {}
+        for score in scores:
+            batch = batch_map[score.batch_id]
+            course = course_map[score.course_id]
+            student = student_map[score.student_id]
+            key = (score.course_id, score.batch_id)
+            score_row_nos[key] = score_row_nos.get(key, 0) + 1
+            score.source_data = _pre_inject_source(_score_source_fields(
+                batch, course, student, float(score.score), score_row_nos[key],
+            ))
         session.add_all(scores)
         session.commit()
         print(f"  成绩记录: {len(scores)} 条")
 
-        # ========== 11. 考勤记录（差异化：有人缺勤多，有人全勤） ==========
-        from datetime import timedelta
-        base = date(2026, 3, 3)
-        attendances = []
-        # 赵伟：全勤
-        for i in range(6):
-            d = base + timedelta(weeks=i)
-            attendances.append(AttendanceRecord(course_id=1, student_id=1,
-                                                attendance_date=d, status=0, create_by=2))
-        # 钱丽华：迟到 2 次
-        for i in range(6):
-            d = base + timedelta(weeks=i)
-            status = 1 if i in [2, 4] else 0
-            remark = "迟到5分钟" if status == 1 else None
-            attendances.append(AttendanceRecord(course_id=1, student_id=2,
-                                                attendance_date=d, status=status, remark=remark, create_by=2))
-        # 孙浩然：缺勤 3 次，严重
-        for i in range(6):
-            d = base + timedelta(weeks=i)
-            status = 3 if i in [1, 3, 5] else 0
-            remark = "未到" if status == 3 else None
-            attendances.append(AttendanceRecord(course_id=1, student_id=3,
-                                                attendance_date=d, status=status, remark=remark, create_by=2))
-        # 吴天宇：请假 1 次 + 缺勤 1 次
-        for i in range(6):
-            d = base + timedelta(weeks=i)
-            status = 4 if i == 0 else (3 if i == 4 else 0)
-            remark = "病假" if status == 4 else ("未到" if status == 3 else None)
-            attendances.append(AttendanceRecord(course_id=1, student_id=5,
-                                                attendance_date=d, status=status, remark=remark, create_by=2))
-        # 周敏：全勤
-        for i in range(6):
-            d = base + timedelta(weeks=i)
-            attendances.append(AttendanceRecord(course_id=1, student_id=4,
-                                                attendance_date=d, status=0, create_by=2))
-        # 冯文博：迟到 1 次
-        for i in range(4):
-            d = base + timedelta(weeks=i)
-            status = 1 if i == 2 else 0
-            attendances.append(AttendanceRecord(course_id=3, student_id=7,
-                                                attendance_date=d, status=status, create_by=3))
-        # 郑小红：缺勤 1 次
-        for i in range(4):
-            d = base + timedelta(weeks=i)
-            status = 3 if i == 3 else 0
-            attendances.append(AttendanceRecord(course_id=1, student_id=8,
-                                                attendance_date=d, status=status, create_by=2))
+        # ========== 11. 考勤情况（AttendanceSheet，格式与测试数据「考勤」模板一致） ==========
+        # 每位学生的差异化考勤：{考勤槽位(从1起): 状态}，其余槽位为出勤
+        att_overrides: dict[tuple[int, int], dict[int, int]] = {
+            (1, 1): {},                    # 赵伟：全勤
+            (1, 2): {3: 1, 5: 1},          # 钱丽华：迟到 2 次
+            (1, 3): {2: 3, 4: 3, 6: 3},    # 孙浩然：缺勤 3 次
+            (1, 4): {},                    # 周敏：全勤
+            (1, 5): {1: 4, 5: 3},          # 吴天宇：请假 1 次 + 缺勤 1 次
+            (1, 8): {4: 3},                # 郑小红：缺勤 1 次
+            (3, 7): {3: 1},                # 冯文博：迟到 1 次
+        }
+        # create_by 与原考勤记录保持一致：课程1=王建国，课程3=李明远
+        att_creators = {1: 2, 3: 3}
+
+        attendances: list[AttendanceSheet] = []
+        row_no = 0
+        prev_course_id: int | None = None
+        for (att_course_id, att_student_id), overrides in att_overrides.items():
+            if att_course_id != prev_course_id:
+                row_no = 0
+                prev_course_id = att_course_id
+            row_no += 1
+            statuses = [overrides.get(slot, 0) for slot in range(1, _ATT_SLOTS + 1)]
+            batch = _get_or_create_attendance_batch(
+                session, course_map[att_course_id], att_creators[att_course_id]
+            )
+            attendances.append(_build_attendance_sheet(
+                student=student_map[att_student_id],
+                course=course_map[att_course_id],
+                exam_batch_id=batch.batch_id,
+                statuses=statuses,
+                row_no=row_no,
+                create_by=att_creators[att_course_id],
+            ))
         session.add_all(attendances)
         session.commit()
-        print(f"  考勤记录: {len(attendances)} 条")
+        print(f"  考勤情况单: {len(attendances)} 条")
 
         # ========== 12. 课堂参与情况（ParticipationSheet，学习态度维度数据源） ==========
         # 课堂参与度作为学习态度维度的互动项数据源（_participation_rate 读取）。
@@ -632,6 +864,15 @@ def seed() -> None:
             ParticipationSheet(student_id=5, exam_batch_id=1, participation_rate=0.60,
                                total_count=16, create_by=2),  # 吴磊：偏少
         ]
+        # 提前注入的课堂参与行写入 sourceData（列结构对齐课堂参与模板，来源文件=提前注入）
+        for part_row_no, part in enumerate(participations, start=1):
+            part_batch = batch_map[part.exam_batch_id]
+            part_course = course_map[part_batch.course_id]
+            part_student = student_map[part.student_id]
+            part.source_data = _pre_inject_source(_participation_source_fields(
+                part_batch, part_course, part_student,
+                part.total_count, part.participation_rate, part_row_no,
+            ))
         session.add_all(participations)
         session.commit()
         print(f"  课堂参与情况: {len(participations)} 条")
@@ -1104,51 +1345,6 @@ def _deterministic_scores(student_id: int, tier: int, trend: str) -> list[float]
         ]
 
 
-def _deterministic_attendance(student_id: int, tier: int) -> list[dict]:
-    """生成 6 次考勤记录（确定性、差异化）。"""
-    events = []
-    seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
-    weeks = [date(2026, 3, 3) + timedelta(weeks=i) for i in range(6)]
-
-    # 不同档位缺勤/迟到概率不同
-    if tier == 0:  # S: 全勤
-        for w in weeks:
-            events.append({"date": w, "status": 0, "remark": None})
-    elif tier == 1:  # A: 偶尔迟到
-        for i, w in enumerate(weeks):
-            if (seed_val + i) % 7 == 0:
-                events.append({"date": w, "status": 1, "remark": "迟到5分钟"})
-            else:
-                events.append({"date": w, "status": 0, "remark": None})
-    elif tier == 2:  # B: 1-2次迟到或缺勤
-        for i, w in enumerate(weeks):
-            if (seed_val + i) % 5 == 0:
-                events.append({"date": w, "status": 3, "remark": "未到"})
-            elif (seed_val + i) % 7 == 0:
-                events.append({"date": w, "status": 1, "remark": "迟到"})
-            else:
-                events.append({"date": w, "status": 0, "remark": None})
-    elif tier == 3:  # C: 2-3次缺勤
-        for i, w in enumerate(weeks):
-            if (seed_val + i) % 4 == 0:
-                events.append({"date": w, "status": 3, "remark": "未到"})
-            elif (seed_val + i) % 6 == 0:
-                events.append({"date": w, "status": 1, "remark": "迟到"})
-            elif (seed_val + i) % 8 == 0:
-                events.append({"date": w, "status": 4, "remark": "病假"})
-            else:
-                events.append({"date": w, "status": 0, "remark": None})
-    else:  # D: 缺勤严重
-        for i, w in enumerate(weeks):
-            if (seed_val + i) % 3 == 0:
-                events.append({"date": w, "status": 3, "remark": "未到"})
-            elif (seed_val + i) % 5 == 0:
-                events.append({"date": w, "status": 1, "remark": "迟到"})
-            else:
-                events.append({"date": w, "status": 0, "remark": None})
-    return events
-
-
 def _knowledge_mastery_scores(student_id: int, tier: int, scores: list[float]) -> dict[int, float]:
     """为 7 个知识点生成掌握度分数（point_id → score）。"""
     seed_val = sum(int(c) for c in str(student_id) if c.isdigit())
@@ -1291,7 +1487,7 @@ def inject_analysis_data() -> None:
 
     注入内容：
       1. ScoreRecord（成绩记录 → 成绩趋势预测用）
-      2. AttendanceRecord（考勤记录 → 学情画像/预警用）
+      2. AttendanceSheet（考勤情况单 → 学情画像/预警用，格式与测试数据「考勤」模板一致）
       3. KnowledgeMastery（知识点掌握度 → 知识点热力图用）
       4. StudentProfile（学情画像）
       5. StudentEvaluationResult + EvalDimensionScore（学习质量评价）
@@ -1356,14 +1552,24 @@ def inject_analysis_data() -> None:
         ).all()
         for r in old_scores:
             session.delete(r)
-        # AttendanceRecord
+        # AttendanceRecord（旧版注入格式：按次逐条记录，统一改为 AttendanceSheet 后清理残留）
         old_att = session.exec(
             select(AttendanceRecord).where(
                 AttendanceRecord.student_id.in_(existing_ids),
-                AttendanceRecord.course_id == course_id,
             )
         ).all()
         for r in old_att:
+            session.delete(r)
+        # AttendanceSheet（提前注入的「考勤情况」批次，重跑前先清空，保证幂等；
+        # 教师上传文件导入的考勤批次学期不同，不受影响）
+        att_course = session.get(Course, course_id)
+        if att_course is None:
+            print(f"[inject-analysis] 未找到目标课程 course_id={course_id}，请先运行 seed --reset")
+            return
+        att_batch = _get_or_create_attendance_batch(session, att_course, create_by=2)
+        for r in session.exec(
+            select(AttendanceSheet).where(AttendanceSheet.exam_batch_id == att_batch.batch_id)
+        ).all():
             session.delete(r)
         # KnowledgeMastery
         old_km = session.exec(
@@ -1441,38 +1647,51 @@ def inject_analysis_data() -> None:
         # 评价等级五档映射（与 score_to_level / 看板等级分布口径一致）
         from app.services.evaluation import score_to_level
 
-        for sid in existing_ids:
+        student_map = {s.student_id: s for s in session.exec(select(Student)).all()}
+        inject_batch_map = {
+            b.batch_id: b for b in session.exec(select(ExamBatch)).all()
+        }
+        inject_score_row_nos: dict[int, int] = {}
+
+        for row_no, sid in enumerate(existing_ids, start=1):
             tier = _student_tier(sid)
             trend = _tier_trend(tier, sid)
             scores = _deterministic_scores(sid, tier, trend)
-            att_events = _deterministic_attendance(sid, tier)
+            att_statuses = _attendance_status_pattern(sid, tier)
+            att_events = _attendance_events(att_statuses, date(2026, 3, 3))
             mastery_dict = _knowledge_mastery_scores(sid, tier, scores)
+            student = student_map[sid]
 
             # --- 2a. ScoreRecord（4条，对应 batch_id 1~4） ---
             for i, score_val in enumerate(scores):
                 batch_id = i + 1  # batch 1=平时作业, 2=实验报告, 3=期中, 4=期末
                 is_pass = 1 if score_val >= 60 else 0
+                score_batch = inject_batch_map[batch_id]
+                inject_score_row_nos[batch_id] = inject_score_row_nos.get(batch_id, 0) + 1
                 session.add(ScoreRecord(
                     course_id=course_id,
                     student_id=sid,
                     batch_id=batch_id,
                     score=score_val,
                     is_pass=is_pass,
+                    source_data=_pre_inject_source(_score_source_fields(
+                        score_batch, att_course, student,
+                        float(score_val), inject_score_row_nos[batch_id],
+                    )),
                     create_by=2,  # 王建国
                 ))
                 total_scores += 1
 
-            # --- 2b. AttendanceRecord（6条） ---
-            for evt in att_events:
-                session.add(AttendanceRecord(
-                    course_id=course_id,
-                    student_id=sid,
-                    attendance_date=evt["date"],
-                    status=evt["status"],
-                    remark=evt["remark"],
-                    create_by=2,
-                ))
-                total_attendance += 1
+            # --- 2b. AttendanceSheet（考勤情况单，格式与测试数据「考勤」模板一致） ---
+            session.add(_build_attendance_sheet(
+                student=student,
+                course=att_course,
+                exam_batch_id=att_batch.batch_id,
+                statuses=att_statuses,
+                row_no=row_no,
+                create_by=2,
+            ))
+            total_attendance += 1
 
             # --- 2c. KnowledgeMastery（覆盖课程全部知识点） ---
             # 获取课程1的全部知识点
@@ -1607,7 +1826,7 @@ def inject_analysis_data() -> None:
 
         print(f"\n[inject-analysis] 注入完成！统计：")
         print(f"  ScoreRecord（成绩记录）: {total_scores} 条")
-        print(f"  AttendanceRecord（考勤记录）: {total_attendance} 条")
+        print(f"  AttendanceSheet（考勤情况单）: {total_attendance} 条")
         print(f"  KnowledgeMastery（知识点掌握度）: {total_mastery} 条")
         print(f"  StudentProfile（学情画像）: {total_profiles} 条")
         print(f"  StudentEvaluationResult（评价结果）: {total_evals} 条")
@@ -1636,6 +1855,11 @@ def inject_analysis_data() -> None:
             if st:
                 class_ids.add(st.class_id)
         print(f"\n  覆盖班级 ID: {sorted(class_ids)} (软件1801=6, 软件1802=7, 软件1803=8)")
+
+        # 旧版 seed 产生的成绩/课堂参与行可能缺少来源标记，统一补写（幂等）
+        filled_scores, filled_parts = backfill_pre_inject_source()
+        if filled_scores or filled_parts:
+            print(f"  已为旧数据补写来源标记: 成绩 {filled_scores} 条, 课堂参与 {filled_parts} 条")
         print("  所有数据已就绪，前端可直接展示！")
 
 

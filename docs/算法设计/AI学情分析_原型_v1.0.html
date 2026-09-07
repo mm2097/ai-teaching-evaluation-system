@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI 学情分析 - 原型 v1.0</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  /* ===== 配色与基础 ===== */
+  :root {
+    --primary: #2563eb;
+    --primary-light: #6366f1;
+    --bg: #f1f5f9;
+    --card-bg: #ffffff;
+    --text-main: #1e293b;
+    --text-sub: #64748b;
+    --border: #e2e8f0;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text-main);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .page { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .breadcrumb { color: var(--text-sub); font-size: 13px; margin-bottom: 12px; }
+  .breadcrumb b { color: var(--text-main); }
+
+  /* ===== 卡片 ===== */
+  .card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-main);
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title::before {
+    content: "";
+    width: 4px;
+    height: 16px;
+    background: var(--primary);
+    border-radius: 2px;
+  }
+
+  /* ===== 筛选栏 ===== */
+  .filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+  }
+  .filter-item { display: flex; align-items: center; gap: 6px; }
+  .filter-item label { color: var(--text-sub); font-size: 13px; white-space: nowrap; }
+  select, input[type="text"] {
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text-main);
+    font-size: 13px;
+    min-width: 130px;
+    cursor: pointer;
+  }
+  select:focus, input:focus { outline: none; border-color: var(--primary); }
+
+  /* 维度勾选 */
+  .dims {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+  .dim-chip {
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    font-size: 12px;
+    color: var(--text-sub);
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s;
+  }
+  .dim-chip.active {
+    background: #eff6ff;
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .depth-group { display: flex; gap: 4px; }
+  .depth-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-sub);
+    background: #fff;
+  }
+  .depth-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+  /* ===== 按钮 ===== */
+  .btn {
+    height: 36px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: opacity 0.15s;
+  }
+  .btn:hover { opacity: 0.9; }
+  .btn-primary { background: linear-gradient(135deg, var(--primary), var(--primary-light)); color: #fff; }
+  .btn-ghost { background: #fff; border: 1px solid var(--border); color: var(--text-main); }
+  .btn-lg { height: 40px; padding: 0 24px; font-size: 14px; font-weight: 600; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-sm { height: 30px; padding: 0 12px; font-size: 12px; }
+
+  /* ===== 过程区 ===== */
+  .process-empty { color: var(--text-sub); text-align: center; padding: 30px 0; }
+  .process-thinking {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--primary); font-weight: 500; margin-bottom: 14px;
+  }
+  .thinking-dot {
+    width: 16px; height: 16px; border: 2px solid var(--primary);
+    border-top-color: transparent; border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .step-list { display: flex; flex-direction: column; gap: 8px; }
+  .step {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px;
+    background: #f8fafc;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .step-icon { width: 18px; height: 18px; flex-shrink: 0; }
+  .step-icon.done { color: var(--success); }
+  .step-icon.running { color: var(--primary); }
+  .step-icon.pending { color: var(--text-sub); }
+  .step-name { color: var(--text-main); font-weight: 500; min-width: 200px; }
+  .step-result { color: var(--text-sub); flex: 1; }
+  .step-status {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  }
+  .step-status.done { background: #ecfdf5; color: var(--success); }
+  .step-status.running { background: #eff6ff; color: var(--primary); }
+  .step-status.pending { background: #f1f5f9; color: var(--text-sub); }
+  .raw-toggle {
+    margin-top: 12px; color: var(--primary); font-size: 12px;
+    cursor: pointer; user-select: none;
+  }
+  .raw-data {
+    margin-top: 8px; padding: 12px; background: #0f172a; color: #94a3b8;
+    border-radius: 6px; font-family: "Consolas", monospace; font-size: 12px;
+    white-space: pre-wrap; max-height: 200px; overflow-y: auto;
+  }
+
+  /* ===== 报告区 ===== */
+  .report-skeleton { padding: 40px 0; text-align: center; color: var(--text-sub); }
+  .overall {
+    display: flex; align-items: center; gap: 24px;
+    padding-bottom: 18px; border-bottom: 1px solid var(--border); margin-bottom: 18px;
+  }
+  .grade-badge {
+    width: 84px; height: 84px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #2563eb, #6366f1); color: #fff;
+    flex-shrink: 0;
+  }
+  .grade-badge .grade { font-size: 30px; font-weight: 700; line-height: 1; }
+  .grade-badge .score { font-size: 12px; opacity: 0.9; margin-top: 2px; }
+  .overall-text h3 { font-size: 17px; margin-bottom: 4px; }
+  .overall-text p { color: var(--text-sub); font-size: 13px; }
+  .overall-radar { width: 200px; height: 140px; margin-left: auto; }
+
+  .section { margin-bottom: 20px; }
+  .section-title {
+    font-size: 14px; font-weight: 600; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .finding {
+    display: flex; gap: 10px; padding: 10px 14px;
+    border-radius: 6px; margin-bottom: 8px; font-size: 13px;
+  }
+  .finding.success { background: #ecfdf5; border-left: 3px solid var(--success); }
+  .finding.danger { background: #fef2f2; border-left: 3px solid var(--danger); }
+  .finding.warning { background: #fffbeb; border-left: 3px solid var(--warning); }
+  .finding-tag { font-size: 11px; padding: 2px 8px; border-radius: 4px; height: fit-content; flex-shrink: 0; }
+  .finding-tag.success { background: var(--success); color: #fff; }
+  .finding-tag.danger { background: var(--danger); color: #fff; }
+  .finding-tag.warning { background: var(--warning); color: #fff; }
+  .finding-body { flex: 1; }
+  .finding-body b { color: var(--text-main); }
+  .finding-body .ev { color: var(--text-sub); font-size: 12px; margin-top: 2px; }
+
+  .cause-item {
+    padding: 10px 14px; background: #f8fafc; border-radius: 6px;
+    margin-bottom: 8px; font-size: 13px;
+  }
+  .cause-item .ref { font-size: 11px; color: var(--primary); margin-top: 4px; }
+
+  .suggestion {
+    display: flex; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 8px; align-items: flex-start;
+  }
+  .prio {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    color: #fff; flex-shrink: 0; height: fit-content;
+  }
+  .prio.high { background: var(--danger); }
+  .prio.mid { background: var(--warning); }
+  .prio.low { background: var(--success); }
+  .sug-body { flex: 1; font-size: 13px; }
+  .sug-action { font-weight: 600; color: var(--text-main); margin-bottom: 3px; }
+  .sug-meta { font-size: 12px; color: var(--text-sub); }
+
+  /* 学生视角专属 */
+  .student-header {
+    display: flex; align-items: center; gap: 16px; margin-bottom: 18px;
+    padding-bottom: 18px; border-bottom: 1px solid var(--border);
+  }
+  .stu-avatar {
+    width: 64px; height: 64px; border-radius: 50%;
+    background: linear-gradient(135deg, #2563eb, #6366f1); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 600;
+  }
+  .stu-info h3 { font-size: 18px; margin-bottom: 4px; }
+  .stu-info p { color: var(--text-sub); font-size: 13px; }
+  .stu-grade { margin-left: auto; }
+  .chart-row { display: flex; gap: 16px; margin-bottom: 18px; }
+  .chart-box { flex: 1; min-width: 0; }
+  .chart-box .ct { font-size: 13px; color: var(--text-sub); margin-bottom: 8px; }
+  .chart { width: 100%; height: 200px; }
+
+  /* 底部动作栏 */
+  .actions {
+    display: flex; gap: 12px; margin-top: 20px;
+    padding-top: 18px; border-top: 1px solid var(--border);
+  }
+  .ask-box {
+    margin-top: 14px; display: none; align-items: center; gap: 8px;
+  }
+  .ask-box input { flex: 1; height: 36px; }
+  .qa-bubble {
+    padding: 10px 14px; border-radius: 8px; margin-top: 8px;
+    font-size: 13px; max-width: 80%;
+  }
+  .qa-bubble.user { background: var(--primary); color: #fff; margin-left: auto; }
+  .qa-bubble.ai { background: #f1f5f9; color: var(--text-main); }
+
+  /* 视角切换说明 */
+  .proto-hint {
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px;
+    padding: 10px 14px; font-size: 12px; color: #1e40af; margin-bottom: 16px;
+  }
+  .hint-tag { background: var(--primary); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="breadcrumb">智能分析 / <b>AI 学情分析</b> <span class="hint-tag" style="margin-left:8px">原型 v1.0</span></div>
+
+  <div class="proto-hint">
+    💡 原型说明:切换"分析对象"可查看<b>班级诊断</b>与<b>学生诊断</b>两种视角;点击"开始 AI 分析"模拟 SSE 流式过程与报告渲染。数据均为示例。
+  </div>
+
+  <!-- ===== 筛选栏 ===== -->
+  <div class="card">
+    <div class="card-title">分析范围</div>
+    <div class="filter-row" style="margin-bottom:14px;">
+      <div class="filter-item"><label>学期</label>
+        <select><option>2026 春季</option></select>
+      </div>
+      <div class="filter-item"><label>课程</label>
+        <select><option>数据结构</option></select>
+      </div>
+      <div class="filter-item"><label>班级</label>
+        <select id="classSel"><option>计科2101</option><option>计科2102</option></select>
+      </div>
+      <div class="filter-item"><label>分析对象</label>
+        <div class="depth-group" id="scopeToggle">
+          <div class="depth-btn active" data-scope="class">班级</div>
+          <div class="depth-btn" data-scope="student">学生</div>
+        </div>
+      </div>
+      <div class="filter-item" id="studentPicker" style="display:none;">
+        <label>学生</label>
+        <select id="studentSel"><option>张三 (2021xxx)</option><option>李四 (2021yyy)</option><option>王五 (2021zzz)</option></select>
+      </div>
+    </div>
+    <div class="filter-row">
+      <div class="filter-item"><label>分析维度</label>
+        <div class="dims" id="dimGroup">
+          <div class="dim-chip active" data-dim="score">成绩</div>
+          <div class="dim-chip active" data-dim="attendance">考勤</div>
+          <div class="dim-chip active" data-dim="knowledge">知识点</div>
+          <div class="dim-chip active" data-dim="warning">预警</div>
+          <div class="dim-chip" data-dim="exercise">答题</div>
+        </div>
+      </div>
+      <div class="filter-item"><label>深度</label>
+        <div class="depth-group" id="depthToggle">
+          <div class="depth-btn active" data-depth="detail">详细</div>
+          <div class="depth-btn" data-depth="brief">概览</div>
+        </div>
+      </div>
+      <div style="margin-left:auto;">
+        <button class="btn btn-primary btn-lg" id="startBtn">🤖 开始 AI 分析</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 过程区 ===== -->
+  <div class="card">
+    <div class="card-title">AI 分析过程</div>
+    <div id="processArea">
+      <div class="process-empty">选择分析对象与维度,点击"开始 AI 分析",AI 将自动调用学情数据生成诊断报告。</div>
+    </div>
+  </div>
+
+  <!-- ===== 报告区 ===== -->
+  <div class="card" id="reportCard" style="display:none;">
+    <div class="card-title">诊断报告</div>
+    <div id="reportArea"></div>
+  </div>
+</div>
+
+<script>
+// ========== 视角/维度/深度 切换 ==========
+let curScope = "class";
+let curDepth = "detail";
+
+const scopeToggle = document.getElementById("scopeToggle");
+scopeToggle.addEventListener("click", (e) => {
+  const t = e.target.closest(".depth-btn");
+  if (!t) return;
+  curScope = t.dataset.scope;
+  scopeToggle.querySelectorAll(".depth-btn").forEach(b => b.classList.toggle("active", b === t));
+  document.getElementById("studentPicker").style.display = curScope === "student" ? "" : "none";
+  resetAll();
+});
+
+const depthToggle = document.getElementById("depthToggle");
+depthToggle.addEventListener("click", (e) => {
+  const t = e.target.closest(".depth-btn");
+  if (!t) return;
+  curDepth = t.dataset.depth;
+  depthToggle.querySelectorAll(".depth-btn").forEach(b => b.classList.toggle("active", b === t));
+});
+
+document.getElementById("dimGroup").addEventListener("click", (e) => {
+  const c = e.target.closest(".dim-chip");
+  if (!c) return;
+  c.classList.toggle("active");
+});
+
+// ========== 工具调用过程模拟 ==========
+const CLASS_STEPS = [
+  { name: "get_course_overview", result: "✓ 45人 · 均分72.3 · 及格率84% · 出勤96%", raw: '{"student_count":45,"avg_score":72.3,"pass_rate":0.84,"attendance_rate":0.96}' },
+  { name: "get_weak_knowledge_points", result: "✓ 图论42% · 最短路55% · 排序58%", raw: '[{"point":"图论","mastery":0.42},{"point":"最短路","mastery":0.55},{"point":"排序","mastery":0.58}]' },
+  { name: "get_warning_students", result: "✓ 3人预警(1高 2中):张三/李四/王五", raw: '[{"name":"张三","level":"高"},{"name":"李四","level":"中"},{"name":"王五","level":"中"}]' },
+  { name: "get_score_trend", result: "✓ 班级均分 3 次趋势:75→72→70(微降)", raw: '{"trend":"微降","slope":-0.4,"history":[75,72,70]}' },
+  { name: "get_knowledge_mastery", result: "✓ 6 模块掌握度,图论为短板", raw: '{"图论":0.42,"最短路":0.55,"排序":0.58,"遍历":0.80,"哈夫曼":0.35,"线索":0.45}' },
+  { name: "get_attendance", result: "✓ 平均出勤96%,3人缺勤≥3次", raw: '{"avg_attendance":0.96,"absent_ge3":3}' },
+];
+
+const STUDENT_STEPS = [
+  { name: "get_student_detail", result: "✓ 张三 综合档案:成绩65/态度70/进步58", raw: '{"name":"张三","academic":65,"attitude":70,"progress":58}' },
+  { name: "get_score_trend", result: "✓ 历次成绩 85→76→65(连续下滑)", raw: '{"history":[85,76,65],"trend":"下滑","slope":-1.2}' },
+  { name: "get_knowledge_mastery", result: "✓ 图论35%(垫底)·遍历82%(良好)", raw: '{"图论":0.35,"遍历":0.82,"哈夫曼":0.40,"排序":0.55}' },
+  { name: "get_weak_knowledge_points", result: "✓ 个人薄弱Top3:图论/哈夫曼/线索", raw: '[{"point":"图论","mastery":0.35},{"point":"哈夫曼","mastery":0.40},{"point":"线索","mastery":0.45}]' },
+  { name: "get_exercise_records", result: "✓ 近期答题20题,正确率55%", raw: '{"total":20,"correct":11,"accuracy":0.55}' },
+  { name: "get_attendance", result: "✓ 出勤82%,缺勤4次(集中在第6-8周)", raw: '{"attendance":0.82,"absent_count":4}' },
+];
+
+let charts = [];
+function disposeCharts() { charts.forEach(c => c.dispose()); charts = []; }
+
+function resetAll() {
+  disposeCharts();
+  document.getElementById("processArea").innerHTML =
+    '<div class="process-empty">选择分析对象与维度,点击"开始 AI 分析",AI 将自动调用学情数据生成诊断报告。</div>';
+  document.getElementById("reportCard").style.display = "none";
+  document.getElementById("startBtn").disabled = false;
+}
+
+// ========== SSE 过程模拟 ==========
+async function runDiagnosis() {
+  document.getElementById("startBtn").disabled = true;
+  const area = document.getElementById("processArea");
+  area.innerHTML = `
+    <div class="process-thinking"><span class="thinking-dot"></span> AI 正在诊断…</div>
+    <div class="step-list" id="stepList"></div>
+    <div class="raw-toggle" id="rawToggle">▸ 展开查看原始数据</div>
+    <div class="raw-data" id="rawData" style="display:none;"></div>
+  `;
+  const stepList = document.getElementById("stepList");
+  const steps = curScope === "class" ? CLASS_STEPS : STUDENT_STEPS;
+
+  // 概览模式少调几个工具
+  const execSteps = curDepth === "brief" ? steps.slice(0, 3) : steps;
+
+  let rawLines = [];
+  for (let i = 0; i < execSteps.length; i++) {
+    const s = execSteps[i];
+    const stepEl = document.createElement("div");
+    stepEl.className = "step";
+    stepEl.innerHTML = `
+      <span class="step-icon running">◐</span>
+      <span class="step-name">${s.name}</span>
+      <span class="step-result" style="color:var(--primary);">⠋ 进行中…</span>
+      <span class="step-status running">运行中</span>
+    `;
+    stepList.appendChild(stepEl);
+    await sleep(550 + Math.random() * 350);
+    // 完成
+    stepEl.querySelector(".step-icon").className = "step-icon done";
+    stepEl.querySelector(".step-icon").textContent = "✓";
+    stepEl.querySelector(".step-result").textContent = s.result;
+    stepEl.querySelector(".step-result").style.color = "var(--text-sub)";
+    stepEl.querySelector(".step-status").className = "step-status done";
+    stepEl.querySelector(".step-status").textContent = "完成";
+    rawLines.push(`${s.name}:\n${s.raw}`);
+  }
+
+  // 全部完成
+  document.querySelector(".process-thinking").innerHTML =
+    '<span style="color:var(--success);">✓</span> 诊断完成,共调用 ' + execSteps.length + ' 个工具';
+
+  // 原始数据展开
+  document.getElementById("rawData").textContent = rawLines.join("\n\n");
+  const rt = document.getElementById("rawToggle");
+  rt.textContent = "▸ 展开查看原始数据";
+  rt.onclick = () => {
+    const rd = document.getElementById("rawData");
+    const show = rd.style.display === "none";
+    rd.style.display = show ? "block" : "none";
+    rt.textContent = (show ? "▾" : "▸") + " 展开查看原始数据";
+  };
+
+  // 渲染报告
+  document.getElementById("reportCard").style.display = "block";
+  if (curScope === "class") renderClassReport();
+  else renderStudentReport();
+  document.getElementById("startBtn").disabled = false;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ========== 班级报告渲染 ==========
+function renderClassReport() {
+  disposeCharts();
+  const area = document.getElementById("reportArea");
+  area.innerHTML = `
+    <div class="overall">
+      <div class="grade-badge"><div class="grade">B</div><div class="score">78/100</div></div>
+      <div class="overall-text">
+        <h3>班级整体稳定,图论为突出短板</h3>
+        <p>45名学生 · 综合评级 B · 3 名学生需重点关注 · 数据来源:5 个学情工具</p>
+      </div>
+      <div class="overall-radar" id="classRadar"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🔍 关键发现</div>
+      <div class="finding success">
+        <span class="finding-tag success">优势</span>
+        <div class="finding-body">
+          <b>课堂参与度 92%(年级前列)</b>
+          <div class="ev">证据:班级互动数据,本学期互动次数较均值高 18%</div>
+        </div>
+      </div>
+      <div class="finding success">
+        <span class="finding-tag success">优势</span>
+        <div class="finding-body">
+          <b>出勤稳定 96%</b>
+          <div class="ev">证据:平均到课率 96%,缺勤超标仅 3 人</div>
+        </div>
+      </div>
+      <div class="finding danger">
+        <span class="finding-tag danger">高风险</span>
+        <div class="finding-body">
+          <b>知识点"图论"掌握度仅 42%</b>
+          <div class="ev">证据:实验报告失分占班级总失分 58% · 涉及学生 28/45</div>
+        </div>
+      </div>
+      <div class="finding warning">
+        <span class="finding-tag warning">风险</span>
+        <div class="finding-body">
+          <b>3 名学生成绩持续下滑</b>
+          <div class="ev">证据:张三(85→65)、李四(78→62)、王五(80→68),均伴随出勤下降</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🧠 归因分析</div>
+      <div class="cause-item">
+        <b>图论薄弱</b>:实验报告扣分集中在该模块(占失分 58%),推测教学侧重不足 + 实验难度偏高。
+        <div class="ref">📌 数据来源:get_weak_knowledge_points / get_knowledge_mastery</div>
+      </div>
+      <div class="cause-item">
+        <b>3 名学生下滑</b>:出勤率与作业提交率同步下降,疑似学习态度松懈,而非单纯知识难度问题。
+        <div class="ref">📌 数据来源:get_score_trend / get_attendance</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">💡 干预建议</div>
+      <div class="suggestion">
+        <span class="prio high">高</span>
+        <div class="sug-body">
+          <div class="sug-action">针对图论开展专项复习</div>
+          <div class="sug-meta">目标:全班 · 建议工具:薄弱点驱动出题 · 知识点:图论、哈夫曼</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="alert('跳转 AI 出题(注入薄弱点:图论、哈夫曼)')">生成练习</button>
+      </div>
+      <div class="suggestion">
+        <span class="prio mid">中</span>
+        <div class="sug-body">
+          <div class="sug-action">对 3 名下滑学生约谈</div>
+          <div class="sug-meta">目标:张三/李四/王五 · 建议工具:预警发通知</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="alert('向 3 名预警学生发送站内通知')">发通知</button>
+      </div>
+      <div class="suggestion">
+        <span class="prio low">低</span>
+        <div class="sug-body">
+          <div class="sug-action">保持课堂互动优势,可引入图论互动案例</div>
+          <div class="sug-meta">目标:全班 · 将互动优势迁移到薄弱知识点</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="toggleAsk()">💬 追问 AI</button>
+      <button class="btn btn-ghost" onclick="alert('调 report.py 导出 PDF(诊断结果塞入 ReportContext)')">📄 导出报告</button>
+      <button class="btn btn-primary" onclick="alert('按建议生成干预任务:1)图论专项练习 2)约谈通知')">📋 生成干预任务</button>
+    </div>
+    <div class="ask-box" id="askBox">
+      <input type="text" id="askInput" placeholder="基于本次诊断追问,如:张三主要卡在图论哪个知识点?" />
+      <button class="btn btn-primary" onclick="sendAsk()">发送</button>
+    </div>
+    <div id="qaArea"></div>
+  `;
+
+  // 班级雷达图
+  const radar = echarts.init(document.getElementById("classRadar"));
+  radar.setOption({
+    radar: {
+      indicator: [
+        { name: "成绩", max: 100 }, { name: "考勤", max: 100 },
+        { name: "互动", max: 100 }, { name: "进步", max: 100 }, { name: "综合", max: 100 },
+      ],
+      radius: 55, splitArea: { areaStyle: { color: ["#f8fafc", "#f1f5f9"] } },
+      axisName: { color: "#64748b", fontSize: 10 },
+    },
+    series: [{
+      type: "radar",
+      data: [{
+        value: [72, 96, 92, 70, 78],
+        areaStyle: { color: "rgba(37,99,235,0.2)" },
+        lineStyle: { color: "#2563eb", width: 2 },
+        itemStyle: { color: "#2563eb" },
+      }],
+    }],
+  });
+  charts.push(radar);
+  bindAsk();
+}
+
+// ========== 学生报告渲染 ==========
+function renderStudentReport() {
+  disposeCharts();
+  const area = document.getElementById("reportArea");
+  area.innerHTML = `
+    <div class="student-header">
+      <div class="stu-avatar">张</div>
+      <div class="stu-info">
+        <h3>张三 <span class="hint-tag" style="background:var(--warning)">综合 C</span></h3>
+        <p>学号 2021xxx · 计科2101 · 数据结构 · 综合得分 68/100</p>
+      </div>
+      <div class="stu-grade">
+        <div class="grade-badge" style="width:72px;height:72px;background:linear-gradient(135deg,#f59e0b,#ef4444);">
+          <div class="grade" style="font-size:26px;">C</div><div class="score">68</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <div class="chart-box">
+        <div class="ct">能力雷达(五轴)</div>
+        <div class="chart" id="stuRadar"></div>
+      </div>
+      <div class="chart-box">
+        <div class="ct">历次成绩趋势</div>
+        <div class="chart" id="stuTrend"></div>
+      </div>
+      <div class="chart-box">
+        <div class="ct">学习态度构成</div>
+        <div class="chart" id="stuAttitude"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🔍 关键发现</div>
+      <div class="finding danger">
+        <span class="finding-tag danger">高风险</span>
+        <div class="finding-body">
+          <b>成绩连续 3 次下滑(85→76→65)</b>
+          <div class="ev">证据:回归斜率 -1.2,下滑时点与出勤下降吻合</div>
+        </div>
+      </div>
+      <div class="finding danger">
+        <span class="finding-tag danger">高风险</span>
+        <div class="finding-body">
+          <b>图论掌握度 35%(班级垫底)</b>
+          <div class="ev">证据:个人失分 62% 集中在图论模块 · 班级均值 42%</div>
+        </div>
+      </div>
+      <div class="finding success">
+        <span class="finding-tag success">优势</span>
+        <div class="finding-body">
+          <b>课堂互动活跃(班级前 20%)</b>
+          <div class="ev">证据:互动次数 18 次,高于班级均值 15 次</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">🧠 归因分析</div>
+      <div class="cause-item">
+        <b>图论失分是成绩下滑主因</b>:个人总失分中 62% 来自图论,该模块掌握度仅 35%,远低于班级均值。
+        <div class="ref">📌 数据来源:get_knowledge_mastery / get_weak_knowledge_points</div>
+      </div>
+      <div class="cause-item">
+        <b>学习态度松懈</b>:作业提交率 60%(班级 85%),缺勤集中在第 6-8 周,与成绩下滑时点吻合。
+        <div class="ref">📌 数据来源:get_attendance / get_exercise_records</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">💡 个性化建议</div>
+      <div class="suggestion">
+        <span class="prio high">高</span>
+        <div class="sug-body">
+          <div class="sug-action">图论补强:推荐 3 道薄弱点专项题</div>
+          <div class="sug-meta">目标:图论 · 建议工具:薄弱点驱动出题 · 预估提升:掌握度 35%→60%</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="alert('跳转 AI 出题(为张三生成图论专项 3 题)')">开始练习</button>
+      </div>
+      <div class="suggestion">
+        <span class="prio mid">中</span>
+        <div class="sug-body">
+          <div class="sug-action">改善作业提交习惯,建议教师约谈</div>
+          <div class="sug-meta">目标:张三 · 建议工具:预警发通知 · 触发:态度分预警</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="alert('向张三发送约谈通知')">发通知</button>
+      </div>
+      <div class="suggestion">
+        <span class="prio low">低</span>
+        <div class="sug-body">
+          <div class="sug-action">发挥互动优势,课堂多提问图论相关题</div>
+          <div class="sug-meta">利用其活跃度高的特点,定向强化薄弱模块</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-ghost" onclick="toggleAsk()">💬 追问 AI</button>
+      <button class="btn btn-ghost" onclick="alert('导出张三个人诊断报告 PDF')">📄 导出报告</button>
+      <button class="btn btn-primary" onclick="alert('生成干预任务:1)图论专项练习 2)约谈通知')">📋 生成干预任务</button>
+    </div>
+    <div class="ask-box" id="askBox">
+      <input type="text" id="askInput" placeholder="基于本次诊断追问,如:张三还能赶上平均分吗?" />
+      <button class="btn btn-primary" onclick="sendAsk()">发送</button>
+    </div>
+    <div id="qaArea"></div>
+  `;
+
+  // 学生三图
+  const r = echarts.init(document.getElementById("stuRadar"));
+  r.setOption({
+    radar: {
+      indicator: [
+        { name: "成绩", max: 100 }, { name: "考勤", max: 100 },
+        { name: "互动", max: 100 }, { name: "进步", max: 100 }, { name: "综合", max: 100 },
+      ],
+      radius: 55, splitArea: { areaStyle: { color: ["#f8fafc", "#f1f5f9"] } },
+      axisName: { color: "#64748b", fontSize: 10 },
+    },
+    series: [{ type: "radar", data: [{ value: [65, 82, 88, 58, 68],
+      areaStyle: { color: "rgba(245,158,11,0.2)" }, lineStyle: { color: "#f59e0b", width: 2 }, itemStyle: { color: "#f59e0b" } }] }],
+  });
+  charts.push(r);
+
+  const t = echarts.init(document.getElementById("stuTrend"));
+  t.setOption({
+    grid: { left: 30, right: 15, top: 20, bottom: 25 },
+    xAxis: { type: "category", data: ["第1次", "第2次", "第3次"], axisLabel: { fontSize: 10, color: "#64748b" } },
+    yAxis: { type: "value", min: 50, max: 100, axisLabel: { fontSize: 10, color: "#64748b" }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
+    series: [{
+      type: "line", data: [85, 76, 65], smooth: true,
+      lineStyle: { color: "#ef4444", width: 2 }, itemStyle: { color: "#ef4444" },
+      areaStyle: { color: "rgba(239,68,68,0.1)" },
+      markLine: { data: [{ yAxis: 72, lineStyle: { color: "#94a3b8", type: "dashed" } }], label: { formatter: "班级均", fontSize: 9 } },
+    }],
+  });
+  charts.push(t);
+
+  const a = echarts.init(document.getElementById("stuAttitude"));
+  a.setOption({
+    grid: { left: 40, right: 15, top: 20, bottom: 25 },
+    xAxis: { type: "category", data: ["出勤", "互动", "作业"], axisLabel: { fontSize: 10, color: "#64748b" } },
+    yAxis: { type: "value", max: 100, axisLabel: { fontSize: 10, color: "#64748b" }, splitLine: { lineStyle: { color: "#f1f5f9" } } },
+    series: [{ type: "bar", data: [
+      { value: 82, itemStyle: { color: "#2563eb" } },
+      { value: 88, itemStyle: { color: "#10b981" } },
+      { value: 60, itemStyle: { color: "#ef4444" } },
+    ], barWidth: 24 }],
+  });
+  charts.push(a);
+  bindAsk();
+}
+
+// ========== 追问 ==========
+function toggleAsk() {
+  const box = document.getElementById("askBox");
+  box.style.display = box.style.display === "none" ? "flex" : "none";
+  if (box.style.display === "flex") document.getElementById("askInput").focus();
+}
+function bindAsk() {
+  document.getElementById("askInput").onkeydown = (e) => { if (e.key === "Enter") sendAsk(); };
+}
+function sendAsk() {
+  const input = document.getElementById("askInput");
+  const q = input.value.trim();
+  if (!q) return;
+  const qa = document.getElementById("qaArea");
+  qa.innerHTML += `<div class="qa-bubble user">${q}</div>`;
+  input.value = "";
+  setTimeout(() => {
+    qa.innerHTML += `<div class="qa-bubble ai">基于本次诊断:${curScope === "class" ? "图论模块是班级主要短板,建议优先从图论专项复习切入(掌握度 42%→目标 60%)。3 名下滑学生需结合出勤数据单独约谈。" : "张三图论掌握度仅 35%,是成绩下滑主因;若完成 3 道专项练习并保持作业提交,有望在下次考核回升至班级均分附近。"}<br><span style="color:#94a3b8;font-size:11px;">(追问走 agent_type=qa,继承诊断会话上下文)</span></div>`;
+    qa.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, 600);
+}
+
+document.getElementById("startBtn").addEventListener("click", runDiagnosis);
+</script>
+</body>
+</html>

@@ -20,6 +20,7 @@ from loguru import logger
 from app.services.agent.llm_proxy import FCResult, get_llm_proxy
 from app.services.agent.memory import Conversation, get_or_create_session
 from app.services.agent.prompts import (
+    DIAGNOSIS_SYSTEM_PROMPT,
     EXAM_SYSTEM_PROMPT,
     QA_SYSTEM_PROMPT,
     TUTOR_SYSTEM_PROMPT,
@@ -42,14 +43,19 @@ def _ensure_tools_registered() -> None:
 def _resolve_agent_setup(agent_type: str, registry: ToolRegistry, allow_mutation: bool):
     """按 agent_type 解析 (系统提示词, 可用工具 schema)。
 
-    - exam  ：组卷 Agent，教师侧，挂载全部工具
-    - tutor ：学生助学 Agent，只给提示不给答案，**不挂载任何工具**
-              （学情查询工具会读班级/他人数据，学生侧一律不提供，从机制上杜绝越权）
-    - 其它  ：默认 qa 学情问答（教师侧），挂载全部工具
+    - exam     ：组卷 Agent，教师侧，挂载全部工具
+    - diagnosis：AI 学情诊断，教师侧，主动编排查询工具输出结构化 JSON；只读，不挂写工具
+    - tutor    ：学生助学 Agent，只给提示不给答案，**不挂载任何工具**
+                 （学情查询工具会读班级/他人数据，学生侧一律不提供，从机制上杜绝越权）
+    - 其它     ：默认 qa 学情问答（教师侧），挂载全部工具
     """
     if agent_type == "exam":
         return EXAM_SYSTEM_PROMPT, registry.to_openai_schemas(
             agent="both", include_mutation=allow_mutation
+        )
+    if agent_type == "diagnosis":
+        return DIAGNOSIS_SYSTEM_PROMPT, registry.to_openai_schemas(
+            agent="both", include_mutation=False
         )
     if agent_type == "tutor":
         return TUTOR_SYSTEM_PROMPT, []

@@ -78,6 +78,12 @@ const router = createRouter({
           component: () => import('@/views/analysis/WarningView.vue'),
           meta: { title: '异常学情预警', roles: ['teacher'] },
         },
+        {
+          path: 'analysis/diagnosis',
+          name: 'Diagnosis',
+          component: () => import('@/views/analysis/DiagnosisView.vue'),
+          meta: { title: 'AI 学情分析', roles: ['teacher'] },
+        },
         // ---- AI 智能辅助教学 ----
         {
           path: 'quiz/bank',

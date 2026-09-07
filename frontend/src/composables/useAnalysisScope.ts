@@ -10,6 +10,7 @@ import type { AnalysisQuery, LinkedStudentOption, TargetType, UserRole } from '@
 /** 各角色允许的分析对象类型 */
 const roleTargetTypes: Record<UserRole, TargetType[]> = {
   admin: [],
+  assistant: [],
   teacher: ['student', 'class'],
   student: ['student'],
 }

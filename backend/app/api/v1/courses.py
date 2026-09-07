@@ -5,7 +5,10 @@ from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
-from app.models import Course, SysUser, Teacher, ExamBatch, KnowledgeModule, KnowledgePoint
+from app.models import (
+    Course, CourseAssistant, SysRole, SysUser, Teacher, TeachingAssistant,
+    ExamBatch, KnowledgeModule, KnowledgePoint,
+)
 
 router = APIRouter()
 
@@ -15,11 +18,36 @@ def list_my_courses(
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
-    """返回当前登录教师所授课程列表。
+    """返回当前教师所授课程或助教获授权课程列表。
 
     教师登录后调用此接口即可获取其名下所有课程，无需手动传 teacher_id。
     学生/管理员返回空列表。
     """
+    role = session.get(SysRole, current_user.role_id)
+    if role and role.role_code == "assistant":
+        assistant = session.exec(
+            select(TeachingAssistant).where(TeachingAssistant.user_id == current_user.user_id)
+        ).first()
+        if not assistant:
+            return []
+        course_ids = session.exec(
+            select(CourseAssistant.course_id).where(
+                CourseAssistant.assistant_id == assistant.assistant_id
+            )
+        ).all()
+        courses = session.exec(
+            select(Course).where(Course.course_id.in_(course_ids))  # type: ignore[arg-type]
+        ).all() if course_ids else []
+        return [
+            {
+                "course_id": c.course_id, "course_code": c.course_code,
+                "course_name": c.course_name, "teacher_id": c.teacher_id,
+                "semester": c.semester, "college": c.college,
+                "credit": c.credit, "status": c.status,
+            }
+            for c in courses
+        ]
+
     teacher = session.exec(
         select(Teacher).where(Teacher.user_id == current_user.user_id)
     ).first()

@@ -14,7 +14,8 @@ from sqlmodel import Session, SQLModel, select
 from app.core.database import engine, init_db
 from app.core.security import hash_password
 from app.models import (
-    SysUser, SysRole, Teacher, Student, ClassInfo, Course, CourseStudent,
+    SysUser, SysRole, Teacher, TeachingAssistant, CourseAssistant,
+    Student, ClassInfo, Course, CourseStudent,
     KnowledgeModule, KnowledgePoint,
     AttendanceRecord, InteractionRecord,
     ExamBatch, ScoreRecord,
@@ -33,11 +34,62 @@ def reset() -> None:
     print("[seed] 数据库已重建")
 
 
+def ensure_assistant_seed() -> None:
+    """为已有数据库幂等补建助教角色、演示账号和课程授权。"""
+    init_db()
+    with Session(engine) as session:
+        role = session.exec(select(SysRole).where(SysRole.role_code == "assistant")).first()
+        if not role:
+            role = SysRole(
+                role_name="课程助教", role_code="assistant",
+                description="协助授权课程的数据采集与维护",
+            )
+            session.add(role)
+            session.commit()
+            session.refresh(role)
+
+        user = session.exec(select(SysUser).where(SysUser.username == "assistant")).first()
+        if not user:
+            user = SysUser(
+                username="assistant", password=hash_password("123456"),
+                real_name="周助教", role_id=role.role_id, status=1, college="计算机学院",
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+
+        assistant = session.exec(
+            select(TeachingAssistant).where(TeachingAssistant.user_id == user.user_id)
+        ).first()
+        if not assistant:
+            assistant = TeachingAssistant(
+                assistant_no="A001", real_name=user.real_name, user_id=user.user_id,
+                college=user.college or "计算机学院",
+                phone="13800000004", email="assistant@edu.cn",
+            )
+            session.add(assistant)
+            session.commit()
+            session.refresh(assistant)
+
+        course_ids = session.exec(select(Course.course_id).order_by(Course.course_id).limit(2)).all()
+        assigned = set(session.exec(
+            select(CourseAssistant.course_id).where(
+                CourseAssistant.assistant_id == assistant.assistant_id
+            )
+        ).all())
+        for course_id in course_ids:
+            if course_id not in assigned:
+                session.add(CourseAssistant(course_id=course_id, assistant_id=assistant.assistant_id))
+        session.commit()
+
+
 def seed() -> None:
     init_db()
     with Session(engine) as session:
         existing = session.exec(select(SysRole)).first()
         if existing:
+            session.close()
+            ensure_assistant_seed()
             print("[seed] 数据已存在，跳过")
             return
 
@@ -46,6 +98,7 @@ def seed() -> None:
             SysRole(role_name="系统管理员", role_code="admin", description="管理系统所有功能"),
             SysRole(role_name="任课教师", role_code="teacher", description="管理课程、查看学情分析"),
             SysRole(role_name="学生", role_code="student", description="查看个人成绩、答题、评价"),
+            SysRole(role_name="课程助教", role_code="assistant", description="协助授权课程的数据采集与维护"),
         ]
         session.add_all(roles)
         session.commit()
@@ -154,6 +207,13 @@ def seed() -> None:
         session.commit()
         print(f"  测试学生用户: {len(test_student_users)} 条")
 
+        assistant_user = SysUser(
+            username="assistant", password=hash_password("123456"),
+            real_name="周助教", role_id=4, status=1, college="计算机学院",
+        )
+        session.add(assistant_user)
+        session.commit()
+
         # ========== 3. 教师（4人，不同职称） ==========
         teachers = [
             Teacher(teacher_no="T001", real_name="王建国", title="教授",
@@ -166,6 +226,14 @@ def seed() -> None:
         session.add_all(teachers)
         session.commit()
         print(f"  教师: {len(teachers)} 条")
+
+        assistant = TeachingAssistant(
+            assistant_no="A001", real_name="周助教", user_id=assistant_user.user_id,
+            college="计算机学院", phone="13800000004", email="assistant@edu.cn",
+        )
+        session.add(assistant)
+        session.commit()
+        print("  助教: 1 条")
 
         # ========== 4. 班级（5个） ==========
         classes = [
@@ -313,6 +381,13 @@ def seed() -> None:
         session.add_all(courses)
         session.commit()
         print(f"  课程: {len(courses)} 条")
+
+        session.add_all([
+            CourseAssistant(course_id=1, assistant_id=assistant.assistant_id),
+            CourseAssistant(course_id=2, assistant_id=assistant.assistant_id),
+        ])
+        session.commit()
+        print("  助教课程授权: 2 条")
 
         # ========== 7. 选修关系（差异化：不同学生选不同课） ==========
         course_students = [

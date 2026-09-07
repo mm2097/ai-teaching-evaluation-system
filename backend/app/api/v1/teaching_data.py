@@ -28,7 +28,7 @@ from app.core.database import get_session, engine
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
 from app.models import (
     ScoreRecord, AttendanceRecord, ExamBatch, Course, ClassInfo, Student,
-    SysUser, Teacher, SysRole, SysOperationLog,
+    SysUser, Teacher, TeachingAssistant, CourseAssistant, SysRole, SysOperationLog,
     IndividualScore, AttendanceSheet, ParticipationSheet, CourseTestDetail,
     InteractionRecord,
 )
@@ -37,7 +37,8 @@ from app.services.analysis_refresh import refresh_course_analysis
 
 router = APIRouter()
 
-ALLOWED_EXTENSIONS = {".xlsx", ".txt"}
+ALLOWED_EXTENSIONS = {".xlsx", ".txt", ".db", ".sqlite", ".sqlite3"}
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
 def _import_type_from_template(template_name: str | None) -> str:
@@ -78,24 +79,39 @@ def _require_teacher_for_course(
     current_user: SysUser,
     course_id: int,
     session: Session,
-) -> Teacher:
-    """校验当前用户是指定课程的授课教师，返回 Teacher 记录。"""
+) -> Teacher | TeachingAssistant:
+    """校验当前用户是授课教师，或是获得该课程授权的助教。"""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
+    role = session.get(SysRole, current_user.role_id)
+    role_code = role.role_code if role else ""
     teacher = session.exec(
         select(Teacher).where(Teacher.user_id == current_user.user_id)
     ).first()
-    if not teacher:
-        raise HTTPException(status_code=403, detail="仅任课教师可操作，当前账号未关联教师")
+    if role_code == "teacher" and teacher and course.teacher_id == teacher.teacher_id:
+        return teacher
 
-    if course.teacher_id != teacher.teacher_id:
+    if role_code == "assistant":
+        assistant = session.exec(
+            select(TeachingAssistant).where(TeachingAssistant.user_id == current_user.user_id)
+        ).first()
+        assignment = session.exec(
+            select(CourseAssistant).where(
+                CourseAssistant.course_id == course_id,
+                CourseAssistant.assistant_id == (assistant.assistant_id if assistant else -1),
+            )
+        ).first()
+        if assistant and assignment:
+            return assistant
+
+    if role_code == "teacher" and teacher:
         raise HTTPException(
             status_code=403,
             detail=f"仅授课教师可操作。课程「{course.course_name}」不属于您",
         )
-    return teacher
+    raise HTTPException(status_code=403, detail="仅授课教师或获授权助教可操作该课程")
 
 
 # ============================================================================
@@ -1130,8 +1146,8 @@ def upload_teaching_data(
 ) -> dict:
     """上传教学数据文件并批量导入。
 
-    权限：必须登录，且为对应课程的任课教师。
-    格式：仅 .xlsx / .txt（UTF-8 逗号分隔）。
+    权限：对应课程的任课教师或获授权助教。
+    格式：.xlsx / .txt / SQLite 数据库文件。
     模板：自动检测匹配课程测试各题扣分情况 / 成绩汇总 / 成绩考勤情况。
     """
     # ------ 1. 登录验证（Data.FileUpload.UserValid）------
@@ -1144,7 +1160,7 @@ def upload_teaching_data(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"仅支持 .xlsx 和 UTF-8 逗号分隔 .txt 格式，当前文件扩展名为「{ext}」",
+            detail=f"仅支持 .xlsx、UTF-8 .txt、.db、.sqlite 或 .sqlite3，当前扩展名为「{ext}」",
         )
 
     # ------ 3. 课程与权限校验（Data.FileUpload.UserValid.Logined）------
@@ -1152,20 +1168,7 @@ def upload_teaching_data(
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
 
-    # 查找当前用户对应的教师记录
-    teacher = session.exec(
-        select(Teacher).where(Teacher.user_id == current_user.user_id)
-    ).first()
-    if not teacher:
-        raise HTTPException(
-            status_code=403,
-            detail="仅任课教师可上传教学数据，当前账号未关联教师信息",
-        )
-    if course.teacher_id != teacher.teacher_id:
-        raise HTTPException(
-            status_code=403,
-            detail=f"仅授课教师可上传数据。课程「{course.course_name}」的授课教师与当前账号不匹配",
-        )
+    _require_teacher_for_course(current_user, course_id, session)
 
     # ------ 4. 保存临时文件 & 导入 ------
     tmp_path = os.path.join(
@@ -1174,6 +1177,10 @@ def upload_teaching_data(
     )
     try:
         content = file.file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="上传文件不能超过 25MB")
+        if not content:
+            raise HTTPException(status_code=400, detail="上传文件为空")
         # 对于 .txt 文件，校验 UTF-8 编码
         if ext == ".txt":
             try:
@@ -1214,7 +1221,7 @@ def upload_teaching_data(
             operation="导入",
             content=_build_import_log_content(
                 file_name=file.filename or "",
-                data_source="excel" if ext == ".xlsx" else "txt",
+                data_source=("excel" if ext == ".xlsx" else ("txt" if ext == ".txt" else "database")),
                 course_id=course_id,
                 course_name=course.course_name,
                 result=result,
@@ -1254,13 +1261,13 @@ def upload_teaching_data(
 # ============================================================================
 
 def _check_template_access(current_user: SysUser, session: Session) -> None:
-    """校验模板下载权限：仅任课教师（Data.Template.UserValid）。"""
+    """校验模板下载权限：任课教师或助教。"""
     role = session.get(SysRole, current_user.role_id)
     role_code = role.role_code if role else ""
-    if role_code != "teacher":
+    if role_code not in {"teacher", "assistant"}:
         raise HTTPException(
             status_code=403,
-            detail="仅任课教师可下载模板",
+            detail="仅任课教师或助教可下载模板",
         )
 
 

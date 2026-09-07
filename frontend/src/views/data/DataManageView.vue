@@ -8,7 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Delete, Document, View } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import StudentLinkedPicker from '@/components/common/StudentLinkedPicker.vue'
-import { fetchSemesters, fetchDepartments, fetchCourses } from '@/api/dict'
+import { fetchSemesters, fetchDepartments, fetchCourses, fetchMyCourses } from '@/api/dict'
 import { fetchTeachingData, updateRowData, exportTeachingData, deleteTeachingData, batchDeleteTeachingDataRecords, clearTeachingDataByType } from '@/api/teachingData'
 import { useDictCascade } from '@/composables/useDictCascade'
 import { useDataFlowStore } from '@/stores/dataFlow'
@@ -71,9 +71,9 @@ onMounted(async () => {
     const [semRes, deptRes, courses] = await Promise.all([
       fetchSemesters(),
       fetchDepartments(),
-      fetchCourses({
-        teacherId: userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined,
-      }),
+      userStore.userInfo?.role === 'assistant'
+        ? fetchMyCourses()
+        : fetchCourses({ teacherId: userStore.userInfo?.teacherId }),
     ])
     semesterOptions.value = semRes.map(s => ({ label: s.semesterName, value: s.semesterCode }))
     departmentOptions.value = deptRes.map(d => ({ label: d.deptName, value: d.id, id: d.id }))
@@ -617,4 +617,3 @@ function filterByCurrentFile(): void {
 
   </div>
 </template>
-

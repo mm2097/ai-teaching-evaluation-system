@@ -19,7 +19,7 @@ const formRef = ref<FormInstance>()
 const submitting = ref(false)
 
 /** 学生/教师支持修改本人联系方式 */
-const canEditContact = computed(() => userStore.userRole === 'student' || userStore.userRole === 'teacher')
+const canEditContact = computed(() => ['student', 'teacher', 'assistant'].includes(userStore.userRole || ''))
 
 /** 基本信息（只读展示，来源于登录态） */
 const basicInfo = computed(() => {

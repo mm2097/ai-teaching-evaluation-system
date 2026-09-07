@@ -21,6 +21,7 @@ interface UserResponse {
   student_no?: string
   gender?: number | null
   teacher_no?: string
+  assistant_no?: string
   title?: string
   phone?: string
   email?: string
@@ -38,6 +39,7 @@ interface UserUpdatePayload {
   student_no?: string
   gender?: number
   teacher_no?: string
+  assistant_no?: string
   title?: string | null
   phone?: string | null
   email?: string | null
@@ -81,6 +83,7 @@ export const userApi = {
     studentNo?: string
     gender?: number | null
     teacherNo?: string
+    assistantNo?: string
     title?: string
     phone?: string
     email?: string
@@ -98,8 +101,9 @@ export const userApi = {
       gender: data.role === 'student' ? data.gender ?? 1 : undefined,
       teacher_no: data.role === 'teacher' ? data.teacherNo : undefined,
       title: data.role === 'teacher' ? data.title : undefined,
-      phone: data.role === 'student' || data.role === 'teacher' ? data.phone : undefined,
-      email: data.role === 'student' || data.role === 'teacher' ? data.email : undefined,
+      assistant_no: data.role === 'assistant' ? data.assistantNo : undefined,
+      phone: data.role !== 'admin' ? data.phone : undefined,
+      email: data.role !== 'admin' ? data.email : undefined,
     })
     return mapUser(res.data)
   },
@@ -117,6 +121,7 @@ export const userApi = {
       studentNo: string
       gender: number | null
       teacherNo: string
+      assistantNo: string
       title: string | null
       phone: string | null
       email: string | null
@@ -134,6 +139,7 @@ export const userApi = {
     if (data.studentNo !== undefined) payload.student_no = data.studentNo
     if (data.gender !== undefined && data.gender !== null) payload.gender = data.gender
     if (data.teacherNo !== undefined) payload.teacher_no = data.teacherNo
+    if (data.assistantNo !== undefined) payload.assistant_no = data.assistantNo
     if (data.title !== undefined) payload.title = data.title
     if (data.phone !== undefined) payload.phone = data.phone
     if (data.email !== undefined) payload.email = data.email
@@ -148,7 +154,7 @@ export const userApi = {
 }
 
 function mapUser(raw: UserResponse): SystemUser {
-  const roleMap: Record<number, UserRole> = { 1: 'admin', 2: 'teacher', 3: 'student' }
+  const roleMap: Record<number, UserRole> = { 1: 'admin', 2: 'teacher', 3: 'student', 4: 'assistant' }
   return {
     id: raw.user_id,
     username: raw.username,
@@ -160,6 +166,7 @@ function mapUser(raw: UserResponse): SystemUser {
     studentNo: raw.student_no || '',
     gender: raw.gender ?? null,
     teacherNo: raw.teacher_no || '',
+    assistantNo: raw.assistant_no || '',
     title: raw.title || '',
     phone: raw.phone || '',
     email: raw.email || '',

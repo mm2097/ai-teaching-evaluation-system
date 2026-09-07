@@ -15,9 +15,11 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 import openpyxl
@@ -389,6 +391,45 @@ def parse_txt(file_path: str) -> dict[str, list[dict[str, Any]]]:
         sheet_data.append({"_excel_row": row_idx, **row_dict})
 
     result["default"] = sheet_data
+    return result
+
+
+def parse_sqlite(file_path: str) -> dict[str, list[dict[str, Any]]]:
+    """只读解析 SQLite 表，结果结构与 Excel 的 Sheet 数据一致。"""
+    with open(file_path, "rb") as file_obj:
+        if file_obj.read(16) != b"SQLite format 3\x00":
+            raise ValueError("文件不是有效的 SQLite 3 数据库")
+
+    database_uri = f"{Path(file_path).resolve().as_uri()}?mode=ro"
+    result: dict[str, list[dict[str, Any]]] = {}
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(database_uri, uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        tables = connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 51"
+        ).fetchall()
+        if len(tables) > 50:
+            raise ValueError("数据库数据表超过 50 个，请拆分后导入")
+
+        for table in tables:
+            table_name = str(table["name"])
+            quoted_name = '"' + table_name.replace('"', '""') + '"'
+            rows = connection.execute(f"SELECT * FROM {quoted_name} LIMIT 10001").fetchall()
+            if len(rows) > 10000:
+                raise ValueError(f"数据表「{table_name}」超过 10000 行，请拆分后导入")
+            if rows:
+                result[table_name] = [
+                    {"_excel_row": row_index, **dict(row)}
+                    for row_index, row in enumerate(rows, start=2)
+                ]
+    except sqlite3.DatabaseError as exc:
+        raise ValueError(f"SQLite 数据库读取失败：{exc}") from exc
+    finally:
+        if connection is not None:
+            connection.close()
     return result
 
 
@@ -1128,11 +1169,21 @@ def import_file(
         sheet_data = parse_xlsx(file_path)
     elif file_ext == ".txt":
         sheet_data = parse_txt(file_path)
+    elif file_ext in {".db", ".sqlite", ".sqlite3"}:
+        try:
+            sheet_data = parse_sqlite(file_path)
+        except ValueError as exc:
+            result = ImportResult()
+            result.errors.append(ImportError(
+                sheet="", row=0, field=None, message=str(exc),
+            ))
+            result.error_count = 1
+            return result
     else:
         result = ImportResult()
         result.errors.append(ImportError(
             sheet="", row=0, field=None,
-            message=f"不支持的文件格式「{file_ext}」，仅支持 .xlsx 和 .txt",
+            message=f"不支持的文件格式「{file_ext}」，仅支持 .xlsx、.txt 和 SQLite 数据库",
         ))
         result.error_count = 1
         return result
@@ -1172,7 +1223,8 @@ def import_file(
         result.errors.append(ImportError(
             sheet="", row=0, field=None,
             message=(
-                f"无法识别文件模板。支持的模板：课程测试各题扣分情况、单项成绩、成绩考勤情况。"
+                "无法识别文件模板。支持的模板：课程测试各题扣分情况、单项成绩、"
+                "成绩考勤情况、课堂参与情况。"
                 f"各Sheet表头：{all_headers}"
             ),
         ))

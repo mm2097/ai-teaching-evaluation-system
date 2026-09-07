@@ -10,7 +10,7 @@ import { ElMessage } from 'element-plus'
 import { Download, Upload, Document, Right, Warning } from '@element-plus/icons-vue'
 import DataFlowNav from '@/components/common/DataFlowNav.vue'
 import { executeImport, fetchImportLogs } from '@/api/import'
-import { fetchCourses } from '@/api/dict'
+import { fetchCourses, fetchMyCourses } from '@/api/dict'
 import { fetchTemplateList } from '@/api/teachingData'
 import type { TemplateMeta } from '@/api/teachingData'
 import { useUserStore } from '@/stores/user'
@@ -86,8 +86,9 @@ onMounted(async () => {
     templateId.value = templates[0]!.templateId
   }
 
-  const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo.teacherId : undefined
-  const courses = await fetchCourses({ teacherId, deptId: 1, semesterId: 1 })
+  const courses = userStore.userInfo?.role === 'assistant'
+    ? await fetchMyCourses()
+    : await fetchCourses({ teacherId: userStore.userInfo?.teacherId, deptId: 1, semesterId: 1 })
   courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
   if (courseOptions.value.length) courseId.value = courseOptions.value[0]!.value
 })
@@ -128,8 +129,8 @@ const importHistory = ref<ImportLog[]>([])
 
 async function beforeUpload(file: File): Promise<boolean> {
   const ext = file.name.split('.').pop()?.toLowerCase()
-  if (ext !== 'xlsx' && ext !== 'txt') {
-    ElMessage.error('仅支持 .xlsx（Excel）或 .txt（UTF-8 英文逗号分隔）格式')
+  if (!['xlsx', 'txt', 'db', 'sqlite', 'sqlite3'].includes(ext || '')) {
+    ElMessage.error('仅支持 Excel、Txt 或 SQLite 数据库文件')
     return false
   }
 
@@ -141,6 +142,13 @@ async function beforeUpload(file: File): Promise<boolean> {
   validating.value = true
   validationErrors.value = []
   uploadFile.value = file
+
+  if (['db', 'sqlite', 'sqlite3'].includes(ext || '')) {
+    detectedName.value = 'SQLite 数据库（由后端逐表识别）'
+    validating.value = false
+    ElMessage.success('数据库文件已选择，上传后将自动识别其中的数据表')
+    return false
+  }
 
   try {
     const headers = await detectHeaders(file)
@@ -215,7 +223,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
       :closable="false"
       show-icon
       title="上传说明"
-      description="请先下载标准模板，按模板格式填写数据后上传。系统仅校验文件结构与字段是否匹配，不匹配将提示错误行号。数据由任课教师上传，仅可操作自己授课课程的数据。"
+      description="可上传标准 Excel/Txt 模板或 SQLite 数据库。任课教师只能操作自己授课课程，助教只能操作已授权课程。"
       style="margin-bottom: 16px"
     />
 
@@ -257,7 +265,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
           <el-upload
             drag
             :before-upload="beforeUpload"
-            accept=".xlsx,.txt"
+            accept=".xlsx,.txt,.db,.sqlite,.sqlite3"
             :limit="1"
             :disabled="validating"
           >
@@ -265,7 +273,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
             <div class="el-upload__text">将文件拖到此处，或 <em>点击上传</em></div>
             <template #tip>
               <div class="el-upload__tip">
-                仅支持 .xlsx（Excel）和 .txt（UTF-8 英文逗号分隔）格式
+                支持 .xlsx、UTF-8 .txt 和 SQLite 数据库（.db/.sqlite/.sqlite3）
               </div>
               <div class="el-upload__tip" style="margin-top:4px;color:#e6a23c">
                 上传前请在左侧确认已选中与文件对应的模板类型，系统将自动识别并校验。
@@ -321,7 +329,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
           </template>
         </el-table-column>
         <el-table-column prop="dataSource" label="格式" width="80">
-          <template #default="{ row }">{{ row.dataSource === 'excel' ? 'Excel' : 'Txt' }}</template>
+          <template #default="{ row }">{{ row.dataSource === 'excel' ? 'Excel' : row.dataSource === 'database' ? '数据库' : 'Txt' }}</template>
         </el-table-column>
         <el-table-column prop="successCount" label="成功条数" width="100" align="center" />
         <el-table-column prop="operatorName" label="操作人" width="100" />

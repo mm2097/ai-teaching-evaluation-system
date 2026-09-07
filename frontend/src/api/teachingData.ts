@@ -94,6 +94,10 @@ interface TeachingDataApiRow {
   remark?: string
   sourceData?: string
   sourceFileName?: string
+  sourceType?: 'excel' | 'txt' | 'database' | ''
+  assessmentType?: TeachingDataRecord['assessmentType']
+  assessmentTypeName?: string
+  assessmentBatchName?: string
   attendanceDate?: string | null
   participationRate?: number
   totalCount?: number
@@ -132,6 +136,10 @@ function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): Teachi
     totalCount: row.dataType === 'participation' ? row.totalCount : undefined,
     sourceData: row.sourceData,
     sourceFileName: row.sourceFileName,
+    sourceType: row.sourceType,
+    assessmentType: row.assessmentType,
+    assessmentTypeName: row.assessmentTypeName,
+    assessmentBatchName: row.assessmentBatchName,
   }
 }
 

@@ -15,6 +15,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app import models  # noqa: F401
 from app.api.v1.auth import create_token
 from app.api.v1.eval_config import router as eval_config_router
+from app.api.v1.evaluations import _academic_parts_for_student
 from app.core.database import get_session
 from app.models import (
     AttendanceRecord,
@@ -37,6 +38,11 @@ from app.services.profile import (
     _academic_part_score,
     compute_academic_score,
     load_academic_parts,
+)
+from app.services.assessment_types import (
+    classify_assessment_type,
+    display_assessment_batch_name,
+    display_assessment_type_name,
 )
 
 
@@ -100,6 +106,33 @@ def test_part_score_keyword_matching(engine):
         assert _academic_part_score(s, 1, 1, "attendance") == 75.0   # 到课率 0.75×100
         assert _academic_part_score(s, 1, 1, "homework") == 80.0     # 平时作业
         assert _academic_part_score(s, 1, 1, "other") == 70.0        # 其他 = 实验报告（不再含作业）
+
+
+def test_student_academic_parts_use_clear_synced_names(engine):
+    with Session(engine) as s:
+        parts = _academic_parts_for_student(s, 1, 1)
+
+    assert [item["name"] for item in parts] == [
+        "课堂讨论成绩",
+        "期中考试成绩",
+        "期末考试成绩",
+        "课程考勤成绩",
+        "平时作业成绩",
+        "其他过程性成绩",
+    ]
+    assert sum(item["weight"] for item in parts) == 100
+    assert all(item["score"] is not None for item in parts)
+
+
+def test_database_import_names_do_not_leak_into_assessment_display():
+    midterm_type = classify_assessment_type("score", "多类型数据库期中考试")
+    regular_type = classify_assessment_type("score", "数据库多类型平时成绩")
+
+    assert midterm_type == "midterm"
+    assert display_assessment_batch_name(midterm_type, "多类型数据库期中考试") == "期中考试"
+    assert regular_type == "other"
+    assert display_assessment_batch_name(regular_type, "数据库多类型平时成绩") == "平时成绩"
+    assert display_assessment_type_name(regular_type, "数据库多类型平时成绩") == "平时成绩"
 
 
 def test_compute_academic_score_weighted(engine):

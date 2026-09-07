@@ -84,3 +84,18 @@ def test_student_overview_rejects_non_students_and_anonymous_users(session: Sess
         "/api/v1/dashboard/student-overview",
         headers=_auth_header(teacher_user),
     ).status_code == 403
+
+
+def test_student_score_archive_uses_standard_assessment_names(session: Session):
+    student_user = session.get(SysUser, 2)
+    assert student_user is not None
+    response = _build_client(session).get(
+        "/api/v1/dashboard/student-score-archive",
+        headers=_auth_header(student_user),
+    )
+
+    assert response.status_code == 200
+    records = response.json()["records"]
+    assert records
+    assert all(record["type"].endswith("成绩") for record in records)
+    assert all(record["batchName"] for record in records)

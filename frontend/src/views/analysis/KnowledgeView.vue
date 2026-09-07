@@ -294,15 +294,17 @@ watch(
     </div>
 
     <div class="content-card">
-      <div class="content-card__title">知识点失分率</div>
-      <p class="hint-text">失分率按当前筛选范围内该知识点累计扣分占课程测试累计可得分的比例计算。</p>
+      <div class="content-card__title">知识点答题与失分表现</div>
+      <p class="hint-text">
+        答题掌握率反映该知识点的答题正确情况；测试失分率按累计扣分占课程测试累计可得分的比例计算。二者数据来源不同，不是简单的 100% 互补关系。
+      </p>
       <el-empty v-if="!lossRateRows.length" description="暂无课程测试扣分数据" :image-size="64" />
       <el-table v-else :data="lossRateRows" stripe border>
         <el-table-column prop="name" label="知识点" min-width="160" />
-        <el-table-column prop="masteryRate" label="掌握率" width="120" align="center">
+        <el-table-column prop="masteryRate" label="答题掌握率" width="130" align="center">
           <template #default="{ row }">{{ row.masteryRate }}%</template>
         </el-table-column>
-        <el-table-column prop="lossRate" label="失分率" width="120" align="center">
+        <el-table-column prop="lossRate" label="测试失分率" width="130" align="center">
           <template #default="{ row }">
             <span :class="{ 'loss-rate--high': row.lossRate >= 10 }">{{ row.lossRate }}%</span>
           </template>

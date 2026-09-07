@@ -72,6 +72,15 @@ def test_assistant_login_rejects_other_roles(assistant_engine):
         assert exc_info.value.status_code == 403
 
 
+def test_student_can_login_with_student_number_alias(assistant_engine):
+    with Session(assistant_engine) as session:
+        response = auth.login(
+            auth.LoginRequest(username="2024001", password="123456"), session
+        )
+        assert response.user.username == "student"
+        assert response.user.student_no == "2024001"
+
+
 def test_assistant_course_scope_is_enforced(assistant_engine):
     with Session(assistant_engine) as session:
         user = session.get(SysUser, 2)

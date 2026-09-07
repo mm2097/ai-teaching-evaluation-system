@@ -29,6 +29,11 @@ from app.models import (
     Teacher,
 )
 from app.models.question import TASK_TYPE_SELF_PRACTICE
+from app.services.assessment_types import (
+    classify_assessment_type,
+    display_assessment_batch_name,
+    display_assessment_type_name,
+)
 
 router = APIRouter()
 
@@ -767,11 +772,17 @@ def get_student_score_archive(
         rank = 1 + sum(1 for v in peer_values if v > my_score)
 
         course = course_map.get(batch.course_id)
+        assessment_type = classify_assessment_type("score", batch.batch_name)
         records.append({
             "id": batch.batch_id,
             "courseName": course.course_name if course else "",
             "semester": batch.semester,
-            "type": batch.batch_name,
+            "type": display_assessment_type_name(
+                assessment_type, batch.batch_name,
+            ),
+            "batchName": display_assessment_batch_name(
+                assessment_type, batch.batch_name,
+            ),
             "score": my_score,
             "total": batch.full_score,
             "classAvg": class_avg,

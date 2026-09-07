@@ -65,7 +65,7 @@ function emptyForm() {
 const filteredUsers = computed(() => {
   const kw = keyword.value.trim()
   return userList.value.filter((u) => {
-    if (kw && !u.username.includes(kw) && !u.name.includes(kw)) return false
+    if (kw && !u.username.includes(kw) && !u.name.includes(kw) && !(u.studentNo || '').includes(kw)) return false
     if (roleFilter.value && u.role !== roleFilter.value) return false
     if (classFilter.value != null) {
       if (u.role !== 'student' || u.classId !== classFilter.value) return false
@@ -271,7 +271,7 @@ watch(
   <div class="page-container">
     <div class="content-card">
       <div class="table-toolbar">
-        <el-input v-model="keyword" placeholder="搜索用户名/姓名" :prefix-icon="Search" clearable style="width: 200px" />
+        <el-input v-model="keyword" placeholder="搜索账号/姓名/学号" :prefix-icon="Search" clearable style="width: 200px" />
         <el-select v-model="roleFilter" placeholder="全部角色" clearable style="width: 140px">
           <el-option v-for="(label, key) in RoleLabels" :key="key" :label="label" :value="key" />
         </el-select>

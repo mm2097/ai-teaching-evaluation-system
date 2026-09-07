@@ -11,6 +11,7 @@ import {
   evalGradeTagType,
   fetchEvaluationResults,
   fetchEvaluations,
+  type AcademicPartScore,
 } from '@/api/evaluations'
 
 const userStore = useUserStore()
@@ -24,6 +25,7 @@ const evalData = ref({
   totalScore: 0,
   grade: '—',
   dimensions: [] as { name: string; score: number; weight: number }[],
+  academicParts: [] as AcademicPartScore[],
 })
 
 const gradeTagType = computed(() => evalGradeTagType(evalData.value.grade))
@@ -94,6 +96,7 @@ async function loadEvalData(): Promise<void> {
       totalScore: 0,
       grade: '—',
       dimensions: [],
+      academicParts: [],
     }
     return
   }
@@ -124,6 +127,7 @@ async function loadEvalData(): Promise<void> {
           score: d.score,
           weight: d.weight,
         })) ?? [],
+        academicParts: detail?.academicParts ?? [],
       }
     } else {
       evalData.value = {
@@ -132,10 +136,12 @@ async function loadEvalData(): Promise<void> {
         totalScore: 0,
         grade: '—',
         dimensions: [],
+        academicParts: [],
       }
     }
   } catch {
     evalData.value.dimensions = []
+    evalData.value.academicParts = []
   } finally {
     loading.value = false
   }
@@ -187,6 +193,37 @@ watch(courseId, async () => {
           </el-tag>
           <el-tag v-else type="info" size="large">暂无评价</el-tag>
         </div>
+      </div>
+
+      <div class="content-card academic-parts-card">
+        <div class="content-card__title">课程成绩类型构成</div>
+        <el-empty v-if="!evalData.academicParts.length" description="该课程暂未配置成绩构成" />
+        <el-row v-else :gutter="12">
+          <el-col
+            v-for="part in evalData.academicParts"
+            :key="part.part"
+            :xs="24"
+            :sm="12"
+            :lg="8"
+          >
+            <div class="academic-part-item">
+              <div class="part-heading">
+                <span>{{ part.name }}</span>
+                <el-tag size="small" effect="plain">权重 {{ part.weight }}%</el-tag>
+              </div>
+              <div class="part-score" :class="{ empty: part.score == null }">
+                {{ part.score == null ? '暂无成绩' : `${part.score} 分` }}
+              </div>
+              <el-progress
+                v-if="part.score != null"
+                :percentage="part.score"
+                :stroke-width="7"
+                :show-text="false"
+                :color="part.score >= 85 ? '#10b981' : part.score >= 75 ? '#2563eb' : part.score >= 60 ? '#f59e0b' : '#ef4444'"
+              />
+            </div>
+          </el-col>
+        </el-row>
       </div>
 
       <el-row :gutter="16">
@@ -250,6 +287,41 @@ watch(courseId, async () => {
 
     .total-score { font-size: 48px; font-weight: 700; color: #2563eb; line-height: 1; }
     .total-label { font-size: 14px; color: #64748b; margin: 6px 0 10px; }
+  }
+}
+
+.academic-parts-card {
+  margin-bottom: 16px;
+}
+
+.academic-part-item {
+  min-height: 104px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #ffffff, #f8fbff);
+
+  .part-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: #334155;
+    font-weight: 600;
+  }
+
+  .part-score {
+    margin: 12px 0 8px;
+    color: #0f172a;
+    font-size: 22px;
+    font-weight: 700;
+
+    &.empty {
+      color: #94a3b8;
+      font-size: 15px;
+      font-weight: 500;
+    }
   }
 }
 

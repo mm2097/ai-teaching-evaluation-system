@@ -26,6 +26,9 @@ def init_db() -> None:
     # 先加 eval_dimension.weight 列，后续迁移（academic_parts 等）查询该表时才不会报缺列
     _migrate_dimension_weight()
     _migrate_legacy_tables()
+    # Academic-part migration reads EvalDimension.weight, so add/backfill that
+    # column before querying the evaluation tables on legacy databases.
+    _migrate_dimension_weight()
     _migrate_academic_parts()
     _migrate_attitude_homework()
     _migrate_evaluation_levels()

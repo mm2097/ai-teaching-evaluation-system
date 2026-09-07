@@ -1351,6 +1351,15 @@ TEMPLATE_META: list[dict[str, Any]] = [
         ],
         "instruction": "填写说明：①课堂列填「是」（参与）或「否」（未参与）；②课堂总数与课堂参与度为Excel公式自动计算，请勿手动填写。",
     },
+    {
+        "template_id": "database",
+        "name": "数据库导入（自动识别）",
+        "dataType": "数据库导入",
+        "description": "上传包含多个数据表的 SQLite 数据库，系统按每个数据表的字段自动识别成绩、考勤或课堂参与类型。",
+        "headers": [],
+        "example": [],
+        "instruction": "SQLite 数据库无需下载模板；每个数据表需包含标准字段，系统会逐表识别并导入。",
+    },
 ]
 
 

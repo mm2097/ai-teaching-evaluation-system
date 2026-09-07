@@ -12,6 +12,7 @@ import os
 import tempfile
 import uuid
 from datetime import date, datetime
+from pathlib import Path
 from urllib.parse import quote
 
 import openpyxl
@@ -34,6 +35,11 @@ from app.models import (
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
 from app.services.analysis_refresh import refresh_course_analysis
+from app.services.assessment_types import (
+    classify_assessment_type,
+    display_assessment_batch_name,
+    display_assessment_type_name,
+)
 
 router = APIRouter()
 
@@ -119,7 +125,6 @@ def _require_teacher_for_course(
 # ============================================================================
 
 STATUS_MAP = {0: "正常", 1: "迟到", 2: "早退", 3: "缺勤", 4: "请假"}
-
 
 @router.get("/teaching-data", tags=["教学数据"])
 def query_teaching_data(
@@ -397,7 +402,28 @@ def query_teaching_data(
             src = json.loads(row.get("sourceData") or "{}")
         except (json.JSONDecodeError, TypeError):
             src = {}
-        row["sourceFileName"] = str(src.get("来源文件") or "")
+        source_file = str(src.get("来源文件") or "")
+        source_suffix = Path(source_file).suffix.lower()
+        row["sourceFileName"] = source_file
+        row["sourceType"] = (
+            "database" if source_suffix in {".db", ".sqlite", ".sqlite3"}
+            else "txt" if source_suffix == ".txt"
+            else "excel" if source_suffix == ".xlsx"
+            else ""
+        )
+        assessment_type = classify_assessment_type(
+            str(row.get("dataType") or ""),
+            str(row.get("batchName") or ""),
+        )
+        row["assessmentType"] = assessment_type
+        row["assessmentTypeName"] = display_assessment_type_name(
+            assessment_type,
+            str(row.get("batchName") or ""),
+        )
+        row["assessmentBatchName"] = display_assessment_batch_name(
+            assessment_type,
+            str(row.get("batchName") or ""),
+        )
 
     # 分页
     total = len(rows)
@@ -899,6 +925,8 @@ def batch_delete_teaching_data(
 @router.post("/teaching-data/clear", tags=["教学数据"])
 def clear_teaching_data(
     payload: dict = Body(...),
+    # 默认值兼容单元测试直接调用；FastAPI 仍会按 BackgroundTasks 注入实例。
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     request: Request = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
@@ -963,7 +991,13 @@ def clear_teaching_data(
             get_client_ip(request),
         )
 
-    _refresh_analysis_in_background(course_id)
+    # 清空后的分析重算可能遍历整门课的学生和知识点，不能阻塞本次删除响应。
+    # 通过 BackgroundTasks 延后执行，避免前端 10 秒请求超时后误报“无法连接后端”。
+    if background_tasks is not None:
+        background_tasks.add_task(_refresh_analysis_in_background, course_id)
+    else:
+        # 保留直接调用兼容性，方便单元测试直接调用路由函数。
+        _refresh_analysis_in_background(course_id)
     return {"deleted": deleted, "dataType": data_type}
 
 
@@ -1318,6 +1352,8 @@ def download_template(
     meta = next((m for m in TEMPLATE_META if m["template_id"] == template_id), None)
     if not meta:
         raise HTTPException(status_code=404, detail=f"模板不存在: {template_id}")
+    if template_id == "database":
+        raise HTTPException(status_code=400, detail="数据库导入无需下载模板，请直接上传 SQLite 文件")
 
     try:
         if fmt == "txt":

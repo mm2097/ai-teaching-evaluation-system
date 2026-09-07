@@ -16,14 +16,33 @@ from app.models import (
 )
 from app.api.v1.analysis import _check_course_access
 from app.services.evaluation import (
+    ACADEMIC_PART_LABELS,
     DEFAULT_WEIGHTS,
     compute_evaluation,
     custom_dimension_key,
     dimension_key,
     load_dimension_shares,
 )
+from app.services.profile import _academic_part_score, load_academic_parts
 
 router = APIRouter()
+
+
+def _academic_parts_for_student(
+    session: Session, student_id: int, course_id: int,
+) -> list[dict]:
+    """返回与评价引擎一致的课程考核构成、权重和学生实际得分。"""
+    return [
+        {
+            "part": part,
+            "name": ACADEMIC_PART_LABELS.get(part, part),
+            "weight": weight,
+            "score": round(float(score), 1) if score is not None else None,
+        }
+        for part, weight in load_academic_parts(session, course_id).items()
+        if (score := _academic_part_score(session, student_id, course_id, part)) is not None
+        or weight > 0
+    ]
 
 
 # ============================================================================
@@ -268,6 +287,10 @@ def list_evaluations(
             else:
                 # 未落库学生实时兜底（单学生约 150ms）
                 item = _evaluation_item_from_algorithm(session, student, course)
+            if _student_id:
+                item["academicParts"] = _academic_parts_for_student(
+                    session, student.student_id, _course_id,
+                )
             if _eval_level and item["grade"] != _eval_level:
                 continue
             data.append(item)

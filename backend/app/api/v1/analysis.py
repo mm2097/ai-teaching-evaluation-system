@@ -7,6 +7,7 @@ from app.core.operation_log import get_current_user
 from app.models import (
     Student, Course, CourseStudent, ClassInfo,
     KnowledgeMastery, KnowledgePoint, KnowledgeModule,
+    AiQuestion, StudentAnswerRecord,
     StudyWarning, StudentProfile,
     Notification,
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult, EvalDimension,
@@ -15,7 +16,11 @@ from app.models import (
     AttendanceSheet, ParticipationSheet,
 )
 from app.services.predict import predict_student_scores
-from app.services.mastery import compute_mastery_index_with_fallback
+from app.services.mastery import (
+    compute_exam_mastery_indexes,
+    compute_mastery_index_with_fallback,
+    compute_student_mastery,
+)
 from app.services.knowledge_utils import split_knowledge_names
 from app.services.warning import scan_course_warnings, persist_warnings
 from app.services.profile import compute_profile
@@ -483,6 +488,28 @@ def get_knowledge_heatmap(
     points = session.exec(
         select(KnowledgePoint).where(KnowledgePoint.module_id.in_(module_ids))  # type: ignore
     ).all() if module_ids else []
+
+    # 学生个人视角只展示当前仍有数据依据的知识点。历史 KnowledgeMastery
+    # 可能来自已经删除的题目，不能再把这些知识点作为 0 分显示。
+    if role_code == "student" and student_id and points:
+        point_ids = [point.point_id for point in points]
+        answered_point_ids = set(session.exec(
+            select(AiQuestion.point_id)
+            .join(StudentAnswerRecord, StudentAnswerRecord.question_id == AiQuestion.question_id)
+            .where(
+                StudentAnswerRecord.student_id == student_id,
+                AiQuestion.course_id == course_id,
+                AiQuestion.point_id.in_(point_ids),  # type: ignore[arg-type]
+            )
+        ).all())
+        exam_point_ids = {
+            point_id
+            for (sid, point_id) in compute_exam_mastery_indexes(session, course_id, [student_id])
+            if sid == student_id
+        }
+        active_point_ids = answered_point_ids | exam_point_ids
+        points = [point for point in points if point.point_id in active_point_ids]
+
     for p in points:
         point_module_map[p.point_id] = p.module_id
 
@@ -512,15 +539,11 @@ def get_knowledge_heatmap(
 
     # 个人视图包含自主练习；班级视图只展示教师任务，避免自主练习污染班级统计。
     if role_code == "student":
-        all_masteries = session.exec(
-            select(KnowledgeMastery).where(
-                KnowledgeMastery.course_id == course_id,
-                KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
-            )
-        ).all()
+        current_masteries = compute_student_mastery(session, student_id, course_id)
         mastery_index = {
-            (mastery.student_id, mastery.point_id): mastery.mastery_score
-            for mastery in all_masteries
+            (student_id, mastery.point_id): mastery.accuracy
+            for mastery in current_masteries
+            if mastery.point_id in {point.point_id for point in points}
         }
     else:
         mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)

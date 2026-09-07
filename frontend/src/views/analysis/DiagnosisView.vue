@@ -159,7 +159,7 @@ async function startDiagnosis(): Promise<void> {
         // 跨 step 查找：tool_result 可能在新 step_start 之后才到达
         const allSteps = processSteps.value
         for (let i = allSteps.length - 1; i >= 0; i--) {
-          const match = [...allSteps[i].toolCalls]
+          const match = [...allSteps[i]!.toolCalls]
             .reverse()
             .find((c) => c.name === evt.name && c.status === 'running')
           if (match) {

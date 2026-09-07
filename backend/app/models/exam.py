@@ -30,6 +30,8 @@ class ExamBatch(SQLModel, table=True):
     batch_type: int  # 1=平时成绩, 2=实验成绩, 3=期中, 4=期末, 5=考勤
     semester: str = Field(default="", max_length=32)  # 学期，如 2025-2026-1
     batch_weight: Optional[float] = Field(default=None)  # 权重百分比，如 60 表示 60%
+    # 兼容旧数据库中要求非空的考核时间字段；导入数据没有单独时间时使用当前时间。
+    exam_time: datetime = Field(default_factory=datetime.now)
     full_score: float = Field(default=100)
     create_by: int = Field(foreign_key="sys_user.user_id")
     create_time: datetime = Field(default_factory=datetime.now)

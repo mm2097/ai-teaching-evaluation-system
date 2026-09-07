@@ -11,6 +11,13 @@ export interface EvalDimensionScore {
   weight: number
 }
 
+export interface AcademicPartScore {
+  part: 'discussion' | 'midterm' | 'final' | 'attendance' | 'homework' | 'other'
+  name: string
+  weight: number
+  score: number | null
+}
+
 /** GET /evaluations 返回项 */
 export interface StudentEvaluationItem {
   id: number
@@ -24,6 +31,7 @@ export interface StudentEvaluationItem {
   totalScore: number
   grade: string
   dimensions: EvalDimensionScore[]
+  academicParts?: AcademicPartScore[]
 }
 
 /** GET /evaluations/results 返回项 */

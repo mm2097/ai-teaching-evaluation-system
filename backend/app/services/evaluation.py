@@ -31,15 +31,14 @@ from app.models import (
 )
 from app.services.mastery import compute_student_mastery
 from app.services.profile import ProfileScores, _academic_part_score, compute_profile
+from app.services.assessment_types import (
+    ACADEMIC_ASSESSMENT_TYPES,
+    ASSESSMENT_TYPE_LABELS,
+)
 
 
 ACADEMIC_PART_LABELS = {
-    "discussion": "小班讨论",
-    "midterm": "期中考试",
-    "final": "期末考试",
-    "attendance": "考勤",
-    "homework": "作业",
-    "other": "其他",
+    part: ASSESSMENT_TYPE_LABELS[part] for part in ACADEMIC_ASSESSMENT_TYPES
 }
 
 DEFAULT_WEIGHTS = {

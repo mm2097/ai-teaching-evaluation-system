@@ -43,6 +43,7 @@ export interface ScoreArchiveRecord {
   courseName: string
   semester: string
   type: string
+  batchName?: string
   score: number
   total: number
   classAvg: number

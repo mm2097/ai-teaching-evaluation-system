@@ -97,7 +97,7 @@ onMounted(async () => {
 // 下载
 // --------------------------------------------------------------------------
 async function handleDownloadExcel(): Promise<void> {
-  if (!templateId.value) return
+  if (!templateId.value || templateId.value === 'database') return
   try {
     await downloadExcelTemplate(templateId.value)
     ElMessage.success('Excel 模板已下载')
@@ -107,7 +107,7 @@ async function handleDownloadExcel(): Promise<void> {
 }
 
 async function handleDownloadTxt(): Promise<void> {
-  if (!templateId.value) return
+  if (!templateId.value || templateId.value === 'database') return
   try {
     await downloadTxtTemplate(templateId.value)
     ElMessage.success('Txt 模板已下载')
@@ -247,12 +247,13 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
             </el-form-item>
             <el-form-item label="下载模板">
               <div class="download-btns">
-                <el-button :icon="Download" :disabled="!templateId" @click="handleDownloadExcel">
+                <el-button :icon="Download" :disabled="!templateId || templateId === 'database'" @click="handleDownloadExcel">
                   下载 Excel 模板 (.xlsx)
                 </el-button>
-                <el-button :icon="Download" :disabled="!templateId" @click="handleDownloadTxt">
+                <el-button :icon="Download" :disabled="!templateId || templateId === 'database'" @click="handleDownloadTxt">
                   下载 Txt 模板 (.txt)
                 </el-button>
+                <p v-if="templateId === 'database'" class="type-desc">数据库导入无需下载模板，上传后系统会按数据表自动识别类型。</p>
               </div>
             </el-form-item>
           </el-form>
@@ -276,7 +277,7 @@ const statusMap: Record<number, { label: string; type: 'success' | 'warning' | '
                 支持 .xlsx、UTF-8 .txt 和 SQLite 数据库（.db/.sqlite/.sqlite3）
               </div>
               <div class="el-upload__tip" style="margin-top:4px;color:#e6a23c">
-                上传前请在左侧确认已选中与文件对应的模板类型，系统将自动识别并校验。
+                Excel/Txt 请在左侧选择对应模板；SQLite 数据库请选择“数据库导入（自动识别）”，系统会逐表识别并校验。
               </div>
             </template>
           </el-upload>

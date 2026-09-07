@@ -118,7 +118,10 @@ onMounted(async () => {
       <el-table :data="filteredRecords" stripe border>
         <el-table-column prop="courseName" label="课程" width="130" />
         <el-table-column prop="semester" label="学期" width="140" />
-        <el-table-column prop="type" label="考试类型" width="110" />
+        <el-table-column prop="type" label="成绩类型" width="150" />
+        <el-table-column prop="batchName" label="考核批次" width="140">
+          <template #default="{ row }">{{ row.batchName || '—' }}</template>
+        </el-table-column>
         <el-table-column label="成绩" width="120" align="center">
           <template #default="{ row }">
             <span :style="{ fontWeight: 600, color: row.score >= 90 ? '#10b981' : row.score >= 80 ? '#2563eb' : row.score >= 60 ? '#f59e0b' : '#ef4444' }">

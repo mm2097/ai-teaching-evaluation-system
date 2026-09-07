@@ -8,6 +8,7 @@
 
 from app.models.user import SysUser, SysRole, LoginRequest, UserCreate, UserRead, UserUpdate
 from app.models.teacher import Teacher
+from app.models.assistant import TeachingAssistant, CourseAssistant
 from app.models.student import Student, StudentCreate, StudentUpdate
 from app.models.class_info import ClassInfo
 from app.models.course import Course, CourseStudent
@@ -31,7 +32,8 @@ from app.models.report import ReportHistory
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
-    "Teacher", "Student", "StudentCreate", "StudentUpdate", "ClassInfo",
+    "Teacher", "TeachingAssistant", "CourseAssistant",
+    "Student", "StudentCreate", "StudentUpdate", "ClassInfo",
     "Course", "CourseStudent",
     "KnowledgeModule", "KnowledgePoint",
     "AttendanceRecord", "InteractionRecord",

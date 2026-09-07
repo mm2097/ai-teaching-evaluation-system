@@ -11,11 +11,13 @@ from app.core.security import hash_password
 from app.models import (
     ClassInfo,
     Course,
+    CourseAssistant,
     CourseStudent,
     Student,
     SysRole,
     SysUser,
     Teacher,
+    TeachingAssistant,
     UserCreate,
     UserUpdate,
 )
@@ -42,6 +44,60 @@ def _get_teacher(session: Session, user_id: int | None) -> Teacher | None:
     if not user_id:
         return None
     return session.exec(select(Teacher).where(Teacher.user_id == user_id)).first()
+
+
+def _get_assistant(session: Session, user_id: int | None) -> TeachingAssistant | None:
+    if not user_id:
+        return None
+    return session.exec(
+        select(TeachingAssistant).where(TeachingAssistant.user_id == user_id)
+    ).first()
+
+
+def _ensure_assistant_profile(
+    session: Session,
+    user: SysUser,
+    assistant_no: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+) -> TeachingAssistant:
+    """新建或同步助教档案，助教工号默认使用登录账号。"""
+    resolved_no = (assistant_no or "").strip()
+    assistant = _get_assistant(session, user.user_id)
+    if assistant:
+        if resolved_no and resolved_no != assistant.assistant_no:
+            occupied = session.exec(
+                select(TeachingAssistant).where(TeachingAssistant.assistant_no == resolved_no)
+            ).first()
+            if occupied and occupied.user_id != user.user_id:
+                raise HTTPException(status_code=400, detail=f"助教工号 {resolved_no} 已被占用")
+            assistant.assistant_no = resolved_no
+        assistant.real_name = user.real_name
+        assistant.college = user.college or assistant.college or "计算机学院"
+        if phone is not None:
+            assistant.phone = phone.strip() or None
+        if email is not None:
+            assistant.email = email.strip() or None
+        assistant.update_time = datetime.now()
+        session.add(assistant)
+        return assistant
+
+    final_no = resolved_no or user.username
+    occupied = session.exec(
+        select(TeachingAssistant).where(TeachingAssistant.assistant_no == final_no)
+    ).first()
+    if occupied:
+        raise HTTPException(status_code=400, detail=f"助教工号 {final_no} 已被占用")
+    assistant = TeachingAssistant(
+        assistant_no=final_no,
+        real_name=user.real_name,
+        user_id=user.user_id,
+        college=user.college or "计算机学院",
+        phone=(phone or "").strip() or None,
+        email=(email or "").strip() or None,
+    )
+    session.add(assistant)
+    return assistant
 
 
 def _ensure_student_profile(
@@ -161,9 +217,12 @@ def _serialize_user(session: Session, user: SysUser) -> dict:
     department = user.college or ""
     student = _get_student(session, user.user_id)
     teacher = _get_teacher(session, user.user_id)
+    assistant = _get_assistant(session, user.user_id)
     class_info = session.get(ClassInfo, student.class_id) if student else None
     if not department and role_code == "teacher":
         department = teacher.college if teacher else ""
+    elif not department and role_code == "assistant":
+        department = assistant.college if assistant else ""
     elif not department and role_code == "student":
         department = class_info.college if class_info else ""
     elif not department and role_code == "admin":
@@ -182,9 +241,10 @@ def _serialize_user(session: Session, user: SysUser) -> dict:
         "student_no": student.student_no if student else "",
         "gender": student.gender if student else None,
         "teacher_no": teacher.teacher_no if teacher else "",
+        "assistant_no": assistant.assistant_no if assistant else "",
         "title": teacher.title if teacher else "",
-        "phone": student.phone if student else (teacher.phone if teacher else ""),
-        "email": student.email if student else (teacher.email if teacher else ""),
+        "phone": student.phone if student else (teacher.phone if teacher else (assistant.phone if assistant else "")),
+        "email": student.email if student else (teacher.email if teacher else (assistant.email if assistant else "")),
         "status": user.status,
         "create_time": user.create_time,
     }
@@ -251,6 +311,7 @@ def create_user(
     student_no = user_data.pop("student_no", None)
     gender = user_data.pop("gender", None)
     teacher_no = user_data.pop("teacher_no", None)
+    assistant_no = user_data.pop("assistant_no", None)
     title = user_data.pop("title", None)
     phone = user_data.pop("phone", None)
     email = user_data.pop("email", None)
@@ -272,6 +333,13 @@ def create_user(
         occupied = session.exec(select(Teacher).where(Teacher.teacher_no == resolved_no)).first()
         if occupied:
             raise HTTPException(status_code=400, detail=f"教工号 {resolved_no} 已被占用")
+    if role_code == "assistant":
+        resolved_no = (assistant_no or "").strip() or payload.username
+        occupied = session.exec(
+            select(TeachingAssistant).where(TeachingAssistant.assistant_no == resolved_no)
+        ).first()
+        if occupied:
+            raise HTTPException(status_code=400, detail=f"助教工号 {resolved_no} 已被占用")
     user_data["password"] = hash_password(user_data["password"])
     college = (user_data.get("college") or "").strip()
     user_data["college"] = college or "计算机学院"
@@ -289,6 +357,11 @@ def create_user(
         _ensure_teacher_profile(
             session, user,
             teacher_no=teacher_no, title=title, phone=phone, email=email,
+        )
+    if role_code == "assistant":
+        _ensure_assistant_profile(
+            session, user,
+            assistant_no=assistant_no, phone=phone, email=email,
         )
     session.commit()
     session.refresh(user)
@@ -335,6 +408,7 @@ def update_user(
     student_no = updates.pop("student_no", None)
     gender = updates.pop("gender", None)
     teacher_no = updates.pop("teacher_no", None)
+    assistant_no = updates.pop("assistant_no", None)
     title = updates.pop("title", None)
     phone = updates.pop("phone", None)
     email = updates.pop("email", None)
@@ -375,6 +449,11 @@ def update_user(
         _ensure_teacher_profile(
             session, user,
             teacher_no=teacher_no, title=title, phone=phone, email=email,
+        )
+    if pending_code == "assistant":
+        _ensure_assistant_profile(
+            session, user,
+            assistant_no=assistant_no, phone=phone, email=email,
         )
     session.commit()
     session.refresh(user)
@@ -417,6 +496,14 @@ def delete_user(
         if taught:
             raise HTTPException(status_code=400, detail="该教师已有授课课程数据，无法删除账号")
         session.delete(teacher)
+    assistant = _get_assistant(session, user.user_id)
+    if assistant:
+        assignments = session.exec(
+            select(CourseAssistant).where(CourseAssistant.assistant_id == assistant.assistant_id)
+        ).all()
+        for assignment in assignments:
+            session.delete(assignment)
+        session.delete(assistant)
     session.delete(user)
     session.commit()
     save_operation_log(

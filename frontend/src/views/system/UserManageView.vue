@@ -37,6 +37,7 @@ const form = ref({
   gender: 1 as number,  // 0=女, 1=男，默认男
   // 教师档案字段（仅教师角色使用，写入 teacher 表）
   teacherNo: '',
+  assistantNo: '',
   title: '',
   phone: '',
   email: '',
@@ -54,6 +55,7 @@ function emptyForm() {
     studentNo: '',
     gender: 1 as number,
     teacherNo: '',
+    assistantNo: '',
     title: '',
     phone: '',
     email: '',
@@ -106,6 +108,7 @@ function onRoleChange(role: UserRole): void {
     form.value.teacherNo = ''
     form.value.title = ''
   }
+  if (role !== 'assistant') form.value.assistantNo = ''
   if (role === 'admin') {
     form.value.phone = ''
     form.value.email = ''
@@ -131,6 +134,7 @@ function handleEdit(row: SystemUser): void {
     studentNo: row.studentNo || '',
     gender: row.gender ?? 1,
     teacherNo: row.teacherNo || '',
+    assistantNo: row.assistantNo || '',
     title: row.title || '',
     phone: row.phone || '',
     email: row.email || '',
@@ -189,6 +193,7 @@ async function saveUser(): Promise<void> {
         studentNo: form.value.studentNo,
         gender: form.value.gender,
         teacherNo: form.value.teacherNo,
+        assistantNo: form.value.assistantNo,
         title: form.value.title,
         phone: form.value.phone,
         email: form.value.email,
@@ -204,6 +209,7 @@ async function saveUser(): Promise<void> {
         studentNo: form.value.studentNo,
         gender: form.value.gender,
         teacherNo: form.value.teacherNo,
+        assistantNo: form.value.assistantNo,
         title: form.value.title,
         phone: form.value.phone,
         email: form.value.email,
@@ -368,6 +374,17 @@ watch(
               <el-option label="讲师" value="讲师" />
               <el-option label="助教" value="助教" />
             </el-select>
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="form.phone" placeholder="可为空" clearable maxlength="20" />
+          </el-form-item>
+          <el-form-item label="邮箱">
+            <el-input v-model="form.email" placeholder="可为空" clearable maxlength="64" />
+          </el-form-item>
+        </template>
+        <template v-if="form.role === 'assistant'">
+          <el-form-item label="助教工号">
+            <el-input v-model="form.assistantNo" placeholder="留空则默认与账号相同" clearable />
           </el-form-item>
           <el-form-item label="手机号">
             <el-input v-model="form.phone" placeholder="可为空" clearable maxlength="20" />

@@ -693,13 +693,12 @@ def seed() -> None:
         print(f"  答题任务: {len(tasks)} 个，答题记录: {len(answers)} 条")
 
         # ========== 15. 评价维度 & 指标 ==========
+        # 默认维度只有两个：学业水平 60% + 学习态度 40%，需要时可新增其他维度
         dimensions = [
-            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
-            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1),
-            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2),
-            EvalDimension(course_id=3, dimension_name="学习进步", description="成绩趋势与进步幅度", sort_num=3),
-            EvalDimension(course_id=3, dimension_name="知识掌握", description="知识点掌握度", sort_num=4),
+            EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
+            EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
+            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
         ]
         session.add_all(dimensions)
         session.commit()
@@ -1565,14 +1564,33 @@ def inject_analysis_data() -> None:
         print("  所有数据已就绪，前端可直接展示！")
 
 
+def _seed_ai_teaching() -> None:
+    """注入 AI 教学演示数据（题库/练习任务/答题记录，幂等可重复执行）。"""
+    from app.seed_ai_teaching_data import seed_ai_teaching_data
+
+    seed_ai_teaching_data()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="灌入演示数据")
     parser.add_argument("--reset", action="store_true", help="删库重建后再灌入")
     parser.add_argument("--inject-analysis", action="store_true",
                         help="为所有学生注入智能分析数据（学情画像/成绩趋势/知识点/预警）")
+    parser.add_argument("--ai-teaching", action="store_true",
+                        help="注入 AI 教学演示数据（题库/练习任务/答题记录，幂等）")
+    parser.add_argument("--all", action="store_true",
+                        help="一键全量注入：基础数据 + 分析数据 + AI 教学数据")
     args = parser.parse_args()
-    if args.inject_analysis:
+
+    if args.all:
+        # 一键注入：基础数据 → 分析数据 → AI 教学数据（各自幂等/守卫，可重复执行）
+        seed()
         inject_analysis_data()
+        _seed_ai_teaching()
+    elif args.inject_analysis:
+        inject_analysis_data()
+    elif args.ai_teaching:
+        _seed_ai_teaching()
     elif args.reset:
         reset()
         seed()
@@ -1581,7 +1599,8 @@ def main() -> None:
         with Session(engine) as session:
             existing = session.exec(select(SysRole)).first()
         if existing:
-            print("数据已存在。使用 --reset 重建，或 --inject-analysis 注入分析数据")
+            print("数据已存在。使用 --reset 重建，--all 一键注入全部演示数据，"
+                  "或 --inject-analysis / --ai-teaching 单独补充注入")
         else:
             seed()
 

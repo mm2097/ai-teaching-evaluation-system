@@ -36,6 +36,7 @@ from app.models import (
     Student,
     SysUser,
 )
+from app.services.knowledge_utils import split_knowledge_names
 
 
 # ============================================================================
@@ -569,15 +570,16 @@ def _collect_and_ensure_knowledge_points(
 ) -> dict[str, KnowledgePoint]:
     """从课程测试数据行中收集所有知识点名称并确保其存在。
 
-    返回 {知识点名称: KnowledgePoint} 映射。
+    一格多个知识点（如「传输时延、TCP/UDP协议」）按分隔符拆分为
+    独立知识点建点；返回 {知识点名称: KnowledgePoint} 映射。
     """
     knowledge_names: set[str] = set()
     for row_data in rows:
         for qn in range(1, 6):
             col_name = f"第 {qn} 大题扣分的主要知识点"
             kn_str = str(row_data.get(col_name, "")).strip() if row_data.get(col_name) else ""
-            if kn_str:
-                knowledge_names.add(kn_str)
+            for name in split_knowledge_names(kn_str):
+                knowledge_names.add(name)
 
     result: dict[str, KnowledgePoint] = {}
     for name in knowledge_names:

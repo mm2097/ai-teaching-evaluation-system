@@ -1,10 +1,8 @@
 """D08 学习质量评价聚合（线性加权 + 五档等级）。
 
-四维度默认权重：
-    学业成绩（D02）   0.4
-    学习态度（D03）   0.2
-    学习进步（D04）   0.1
-    知识掌握（D05）   0.3
+默认维度只有两个（学业水平 60% + 学习态度 40%），其余维度由教师自行新增并分配占比。
+各维度在综合得分中的占比配置在 EvalDimension.weight，全维度合计 100% 时生效；
+合计 != 100% 时回退默认权重（严格不生效）。
 
 等级映射（与综合看板「班级成绩等级分布」、学习质量页「分数段分布」一致）：
     >= 90   优秀
@@ -12,16 +10,13 @@
     70-79   中等
     60-69   合格
     < 60    不合格
-
-课程评价配置中的 EvalIndex.weight 会按维度汇总后归一化为四维权重。
 """
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from collections import Counter, defaultdict
-from dataclasses import dataclass
 from math import isfinite
-
 from sqlmodel import Session, select
 
 from app.models import (
@@ -48,11 +43,11 @@ ACADEMIC_PART_LABELS = {
 }
 
 DEFAULT_WEIGHTS = {
-    "academic": 0.4,
-    "attitude": 0.2,
-    "progress": 0.1,
-    "mastery": 0.3,
+    "academic": 0.6,
+    "attitude": 0.4,
 }
+
+CANONICAL_KEYS = ("academic", "attitude", "progress", "mastery")
 
 DIMENSION_NAME_KEYS = {
     "学业成绩": "academic",
@@ -67,24 +62,12 @@ DIMENSION_NAME_KEYS = {
     "掌握度": "mastery",
 }
 
-DIMENSION_NAME_MAP = {
-    "academic": "academic",
-    "学业成绩": "academic",
-    "学业水平": "academic",
-    "attitude": "attitude",
-    "学习态度": "attitude",
-    "progress": "progress",
-    "学习进步": "progress",
-    "mastery": "mastery",
-    "知识掌握": "mastery",
-}
-
-
 @dataclass
 class EvaluationResult:
     total_score: float
     level: str           # 优 / 良 / 中 / 差
-    dimensions: dict     # {academic, attitude, progress, mastery}
+    dimensions: dict     # {canonical key | "custom:{id}": 0-100 分}；canonical 四键恒在
+    dimension_weights: dict = field(default_factory=dict)  # 生效占比 {key: 0-1}
 
 
 def score_to_level(score: float) -> str:
@@ -100,7 +83,8 @@ def score_to_level(score: float) -> str:
     return "不合格"
 
 
-def _dimension_key(name: str) -> str | None:
+def dimension_key(name: str) -> str | None:
+    """维度名 → canonical key（academic/attitude/progress/mastery），未命中返回 None。"""
     compact = (name or "").replace(" ", "")
     for token, key in DIMENSION_NAME_KEYS.items():
         if token in compact:
@@ -108,8 +92,13 @@ def _dimension_key(name: str) -> str | None:
     return None
 
 
+def custom_dimension_key(dimension_id: int) -> str:
+    """自定义维度的结果键（与 canonical key 不冲突）。"""
+    return f"custom:{dimension_id}"
+
+
 def load_dimension_weights(session: Session, course_id: int) -> dict[str, float]:
-    """从 EvalDimension/EvalIndex 读取课程四维评价权重。
+    """从 EvalDimension/EvalIndex 读取课程四维评价权重（仅展示用）。
 
     规则：每个维度下所有指标 weight 求和，映射到 academic/attitude/progress/mastery，
     再归一化为总和 1。若课程没有可用配置，则返回默认权重。
@@ -120,9 +109,9 @@ def load_dimension_weights(session: Session, course_id: int) -> dict[str, float]
     if not dims:
         return dict(DEFAULT_WEIGHTS)
 
-    raw = {key: 0.0 for key in DEFAULT_WEIGHTS}
+    raw = {key: 0.0 for key in CANONICAL_KEYS}
     for dim in dims:
-        key = _dimension_key(dim.dimension_name)
+        key = dimension_key(dim.dimension_name)
         if not key or dim.dimension_id is None:
             continue
         indexes = session.exec(
@@ -135,6 +124,29 @@ def load_dimension_weights(session: Session, course_id: int) -> dict[str, float]
     if total <= 0:
         return dict(DEFAULT_WEIGHTS)
     return {key: value / total for key, value in raw.items()}
+
+
+def load_dimension_shares(session: Session, course_id: int) -> dict[str, float] | None:
+    """读取 EvalDimension.weight 作为各维度在综合得分中的占比。
+
+    全维度合计 = 100% 时返回 {key: 0-1}；合计 != 100%（含未配置任何维度）返回 None，
+    由调用方回退默认权重（严格不生效）。
+    """
+    dims = session.exec(
+        select(EvalDimension).where(EvalDimension.course_id == course_id)
+    ).all()
+    if not dims:
+        return None
+    raw: dict[str, float] = {}
+    for dim in dims:
+        key = dimension_key(dim.dimension_name)
+        if key is None:
+            key = custom_dimension_key(dim.dimension_id or 0)
+        raw[key] = raw.get(key, 0.0) + max(0.0, float(dim.weight or 0.0))
+    total = sum(raw.values())
+    if abs(total - 100.0) >= 0.01:
+        return None
+    return {key: value / 100.0 for key, value in raw.items()}
 
 
 def _score_for_rule(
@@ -214,22 +226,25 @@ def _configured_dimension_scores(
 ) -> dict[str, float]:
     """Apply each dimension's EvalIndex weights to its indicator scores.
 
-    EvalIndex weights are validated per dimension by the configuration API, so
-    each configured dimension must total 100%. Invalid or incomplete dimensions
-    fall back independently without disabling other valid configuration.
+    支持任意维度（canonical 内置维度或自定义维度）：
+    - 维度无指标 → 0 分
+    - 指标权重合计 != 100% 或含非法权重 → 内置维度回退基础分、自定义维度 0 分
+    - 有效配置按权重加权；单个指标无数据时回退该维度基础分（内置）或 0（自定义）
     """
     result = dict(base_scores)
     dimensions = session.exec(
         select(EvalDimension).where(EvalDimension.course_id == course_id)
     ).all()
     for dimension in dimensions:
-        key = DIMENSION_NAME_MAP.get(dimension.dimension_name.strip())
+        key = dimension_key(dimension.dimension_name)
         if key is None:
-            continue
+            key = custom_dimension_key(dimension.dimension_id or 0)
+            result.setdefault(key, 0.0)  # 自定义维度无基础分兜底
         indexes = session.exec(
             select(EvalIndex).where(EvalIndex.dimension_id == dimension.dimension_id)
         ).all()
         if not indexes:
+            result[key] = 0.0  # 未添加指标 → 默认 0 分
             continue
         weights = [float(index.weight) for index in indexes]
         if any(not isfinite(weight) or weight < 0 for weight in weights):
@@ -238,6 +253,7 @@ def _configured_dimension_scores(
         if abs(total - 100.0) >= 0.01:
             continue
 
+        fallback = result.get(key, 0.0)
         weighted_score = 0.0
         for index, weight in zip(indexes, weights):
             try:
@@ -245,7 +261,7 @@ def _configured_dimension_scores(
             except (json.JSONDecodeError, TypeError):
                 rule = {}
             indicator_score = _score_for_rule(
-                session, student_id, course_id, rule, result[key], profile, mastery_score
+                session, student_id, course_id, rule, fallback, profile, mastery_score
             )
             weighted_score += weight / total * indicator_score
         result[key] = round(max(0.0, min(100.0, weighted_score)), 1)
@@ -445,17 +461,22 @@ def compute_evaluation(
     class_slopes: list[float] | None = None,
     profile: ProfileScores | None = None,
 ) -> EvaluationResult:
-    """综合评价：四维度加权求和 + 等级。
+    """综合评价：各维度按占比加权求和 + 五档等级。
 
-    四维权重取默认权重（或调用方显式传入）；各维度内的指标权重由
-    _configured_dimension_scores 按 EvalIndex.score_rule 计算。load_dimension_weights
-    仅用于评价配置页展示，不参与评分，避免对维度权重重复归一化。
+    维度占比取 EvalDimension.weight 配置（合计 = 100% 时生效，严格不生效：
+    合计 != 100% 回退默认权重 学业水平 60% / 学习态度 40%）；weights 参数
+    显式传入时优先使用（兼容旧调用/测试）。各维度内的指标权重由
+    _configured_dimension_scores 按 EvalIndex.score_rule 计算。
 
     class_slopes 供批量计算复用（profile.compute_class_slopes 的结果）；
     profile 供调用方传入已算好的画像，避免重复计算。
     二者缺省时由 compute_profile 实时计算。
     """
-    w = {**DEFAULT_WEIGHTS, **(weights or {})}
+    if weights:
+        w = {**DEFAULT_WEIGHTS, **weights}
+    else:
+        shares = load_dimension_shares(session, course_id)
+        w = shares if shares is not None else dict(DEFAULT_WEIGHTS)
 
     if profile is None:
         if class_slopes is None:
@@ -478,17 +499,13 @@ def compute_evaluation(
         session, student_id, course_id, base_scores, profile, mastery_score
     )
 
-    total = (
-        w["academic"] * dim_scores["academic"]
-        + w["attitude"] * dim_scores["attitude"]
-        + w["progress"] * dim_scores["progress"]
-        + w["mastery"] * dim_scores["mastery"]
-    )
+    total = sum(w[key] * dim_scores.get(key, 0.0) for key in w)
     total = max(0.0, min(100.0, total))
     return EvaluationResult(
         total_score=round(total, 1),
         level=score_to_level(total),
         dimensions=dim_scores,
+        dimension_weights=w,
     )
 
 
@@ -499,8 +516,7 @@ def persist_evaluation(
 ) -> int:
     """落库：写入 student_evaluation_result + eval_dimension_score。返回 eval_id。
 
-    若该课程已配置 EvalDimension（命名匹配"学业成绩/学习态度/学习进步/知识掌握"），
-    则把维度分写入 eval_dimension_score；否则只写总分。
+    遍历课程的全部配置维度（含自定义维度）写维度分；未配置维度时只写总分。
     """
     if result is None:
         result = compute_evaluation(session, student_id, course_id, class_slopes=class_slopes)
@@ -515,6 +531,13 @@ def persist_evaluation(
             StudentEvaluationResult.course_id == course_id,
         )
     ).all()
+    old_ids = [o.eval_id for o in old if o.eval_id is not None]
+    if old_ids:
+        # 先清孤儿维度分，避免重算累积重复行
+        for ds in session.exec(
+            select(EvalDimensionScore).where(EvalDimensionScore.eval_id.in_(old_ids))  # type: ignore[arg-type]
+        ).all():
+            session.delete(ds)
     for o in old:
         session.delete(o)
     session.commit()
@@ -529,30 +552,13 @@ def persist_evaluation(
     session.commit()
     session.refresh(er)
 
-    # 维度分映射（名称匹配，兼容「学业成绩」/「学业水平」两种命名）
-    name_to_dim = {d.dimension_name: d for d in dims}
-
-    def _find_dim(*names: str) -> EvalDimension | None:
-        for n in names:
-            d = name_to_dim.get(n)
-            if d:
-                return d
-        return None
-
-    mapping = [
-        (("学业成绩", "学业水平"), result.dimensions["academic"]),
-        (("学习态度",), result.dimensions["attitude"]),
-        (("学习进步",), result.dimensions["progress"]),
-        (("知识掌握",), result.dimensions["mastery"]),
-    ]
-    for names, score in mapping:
-        d = _find_dim(*names)
-        if not d:
-            continue
+    # 维度分落库：遍历全部配置维度（键 = canonical key 或 custom:{id}）
+    for d in dims:
+        key = dimension_key(d.dimension_name) or custom_dimension_key(d.dimension_id or 0)
         session.add(EvalDimensionScore(
             eval_id=er.eval_id,  # type: ignore[arg-type]
             dimension_id=d.dimension_id,
-            dimension_score=score,
+            dimension_score=result.dimensions.get(key, 0.0),
         ))
     session.commit()
     return er.eval_id  # type: ignore[return-value]

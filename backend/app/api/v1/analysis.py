@@ -15,9 +15,11 @@ from app.models import (
     AttendanceSheet, ParticipationSheet,
 )
 from app.services.predict import predict_student_scores
-from app.services.mastery import compute_assignment_accuracy_index, compute_mastery_index_with_fallback
+from app.services.mastery import compute_mastery_index_with_fallback
+from app.services.knowledge_utils import split_knowledge_names
 from app.services.warning import scan_course_warnings, persist_warnings
 from app.services.profile import compute_profile
+from app.services.evaluation import compute_evaluation
 
 router = APIRouter()
 
@@ -84,9 +86,15 @@ def _compute_knowledge_loss_rates(
 
         for index, deduction in enumerate(deductions, start=1):
             raw_name = getattr(detail, f"question{index}_knowledge")
-            point_name = canonical_names.get(str(raw_name or "").strip())
-            if point_name and deduction:
-                loss_by_name[point_name] += deduction
+            names = split_knowledge_names(raw_name)
+            if not names or not deduction:
+                continue
+            # 一格多个知识点（如「传输时延、TCP/UDP协议」）扣分均摊到各知识点
+            per_deduction = deduction / len(names)
+            for name in names:
+                point_name = canonical_names.get(name)
+                if point_name:
+                    loss_by_name[point_name] += per_deduction
 
     if total_possible_score <= 0:
         return {name: 0.0 for name in point_names}
@@ -276,10 +284,16 @@ def get_student_profile(
 
     # 雷达五轴：实时计算，保证上传考勤/课堂参与后立即同步到雷达图
     computed = compute_profile(session, student_id, profile.course_id)
-    comprehensive = (
-        eval_result.total_score if eval_result is not None
-        else profile.total_profile_score
-    )
+    if eval_result is not None:
+        comprehensive = eval_result.total_score
+    else:
+        # 无落库结果时用综合评价新口径（含维度占比配置与回退逻辑），保持雷达口径一致
+        try:
+            comprehensive = compute_evaluation(
+                session, student_id, profile.course_id, profile=computed
+            ).total_score
+        except Exception:
+            comprehensive = profile.total_profile_score
 
     return {
         "viewType": "student",

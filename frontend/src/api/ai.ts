@@ -63,6 +63,23 @@ export interface ReportEvalDimension {
   indexes?: ReportEvalIndex[]
 }
 
+/** 报告核心指标（与后端 report_template._metrics_from_ctx 的 camelCase 键一致） */
+export interface ReportMetrics {
+  studentCount?: number
+  avgScore?: string | number
+  passRate?: string | number
+  excellentRate?: string | number
+  attendanceRate?: string | number
+  warningCount?: string | number
+  scoreMin?: string | number
+  scoreMax?: string | number
+  scoreMedian?: string | number
+  latestExam?: string
+  predictedScore?: string | number
+  evalLevel?: string
+  evalScore?: string | number
+}
+
 export interface ReportResponse {
   summary: string
   conclusion: string
@@ -75,7 +92,7 @@ export interface ReportResponse {
   charts?: ReportCharts
   findings?: string[]
   warnings?: ReportWarningItem[]
-  metrics?: Record<string, string | number>
+  metrics?: ReportMetrics
   evalScheme?: ReportEvalDimension[]
   academicParts?: { name: string; weight?: number; score?: number | null }[]
 }

@@ -12,6 +12,7 @@ import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
 import { computeClassKnowledgeStats } from '@/api/analysis'
 import type { KnowledgeHeatmapResult } from '@/api/analysis'
+import { fetchEvaluationDistribution } from '@/api/evaluations'
 import { useDashboardFilter } from '@/composables/useDashboardFilter'
 import { useUserStore } from '@/stores/user'
 import request from '@/utils/request'
@@ -47,6 +48,17 @@ async function loadHeatmap(courseId?: number, classId?: number) {
     })
     heatmap.value = res.data
   } catch { heatmap.value = { knowledgePoints: [], students: [], data: [] } }
+}
+
+/** 班级成绩等级分布（以综合评价得分为口径） */
+const levelDist = ref<Record<string, number>>({})
+
+async function loadLevelDistribution(courseId?: number, classId?: number) {
+  if (!courseId) { levelDist.value = {}; return }
+  try {
+    const res = await fetchEvaluationDistribution({ courseId, classId })
+    levelDist.value = res.levelDistribution ?? {}
+  } catch { levelDist.value = {} }
 }
 
 const {
@@ -114,19 +126,27 @@ const statCards = computed(() => {
 })
 
 const scorePieOption = computed<EChartsOption>(() => {
-  const kpData = heatmap.value.data ?? []
-  const students = heatmap.value.students ?? []
-  if (!students.length || !kpData.length) return {}
-  const buckets = [0, 0, 0, 0, 0]
-  students.forEach((_: string, sIdx: number) => {
-    const values = kpData.filter((d: number[]) => d[1] === sIdx).map((d: number[]) => d[2]!)
-    const avg = values.length ? values.reduce((a: number, b: number) => a + b, 0) / values.length : 0
-    if (avg >= 90) buckets[4]!++
-    else if (avg >= 80) buckets[3]!++
-    else if (avg >= 70) buckets[2]!++
-    else if (avg >= 60) buckets[1]!++
-    else buckets[0]!++
-  })
+  // 等级分布以综合评价得分为口径（与学生学习质量页一致）
+  const data = (
+    [
+      ['优秀', '优秀 (90+)'],
+      ['良好', '良好 (80-89)'],
+      ['中等', '中等 (70-79)'],
+      ['合格', '合格 (60-69)'],
+      ['不合格', '不合格 (<60)'],
+    ] as const
+  ).map(([key, label]) => ({ name: label, value: levelDist.value[key] ?? 0 }))
+  const total = data.reduce((sum, d) => sum + d.value, 0)
+  if (!total) {
+    return {
+      title: {
+        text: '暂无评价数据',
+        left: 'center',
+        top: 'center',
+        textStyle: { color: '#94a3b8', fontSize: 14 },
+      },
+    }
+  }
   return {
     tooltip: { trigger: 'item', formatter: '{b}: {c}人 ({d}%)' },
     legend: { bottom: 0, textStyle: { color: '#64748b' } },
@@ -138,13 +158,7 @@ const scorePieOption = computed<EChartsOption>(() => {
       center: ['50%', '45%'],
       itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
       label: { show: false },
-      data: [
-        { name: '优秀 (90+)', value: buckets[4] },
-        { name: '良好 (80-89)', value: buckets[3] },
-        { name: '中等 (70-79)', value: buckets[2] },
-        { name: '合格 (60-69)', value: buckets[1] },
-        { name: '不合格 (<60)', value: buckets[0] },
-      ],
+      data,
     }],
   }
 })
@@ -250,6 +264,7 @@ watch(queryCount, async () => {
       loadDashboardData(applied.value.courseId, applied.value.classId),
       loadHeatmap(applied.value.courseId, applied.value.classId),
       loadTrendData(applied.value.courseId, applied.value.classId),
+      loadLevelDistribution(applied.value.courseId, applied.value.classId),
     ])
   }
 })
@@ -261,6 +276,7 @@ onMounted(() => {
       loadDashboardData(applied.value.courseId, applied.value.classId),
       loadHeatmap(applied.value.courseId, applied.value.classId),
       loadTrendData(applied.value.courseId, applied.value.classId),
+      loadLevelDistribution(applied.value.courseId, applied.value.classId),
     ])
   }
 })

@@ -25,7 +25,7 @@ from app.models import (
     StudentProfile,
 )
 from app.services.evaluation import compute_evaluation, persist_evaluation
-from app.services.mastery import compute_student_mastery
+from app.services.mastery import compute_student_mastery, refresh_student_mastery
 from app.services.profile import compute_class_slopes, compute_profile
 from app.services.tag import generate_tags
 from app.services.warning import evaluate_student, persist_warnings
@@ -243,7 +243,7 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
     """刷新课程内所有学生的全部分析数据。
 
     执行顺序：
-      1. 知识点掌握度 → 填充缺失项
+      1. 知识点掌握度 → 答题正确率 + 考试扣分合并写入，缺失项成绩均值兜底
       2. 学情画像     → 三维度 + 标签 + 模块优劣势
       3. 学习质量评价 → 四维度加权 + 等级
       4. 学情预警     → 规则扫描 + 入库
@@ -272,7 +272,9 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
     class_slopes = compute_class_slopes(session, course_id)
 
     for sid in student_ids:
-        # 1. 知识点掌握度（仅填充缺失项）
+        # 1. 知识点掌握度：答题正确率 + 考试扣分折算合并写入，
+        #    其余缺失项用成绩均值兜底填充
+        refresh_student_mastery(session, sid, course_id)
         total_mastery += upsert_knowledge_mastery(session, sid, course_id)
 
         # 2. 学情画像

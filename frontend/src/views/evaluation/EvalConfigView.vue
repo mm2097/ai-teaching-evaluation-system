@@ -3,7 +3,7 @@
   权重：表格外加减，调好后批量保存；弹窗只改名称和数据来源
 -->
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { InfoFilled } from '@element-plus/icons-vue'
 import { fetchCourses } from '@/api/dict'
@@ -16,6 +16,7 @@ import {
   updateIndex,
   deleteIndex,
   saveDimensionWeights,
+  saveDimensionShares,
   patchDimensionAfterIndexChange,
   patchDimensionAfterIndexDelete,
   formatScoreRule,
@@ -23,7 +24,7 @@ import {
   detectRulePreset,
   calcWeightSum,
   isAutoFillOtherRule,
-  SCORE_RULE_PRESETS,
+  SCORE_RULE_PRESET_GROUPS,
   type EvalDimensionItem,
   type EvalIndexItem,
   type ScoreRulePresetValue,
@@ -38,6 +39,54 @@ const dimensions = ref<EvalDimensionItem[]>([])
 const activeDimIds = ref<number[]>([])
 /** 本地权重草稿，确认后批量提交 */
 const draftWeights = ref<Record<number, Record<number, number>>>({})
+/** 各维度综合得分占比草稿，合计 100% 后「保存占比」 */
+const draftShares = ref<Record<number, number>>({})
+const savingShares = ref(false)
+
+const dimensionWeightSum = computed(() =>
+  calcWeightSum(dimensions.value.map((d) => draftShares.value[d.dimensionId] ?? (d.weight ?? 0))),
+)
+const dimensionWeightValid = computed(() => Math.abs(dimensionWeightSum.value - 100) < 0.01)
+const shareDirty = computed(() =>
+  dimensions.value.some((d) => (draftShares.value[d.dimensionId] ?? 0) !== (d.weight ?? 0)),
+)
+
+function syncDraftShares(data: EvalDimensionItem[]): void {
+  const next: Record<number, number> = {}
+  for (const dim of data) {
+    next[dim.dimensionId] = dim.weight ?? 0
+  }
+  draftShares.value = next
+}
+
+async function handleSaveShares(): Promise<void> {
+  if (!dimensionWeightValid.value) {
+    ElMessage.warning(`占比合计 ${dimensionWeightSum.value}%，必须为 100% 才能保存`)
+    return
+  }
+  if (!shareDirty.value) {
+    ElMessage.info('占比未修改')
+    return
+  }
+  if (busy.value) return
+
+  savingShares.value = true
+  busy.value = true
+  try {
+    const res = await saveDimensionShares(dimensions.value, draftShares.value)
+    dimensions.value = dimensions.value.map((d) => ({
+      ...d,
+      weight: draftShares.value[d.dimensionId] ?? 0,
+    }))
+    syncDraftShares(dimensions.value)
+    ElMessage.success(res.dimensionWeightValid ? '占比已保存' : `占比已保存，合计 ${res.dimensionWeightSum}%`)
+  } catch {
+    await loadEvalConfig()
+  } finally {
+    savingShares.value = false
+    busy.value = false
+  }
+}
 
 const dimDialogVisible = ref(false)
 const dimIsEdit = ref(false)
@@ -119,6 +168,7 @@ async function loadEvalConfig(): Promise<void> {
     dimensions.value = data.dimensions
     activeDimIds.value = data.dimensions.map((d) => d.dimensionId)
     syncDraftWeights(data.dimensions)
+    syncDraftShares(data.dimensions)
   } catch {
     dimensions.value = []
     activeDimIds.value = []
@@ -182,7 +232,8 @@ async function saveDimension(): Promise<void> {
       dimensions.value = [...dimensions.value, { ...created, indexes: created.indexes ?? [] }]
       activeDimIds.value = [...activeDimIds.value, created.dimensionId]
       draftWeights.value[created.dimensionId] = {}
-      ElMessage.success('维度已添加')
+      draftShares.value[created.dimensionId] = created.weight ?? 0
+      ElMessage.success('维度已添加，请在占比区设置其在综合得分中的占比')
     }
     dimDialogVisible.value = false
   } catch {
@@ -205,6 +256,7 @@ async function handleDeleteDimension(dim: EvalDimensionItem): Promise<void> {
     dimensions.value = dimensions.value.filter((d) => d.dimensionId !== dim.dimensionId)
     activeDimIds.value = activeDimIds.value.filter((id) => id !== dim.dimensionId)
     delete draftWeights.value[dim.dimensionId]
+    delete draftShares.value[dim.dimensionId]
     ElMessage.success('已删除')
   } catch {
     /* 取消或失败 */
@@ -474,6 +526,52 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
       </div>
     </div>
 
+    <div class="content-card">
+      <div class="table-toolbar">
+        <span class="share-title">各维度在综合得分中的占比</span>
+        <el-tag
+          :type="dimensionWeightValid ? 'success' : dimensionWeightSum > 100 ? 'danger' : 'warning'"
+          size="small"
+        >
+          合计 {{ dimensionWeightSum }}%
+        </el-tag>
+        <el-button
+          type="success"
+          size="small"
+          :loading="savingShares"
+          :disabled="busy || !shareDirty || !dimensionWeightValid"
+          @click="handleSaveShares"
+        >
+          保存占比
+        </el-button>
+        <el-button v-if="shareDirty" size="small" :disabled="busy" @click="syncDraftShares(dimensions)">
+          撤销
+        </el-button>
+      </div>
+      <p class="hint">
+        各维度按占比加权得出综合得分，合计必须为 100% 才会生效；否则按默认占比（学业水平 60 / 学习态度 40）计算。
+      </p>
+      <el-table :data="dimensions" size="small" border empty-text="暂无维度">
+        <el-table-column prop="dimensionName" label="维度" min-width="180" />
+        <el-table-column label="占比 (%)" width="200" align="center">
+          <template #default="{ row }">
+            <el-input-number
+              :model-value="draftShares[row.dimensionId] ?? 0"
+              :min="0"
+              :max="100"
+              :step="5"
+              size="small"
+              controls-position="right"
+              :disabled="busy"
+              @update:model-value="(v: number | undefined) => {
+                if (v !== undefined) draftShares[row.dimensionId] = v
+              }"
+            />
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <el-dialog
       v-model="dimDialogVisible"
       :title="dimIsEdit ? '编辑维度' : '新增维度'"
@@ -508,7 +606,9 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
         </el-form-item>
         <el-form-item label="数据来源">
           <el-select v-model="indexForm.rulePreset" style="width: 100%">
-            <el-option v-for="o in SCORE_RULE_PRESETS" :key="o.value" :label="o.label" :value="o.value" />
+            <el-option-group v-for="g in SCORE_RULE_PRESET_GROUPS" :key="g.label" :label="g.label">
+              <el-option v-for="o in g.options" :key="o.value" :label="o.label" :value="o.value" />
+            </el-option-group>
           </el-select>
         </el-form-item>
         <p v-if="!indexIsEdit" class="dialog-tip">权重请在表格中设置，完成后点「保存权重」。</p>
@@ -526,6 +626,10 @@ function weightTagType(dim: EvalDimensionItem): 'success' | 'info' | 'danger' {
   margin: 12px 0 0;
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.share-title {
+  font-weight: 600;
 }
 
 .dialog-tip {

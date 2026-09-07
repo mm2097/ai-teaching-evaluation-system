@@ -235,6 +235,7 @@ def _dimension_to_dict(d: EvalDimension, indexes: list[EvalIndex]) -> dict:
         "dimensionName": d.dimension_name,
         "description": d.description,
         "sortNum": d.sort_num,
+        "weight": d.weight or 0,  # 维度在综合得分中的占比（%）
         "indexes": idx_list,
         "weightSum": weight_sum,
         "weightValid": abs(weight_sum - 100.0) < 0.01,
@@ -277,10 +278,15 @@ def get_eval_config(
         ).all()
         dim_list.append(_dimension_to_dict(d, list(indexes)))
 
+    dim_weight_sum = round(
+        sum(max(0.0, float(d.weight or 0)) for d in dimensions), 1
+    )
     return {
         "courseId": course_id,
         "courseName": course.course_name,
         "dimensions": dim_list,
+        "dimensionWeightSum": dim_weight_sum,
+        "dimensionWeightValid": abs(dim_weight_sum - 100.0) < 0.01,
     }
 
 
@@ -294,6 +300,7 @@ def create_dimension(
     dimension_name: str = Query(..., max_length=32, description="维度名称"),
     description: str | None = Query(default=None, max_length=255),
     sort_num: int = Query(default=0, description="排序号"),
+    weight: float = Query(default=0, ge=0, le=100, description="维度在综合得分中的占比（%）"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -307,22 +314,28 @@ def create_dimension(
 
     _description = _unwrap(description, None)
     _sort_num = _unwrap(sort_num, 0)
+    _weight = _unwrap(weight, 0)
 
     dim = EvalDimension(
         course_id=course_id,
         dimension_name=dimension_name,
         description=_description,
         sort_num=_sort_num,
+        weight=_weight,
     )
     session.add(dim)
     session.commit()
     session.refresh(dim)
+
+    # 新增维度影响"各维度得分"展示与占比合计，触发重算
+    _schedule_evaluation_refresh(course_id)
 
     return {
         "dimensionId": dim.dimension_id,
         "dimensionName": dim.dimension_name,
         "description": dim.description,
         "sortNum": dim.sort_num,
+        "weight": dim.weight or 0,
         "courseId": course_id,
         "indexes": [],
         "weightSum": 0,
@@ -336,6 +349,7 @@ def update_dimension(
     dimension_name: str | None = Query(default=None, max_length=32),
     description: str | None = Query(default=None, max_length=255),
     sort_num: int | None = Query(default=None),
+    weight: float | None = Query(default=None, ge=0, le=100, description="维度在综合得分中的占比（%）"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -350,6 +364,23 @@ def update_dimension(
     _dimension_name = _unwrap(dimension_name, None)
     _description = _unwrap(description, None)
     _sort_num = _unwrap(sort_num, None)
+    _weight = _unwrap(weight, None)
+
+    # 占比预校验：课程维度占比合计（排除自身）> 100 拒绝（Eval.Config.Weight）
+    if _weight is not None:
+        others = session.exec(
+            select(EvalDimension).where(
+                EvalDimension.course_id == dim.course_id,
+                EvalDimension.dimension_id != dimension_id,
+            )
+        ).all()
+        others_sum = round(sum(max(0.0, float(d.weight or 0)) for d in others), 1)
+        if others_sum + _weight > 100.0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"各维度占比之和为 {round(others_sum + _weight, 1)}%，超过 100%，请调整",
+            )
+        dim.weight = _weight
 
     if _dimension_name is not None:
         dim.dimension_name = _dimension_name
@@ -367,7 +398,7 @@ def update_dimension(
         select(EvalIndex).where(EvalIndex.dimension_id == dim.dimension_id)
     ).all()
 
-    # 维度改名会影响得分映射（名称需匹配 学业成绩/学习态度/学习进步/知识掌握），重算评价
+    # 维度改名/占比变化影响得分映射与综合得分，重算评价
     _schedule_evaluation_refresh(dim.course_id)
 
     return _dimension_to_dict(dim, list(indexes))

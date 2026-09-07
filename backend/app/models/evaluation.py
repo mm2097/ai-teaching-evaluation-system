@@ -16,6 +16,7 @@ class EvalDimension(SQLModel, table=True):
     dimension_name: str = Field(max_length=32)
     description: Optional[str] = Field(default=None, max_length=255)
     sort_num: int = Field(default=0)
+    weight: float = Field(default=0.0)  # 维度在综合得分中的占比（%），全维度合计 100% 时生效
     create_time: datetime = Field(default_factory=datetime.now)
     update_time: datetime = Field(default_factory=datetime.now)
 

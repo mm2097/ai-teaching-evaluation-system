@@ -75,6 +75,7 @@ class QuestionSchema(BaseModel):
 
     type: QuestionType
     knowledge_point: str = Field(..., description="题目所属知识点")
+    chapter: str = Field(default="", description="题目所属章节/单元")
     difficulty: Difficulty = Field(default="medium")
     stem: str = Field(..., min_length=4, description="题干")
     options: list[OptionSchema] | None = Field(

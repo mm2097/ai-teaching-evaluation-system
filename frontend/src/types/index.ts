@@ -374,6 +374,8 @@ export interface QuizQuestion {
   explanation?: string
   difficulty: DifficultyLevel
   knowledgePoint: string
+  /** 题目所属章节/单元 */
+  chapter?: string
   score: number
   status?: ExerciseStatus
   source?: ExerciseSource

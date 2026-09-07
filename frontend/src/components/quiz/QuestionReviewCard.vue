@@ -86,6 +86,9 @@ const displayAnswer = computed(() =>
       <el-tag v-if="question.knowledgePoint" size="small" type="info" effect="plain">
         {{ question.knowledgePoint }}
       </el-tag>
+      <el-tag v-if="question.chapter" size="small" type="warning" effect="plain">
+        {{ question.chapter }}
+      </el-tag>
       <span class="q-status" :style="{ color: statusColor }">{{ statusLabel }}</span>
     </div>
 

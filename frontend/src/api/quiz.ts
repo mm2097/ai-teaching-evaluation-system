@@ -203,7 +203,7 @@ async function postWithGenerateRetry<T>(url: string, params: GenerateQuizParams)
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await request.post(url, payload, {
-        timeout: 70000,
+        timeout: 180000,
         silentError: attempt < maxAttempts,
       } as Parameters<typeof request.post>[2])
       return res.data as T

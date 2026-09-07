@@ -1,16 +1,21 @@
 """AI 出题主逻辑。
 
 流程：
-    拼装 prompt → 调 LLM → 三道防线校验 → 去重 → 返回结构化题目
+    拼装 prompt → 调 LLM → 三道防线校验 → 去重 → **严格校准**（裁剪超额、补足不足）→ 返回
 
 三道防线（详见设计文档亮点 3）：
     1. JSON 解析（含 ```json``` 代码块二次解析）
     2. Pydantic Schema 强校验
     3. 业务规则校验（答案合法、选项不重复、题干不重复、知识点匹配）
+
+严格校准（亮点：保证题型分布与请求一致）：
+    - 对超过请求数量的题型做裁剪；
+    - 对不足的题型，单独再调一次 LLM 针对性补出题，直到补满或达单轮上限。
 """
 import json
 import re
 import time
+from collections import defaultdict
 
 from loguru import logger
 from pydantic import ValidationError
@@ -25,6 +30,16 @@ from .schemas import (
     QuestionSchema,
 )
 
+# 题型 → 中文标签（用于补题 prompt 说明）
+_TYPE_LABELS = {
+    "single_choice": "单选",
+    "multi_choice": "多选",
+    "judge": "判断",
+    "fill_blank": "填空",
+    "short_answer": "简答",
+}
+_ALL_TYPES = ("single_choice", "multi_choice", "judge", "fill_blank", "short_answer")
+
 
 def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     """出题主入口。
@@ -32,6 +47,41 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     参数：``req`` 出题请求
     返回：``GenerateResponse`` 含合格题目与元信息
     异常：LLM 失败抛 ``RuntimeError``，由 main.py 转 HTTP 503
+    """
+    start = time.perf_counter()
+    client = get_llm_client()
+
+    # 首轮生成
+    main_qs, main_meta = _generate_core(req, client)
+    # 严格校准：裁剪超额 + 补足不足（保证题型分布与请求一致）
+    final_qs, extra_metas = _calibrate_counts(req, client, main_qs)
+
+    metas = [main_meta] + extra_metas
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+
+    meta = GenerateMeta(
+        model=main_meta.model,
+        elapsed_ms=elapsed_ms,
+        input_tokens=sum(m.input_tokens for m in metas),
+        output_tokens=sum(m.output_tokens for m in metas),
+        success_count=len(final_qs),
+        filtered_count=sum(m.filtered_count for m in metas),
+        retry_count=sum(m.retry_count for m in metas),
+    )
+
+    logger.info(
+        f"出题完成 合格={len(final_qs)} 过滤={meta.filtered_count} "
+        f"耗时={elapsed_ms}ms tokens={meta.input_tokens}/{meta.output_tokens}"
+    )
+
+    return GenerateResponse(questions=final_qs, meta=meta)
+
+
+# ===== 单轮生成（LLM 调用 + 三道防线）=====
+def _generate_core(req: GenerateRequest, client) -> tuple[list[QuestionSchema], GenerateMeta]:
+    """执行一次完整生成：拼 prompt → 调 LLM → 三道防线校验 → 去重。
+
+    返回 (合格题目列表, 本次元信息)。
     """
     start = time.perf_counter()
 
@@ -51,7 +101,6 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     )
 
     # ---------- 调 LLM ----------
-    client = get_llm_client()
     llm_result = client.chat_completion(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=full_user,
@@ -66,7 +115,7 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     if not isinstance(raw_questions, dict) or "questions" not in raw_questions:
         raise RuntimeError("LLM 输出 JSON 结构错误，缺少 questions 字段")
 
-    # 防线 2：Pydantic Schema 校验（逐题，丢弃不合格的）
+    # 防线 2：Pydantic Schema 强校验（逐题，丢弃不合格的）
     schema_passed: list[QuestionSchema] = []
     schema_failed = 0
     for raw in raw_questions["questions"]:
@@ -83,11 +132,6 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     filtered_count = schema_failed + business_filtered
 
-    logger.info(
-        f"出题完成 合格={len(valid_questions)} 过滤={filtered_count} "
-        f"耗时={elapsed_ms}ms tokens={llm_result.input_tokens}/{llm_result.output_tokens}"
-    )
-
     meta = GenerateMeta(
         model=llm_result.model,
         elapsed_ms=elapsed_ms,
@@ -97,7 +141,89 @@ def generate_exercises(req: GenerateRequest) -> GenerateResponse:
         filtered_count=filtered_count,
         retry_count=llm_result.retry_count,
     )
-    return GenerateResponse(questions=valid_questions, meta=meta)
+    return valid_questions, meta
+
+
+# ===== 严格校准：保证题型分布与请求一致 =====
+def _calibrate_counts(
+    req: GenerateRequest,
+    client,
+    valid_questions: list[QuestionSchema],
+) -> tuple[list[QuestionSchema], list[GenerateMeta]]:
+    """按请求的各题型数量校准。
+
+    - 对超过请求数量的题型做裁剪（保留前 target 道）；
+    - 对不足的题型，单独再调一次 LLM 针对性补出题，直到补满或本轮调用失败为止。
+
+    返回 (最终题目列表, 额外补题轮次的元信息列表)。
+    """
+    qt = req.question_types
+    targets = {
+        "single_choice": qt.single_choice,
+        "multi_choice": qt.multi_choice,
+        "judge": qt.judge,
+        "fill_blank": qt.fill_blank,
+        "short_answer": qt.short_answer,
+    }
+
+    by_type: dict[str, list[QuestionSchema]] = defaultdict(list)
+    for q in valid_questions:
+        by_type[q.type].append(q)
+
+    final: list[QuestionSchema] = []
+    seen_stems: set[str] = set()
+    short: dict[str, int] = {}
+
+    # 先做裁剪，同时统计仍不足的题型
+    for t, target in targets.items():
+        if target <= 0:
+            continue
+        have = by_type.get(t, [])
+        keep = have[:target]  # 裁剪超额，保留前 target
+        for q in keep:
+            seen_stems.add(_normalize(q.stem))
+        final.extend(keep)
+        if len(have) < target:
+            short[t] = target - len(have)
+
+    # 补出题：对仍不足的题型，针对性再生成一轮
+    extra_metas: list[GenerateMeta] = []
+    for t, need in short.items():
+        topup_req = _build_topup_req(req, t, need)
+        try:
+            new_qs, meta = _generate_core(topup_req, client)
+        except RuntimeError as e:
+            # 补题失败不拖垮整体：记录日志，接受该题型略少
+            logger.warning(f"[校准] 题型 {t} 补题失败，接受 {need} 道缺失: {e}")
+            continue
+        extra_metas.append(meta)
+        for q in new_qs:
+            stem_key = _normalize(q.stem)
+            if stem_key in seen_stems:  # 与已有题目重复，丢弃
+                continue
+            seen_stems.add(stem_key)
+            final.append(q)
+
+    return final, extra_metas
+
+
+def _build_topup_req(req: GenerateRequest, type_: str, count: int) -> GenerateRequest:
+    """构造"只补某题型 count 道"的请求（其余题型为 0，去掉 RAG/掌握度参考以强制出新题）。"""
+    types = {t: 0 for t in _ALL_TYPES}
+    types[type_] = count
+    new_types = req.question_types.model_copy(update=types)
+    label = _TYPE_LABELS.get(type_, type_)
+    extra = f"此轮请只生成 {count} 道{label}题，其它题型一律不输出。"
+    if req.extra_requirements:
+        extra = f"{req.extra_requirements}；{extra}"
+    return req.model_copy(
+        update={
+            "question_types": new_types,
+            "reference_questions": None,
+            "weak_points": None,
+            "extra_requirements": extra,
+        }
+    )
 
 
 # ===== 防线 1：JSON 解析 =====

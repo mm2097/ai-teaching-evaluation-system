@@ -16,6 +16,10 @@ const props = defineProps<{
 
 const expanded = ref<Set<string>>(new Set())
 
+const visibleSteps = computed(() =>
+  props.running ? props.steps : props.steps.filter((step) => step.toolCalls.length > 0),
+)
+
 function toggle(id: string): void {
   if (expanded.value.has(id)) {
     expanded.value.delete(id)
@@ -25,12 +29,12 @@ function toggle(id: string): void {
 }
 
 const totalTools = computed(() =>
-  props.steps.reduce((sum, s) => sum + s.toolCalls.length, 0),
+  visibleSteps.value.reduce((sum, s) => sum + s.toolCalls.length, 0),
 )
 
 const doneTools = computed(
   () =>
-    props.steps.reduce(
+    visibleSteps.value.reduce(
       (sum, s) => sum + s.toolCalls.filter((c) => c.status !== 'running').length,
       0,
     ),
@@ -98,18 +102,18 @@ function summarize(name: string, result: unknown): string {
       <el-icon v-else color="#10b981"><Tools /></el-icon>
       <span v-if="running" class="process-title running">AI 正在诊断…</span>
       <span v-else-if="error" class="process-title error">诊断失败</span>
-      <span v-else-if="steps.length" class="process-title done">
+      <span v-else-if="visibleSteps.length" class="process-title done">
         诊断完成，共调用 {{ totalTools }} 个工具
       </span>
       <span v-else class="process-title idle">等待开始诊断</span>
-      <span v-if="steps.length" class="process-count">{{ doneTools }}/{{ totalTools }}</span>
+      <span v-if="visibleSteps.length" class="process-count">{{ doneTools }}/{{ totalTools }}</span>
     </div>
 
-    <div v-if="!steps.length && !running" class="process-empty">
+    <div v-if="!visibleSteps.length && !running" class="process-empty">
       选择分析对象与维度，点击「开始 AI 分析」，系统将自动调用学情数据生成诊断报告。
     </div>
 
-    <div v-for="s in steps" :key="s.step" class="step">
+    <div v-for="s in visibleSteps" :key="s.step" class="step">
       <div class="step-no">step{{ s.step }}</div>
       <div class="step-body">
         <div

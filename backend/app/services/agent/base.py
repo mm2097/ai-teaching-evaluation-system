@@ -18,7 +18,7 @@ from typing import Iterator
 from loguru import logger
 
 from app.services.agent.llm_proxy import FCResult, get_llm_proxy
-from app.services.agent.memory import Conversation, get_or_create_session
+from app.services.agent.memory import Conversation, get_or_create_session, persist_session
 from app.services.agent.prompts import (
     DIAGNOSIS_SYSTEM_PROMPT,
     EXAM_SYSTEM_PROMPT,
@@ -155,12 +155,15 @@ def run_agent(
 
     # 会话记忆
     sid = session_id or f"u{user_id}_c{course_id or 0}_default"
-    conv = get_or_create_session(sid, user_id, course_id, student_id)
+    conversation_db = session_factory()
+    conv = get_or_create_session(
+        sid, user_id, course_id, student_id, db_session=conversation_db,
+    )
     conv.add_user(user_message)
 
     # 组装 messages
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
-    messages.extend(conv.recent_messages(max_rounds=6))
+    messages.extend(conv.recent_messages(max_rounds=5))
 
     steps: list[AgentStep] = []
     total_tokens = 0
@@ -276,6 +279,11 @@ def run_agent(
             ] if False else [],  # tool_calls 已在 recent_messages 中展开，这里简化
         )
 
+    try:
+        persist_session(conv, conversation_db)
+    finally:
+        conversation_db.close()
+
     total_ms = int((time.perf_counter() - start) * 1000)
     logger.info(
         f"Agent 完成 steps={len(steps)} tokens={total_tokens} "
@@ -349,11 +357,14 @@ def run_agent_stream(
     system_prompt, tool_schemas = _resolve_agent_setup(agent_type, registry, allow_mutation)
 
     sid = session_id or f"u{user_id}_c{course_id or 0}_default"
-    conv = get_or_create_session(sid, user_id, course_id, student_id)
+    conversation_db = session_factory()
+    conv = get_or_create_session(
+        sid, user_id, course_id, student_id, db_session=conversation_db,
+    )
     conv.add_user(user_message)
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
-    messages.extend(conv.recent_messages(max_rounds=6))
+    messages.extend(conv.recent_messages(max_rounds=5))
 
     total_tokens = 0
     truncated = False
@@ -423,11 +434,16 @@ def run_agent_stream(
 
     except Exception as e:  # noqa: BLE001
         logger.exception(f"Agent 流式异常：{e}")
+        persist_session(conv, conversation_db)
+        conversation_db.close()
         yield {"type": "error", "message": str(e)}
         return
 
     if final_answer:
         conv.add_assistant(content=final_answer)
+
+    persist_session(conv, conversation_db)
+    conversation_db.close()
 
     yield {
         "type": "done",

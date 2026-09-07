@@ -3,10 +3,11 @@
   老师选班级或学生 → 点开始 → SSE 流式渲染诊断过程 + 结构化报告 → 可追问/导出/干预
 -->
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { MagicStick } from '@element-plus/icons-vue'
+import { Clock, MagicStick } from '@element-plus/icons-vue'
+import { jsonrepair } from 'jsonrepair'
 import AnalysisFilterBar from '@/components/common/AnalysisFilterBar.vue'
 import DiagnosisProcess from '@/components/analysis/DiagnosisProcess.vue'
 import DiagnosisReportCard from '@/components/analysis/DiagnosisReport.vue'
@@ -16,8 +17,17 @@ import {
   streamDiagnosis,
   saveDiagnosisReport,
 } from '@/api/analysis'
-import { streamAgentChat } from '@/api/agent'
+import { clearAgentSession, streamAgentChat } from '@/api/agent'
 import { downloadReportFile } from '@/api/report'
+import { useUserStore } from '@/stores/user'
+import {
+  loadDiagnosisCache,
+  listDiagnosisCaches,
+  removeDiagnosisCache,
+  saveDiagnosisCache,
+  type DiagnosisCacheEntry,
+  type DiagnosisAskMessage,
+} from '@/utils/diagnosisCache'
 import type {
   DiagnosisReport,
   DiagnosisStep,
@@ -26,6 +36,7 @@ import type {
 } from '@/types'
 
 const router = useRouter()
+const userStore = useUserStore()
 const scope = useAnalysisScope('class')
 const {
   targetType,
@@ -38,6 +49,7 @@ const {
   semesterOptions,
   classOptions,
   courseOptions,
+  loadOptions,
   allowedTargetTypes,
   showClassFilter,
   showCourseFilter,
@@ -61,8 +73,13 @@ const rawContent = ref<string>('') // 兜底用原始文本
 // 追问
 const askVisible = ref(false)
 const askInput = ref('')
-const askMessages = ref<{ role: 'user' | 'assistant'; content: string }[]>([])
+const askMessages = ref<DiagnosisAskMessage[]>([])
 const asking = ref(false)
+const cachedAt = ref<number | null>(null)
+const historyVisible = ref(false)
+const historyEntries = ref<DiagnosisCacheEntry[]>(listDiagnosisCaches())
+const reportSectionRef = ref<HTMLElement>()
+const activeConversationKey = ref<string | null>(null)
 
 const diagnosisScope = computed<'class' | 'student'>(() =>
   targetType.value === 'student' ? 'student' : 'class',
@@ -72,25 +89,108 @@ const studentId = computed(() =>
   diagnosisScope.value === 'student' ? targetId.value : undefined,
 )
 
-const sessionId = computed(() => `diagnosis_c${courseId.value ?? 0}`)
+const cacheKey = computed(() => {
+  const userId = userStore.userInfo?.id
+  if (!userId || !courseId.value) return null
+  if (diagnosisScope.value === 'student' && !studentId.value) return null
+  const target = diagnosisScope.value === 'student'
+    ? `student_${studentId.value}`
+    : `class_${classId.value ?? targetId.value ?? 0}`
+  return `u${userId}:c${courseId.value}:${target}`
+})
+
+const conversationKey = computed(() => activeConversationKey.value ?? cacheKey.value)
+const sessionId = computed(() => `diagnosis_${conversationKey.value?.replace(/:/g, '_') ?? 'pending'}`)
+
+const cachedTimeText = computed(() => {
+  if (!cachedAt.value) return ''
+  return new Date(cachedAt.value).toLocaleString('zh-CN', { hour12: false })
+})
+
+const cachedRoundCount = computed(() => Math.floor(askMessages.value.length / 2))
+
+const currentCourseName = computed(() =>
+  courseOptions.value.find((option) => option.value === courseId.value)?.label
+  ?? `课程 ${courseId.value ?? '-'}`,
+)
+
+const currentSemesterName = computed(() =>
+  semesterOptions.value.find((option) => option.value === semesterId.value)?.label
+  ?? `学期 ${semesterId.value}`,
+)
+
+const currentClassName = computed(() =>
+  classOptions.value.find((option) => option.value === classId.value)?.label
+  ?? `班级 ${classId.value ?? '-'}`,
+)
+
+const currentDimensionLabels = computed(() =>
+  dimensions.value.map((key) =>
+    dimensionOptions.find((option) => option.key === key)?.label ?? key,
+  ),
+)
+
+const currentTargetName = computed(() => {
+  if (diagnosisScope.value === 'student') {
+    const student = studentList.value.find((item) => item.id === studentId.value)
+    return student ? `${student.studentName}（${student.studentNo}）` : `学生 ${studentId.value ?? '-'}`
+  }
+  return classOptions.value.find((option) => option.value === classId.value)?.label
+    ?? `班级 ${classId.value ?? targetId.value ?? '-'}`
+})
 
 const canStart = computed(
   () => !running.value && !!courseId.value && (diagnosisScope.value === 'class' || !!studentId.value),
 )
 
-/** 从 LLM 输出中提取诊断 JSON。
- * LLM 偶发在 JSON 前后附带说明文字（如"我已收集数据...{...}"），
- * 用正则匹配第一个 { 到最后一个 } 的片段再做 JSON.parse，提高容错。 */
+function normalizeDiagnosis(value: unknown): DiagnosisReport | null {
+  if (!value || typeof value !== 'object') return null
+  const source = value as Partial<DiagnosisReport>
+  if (source.scope !== 'class' && source.scope !== 'student') return null
+  if (!source.overall || typeof source.overall !== 'object') return null
+
+  const score = Number(source.overall.score)
+  const findings = source.findings && typeof source.findings === 'object'
+    ? source.findings
+    : { strengths: [], risks: [] }
+  const meta = source.meta && typeof source.meta === 'object'
+    ? source.meta
+    : { source: 'llm', toolsUsed: [] }
+
+  return {
+    ...source,
+    scope: source.scope,
+    overall: {
+      grade: String(source.overall.grade ?? '-'),
+      score: Number.isFinite(score) ? score : 0,
+      summary: String(source.overall.summary ?? '当前数据不足，暂无概览结论。'),
+    },
+    findings: {
+      strengths: Array.isArray(findings.strengths) ? findings.strengths : [],
+      risks: Array.isArray(findings.risks) ? findings.risks : [],
+    },
+    causes: Array.isArray(source.causes) ? source.causes : [],
+    suggestions: Array.isArray(source.suggestions) ? source.suggestions : [],
+    radar: source.radar && typeof source.radar === 'object' ? source.radar : {},
+    meta: {
+      source: String(meta.source ?? 'llm'),
+      toolsUsed: Array.isArray(meta.toolsUsed) ? meta.toolsUsed : [],
+    },
+  }
+}
+
+/** 从 LLM 输出中提取诊断 JSON，并修复概览模式下常见的格式瑕疵。 */
 function parseDiagnosis(content: string): DiagnosisReport | null {
   if (!content) return null
-  // 先尝试整体解析（理想情况：纯 JSON）
   const tryParse = (s: string): DiagnosisReport | null => {
     try {
-      const obj = JSON.parse(s) as DiagnosisReport
-      if (obj && obj.scope && obj.overall) return obj
-      return null
+      return normalizeDiagnosis(JSON.parse(s))
     } catch {
-      return null
+      try {
+        return normalizeDiagnosis(JSON.parse(jsonrepair(s)))
+      } catch {
+        return null
+      }
     }
   }
   // 去 markdown 代码块包裹
@@ -119,15 +219,158 @@ function resetState(): void {
   rawContent.value = ''
 }
 
+function resetDisplay(): void {
+  resetState()
+  askVisible.value = false
+  askInput.value = ''
+  askMessages.value = []
+  cachedAt.value = null
+}
+
+function scrollToReport(): void {
+  nextTick(() => {
+    reportSectionRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+}
+
+function persistCurrentState(): void {
+  if (!conversationKey.value || (!report.value && !rawContent.value)) return
+  const savedAt = Date.now()
+  const saved = saveDiagnosisCache({
+    key: conversationKey.value,
+    savedAt,
+    semesterId: semesterId.value,
+    courseId: courseId.value,
+    classId: classId.value,
+    studentId: studentId.value,
+    courseName: currentCourseName.value,
+    targetName: currentTargetName.value,
+    scope: diagnosisScope.value,
+    semesterName: currentSemesterName.value,
+    className: currentClassName.value,
+    dimensionLabels: currentDimensionLabels.value,
+    report: report.value,
+    rawContent: rawContent.value,
+    processSteps: processSteps.value,
+    askMessages: askMessages.value,
+    dimensions: dimensions.value,
+    depth: depth.value,
+  })
+  cachedAt.value = saved ? savedAt : null
+  if (historyVisible.value) historyEntries.value = listDiagnosisCaches()
+}
+
+function restoreCachedState(showMessage = false, requestedKey?: string): void {
+  const key = requestedKey ?? conversationKey.value
+  if (!key || running.value) return
+  const cached = loadDiagnosisCache(key)
+  if (!cached) {
+    resetDisplay()
+    return
+  }
+  const restoredReport = cached.report ?? parseDiagnosis(cached.rawContent)
+  report.value = restoredReport
+  rawContent.value = restoredReport ? '' : cached.rawContent
+  processSteps.value = cached.processSteps.map((step) => ({
+    ...step,
+    status: 'done',
+    toolCalls: step.toolCalls.map((call) => ({
+      ...call,
+      status: call.status === 'error' ? 'error' : 'done',
+    })),
+  }))
+  processError.value = ''
+  askMessages.value = cached.askMessages
+  askVisible.value = cached.askMessages.length > 0
+  dimensions.value = cached.dimensions
+  depth.value = cached.depth
+  cachedAt.value = cached.savedAt
+  if (showMessage) ElMessage.success('已恢复最近一次 AI 分析结果')
+}
+
+async function clearCurrentCache(): Promise<void> {
+  if (conversationKey.value) removeDiagnosisCache(conversationKey.value)
+  await clearAgentSession(sessionId.value)
+  activeConversationKey.value = null
+  resetDisplay()
+  historyVisible.value = false
+  ElMessage.success('已清除当前分析记录')
+}
+
+function openHistory(): void {
+  historyEntries.value = listDiagnosisCaches()
+  historyVisible.value = true
+}
+
+async function removeHistoryEntry(entry: DiagnosisCacheEntry): Promise<void> {
+  removeDiagnosisCache(entry.key)
+  historyEntries.value = listDiagnosisCaches()
+  if (entry.key === conversationKey.value) {
+    await clearAgentSession(sessionId.value)
+    activeConversationKey.value = null
+    resetDisplay()
+  }
+}
+
+function historyTargetText(entry: DiagnosisCacheEntry): string {
+  if (entry.courseName && entry.targetName) return `${entry.courseName} · ${entry.targetName}`
+  const match = entry.key.match(/:c(\d+):(student|class)_(\d+)$/)
+  if (!match) return '历史分析记录'
+  return `课程 ${match[1]} · ${match[2] === 'student' ? '学生' : '班级'} ${match[3]}`
+}
+
+function historySavedTime(entry: DiagnosisCacheEntry): string {
+  return new Date(entry.savedAt).toLocaleString('zh-CN', { hour12: false })
+}
+
+function historyRoundCount(entry: DiagnosisCacheEntry): number {
+  return Math.floor(entry.askMessages.length / 2)
+}
+
+function historyDimensionText(entry: DiagnosisCacheEntry): string {
+  if (entry.dimensionLabels?.length) return entry.dimensionLabels.join('、')
+  return entry.dimensions
+    .map((key) => dimensionOptions.find((option) => option.key === key)?.label ?? key)
+    .join('、')
+}
+
+async function restoreHistoryEntry(entry: DiagnosisCacheEntry): Promise<void> {
+  activeConversationKey.value = entry.key
+  historyVisible.value = false
+  if (entry.semesterId) semesterId.value = entry.semesterId
+  if (entry.courseId) courseId.value = entry.courseId
+  if (entry.classId) classId.value = entry.classId
+  if (entry.scope) targetType.value = entry.scope
+  if (entry.studentId) targetId.value = entry.studentId
+  dimensions.value = entry.dimensions
+  depth.value = entry.depth
+  await loadOptions(true)
+  if (entry.classId) classId.value = entry.classId
+  if (entry.studentId) targetId.value = entry.studentId
+  await nextTick()
+  restoreCachedState(true, entry.key)
+  scrollToReport()
+}
+
+watch(cacheKey, (next, previous) => {
+  if (!activeConversationKey.value && next && next !== previous) restoreCachedState()
+}, { immediate: true })
+
 async function startDiagnosis(): Promise<void> {
   if (!canStart.value) return
+  activeConversationKey.value = null
   resetState()
+  askVisible.value = false
+  askInput.value = ''
+  askMessages.value = []
+  cachedAt.value = null
   running.value = true
 
   let currentStep = 0
   let toolCallCounter = 0
 
   try {
+    await clearAgentSession(sessionId.value)
     const stream = streamDiagnosis({
       courseId: courseId.value!,
       studentId: studentId.value,
@@ -199,6 +442,8 @@ async function startDiagnosis(): Promise<void> {
     if (!report.value && !processError.value && !rawContent.value) {
       processError.value = '诊断未完成（已达最大推理步数），可重试或缩小维度'
     }
+    if (report.value || rawContent.value) persistCurrentState()
+    if (report.value || rawContent.value) scrollToReport()
   } catch (err) {
     const msg = err instanceof Error ? err.message : '诊断失败'
     processError.value = msg
@@ -233,6 +478,7 @@ async function sendAsk(): Promise<void> {
     const stream = streamAgentChat({
       agentType: 'qa',
       courseId: courseId.value,
+      studentId: studentId.value,
       message: text,
       sessionId: sessionId.value, // 同诊断 sessionId，继承文本上下文
     })
@@ -253,6 +499,7 @@ async function sendAsk(): Promise<void> {
     assistantMsg.content = err instanceof Error ? err.message : '追问失败'
   } finally {
     asking.value = false
+    persistCurrentState()
   }
 }
 
@@ -306,11 +553,10 @@ async function onAct(
 
 // ============ 重置（切课程时） ============
 function onFilterQuery(): void {
-  // AnalysisFilterBar 的 @query 用于重置诊断区
   if (!running.value) {
-    resetState()
-    askVisible.value = false
-    askMessages.value = []
+    activeConversationKey.value = null
+    restoreCachedState(true)
+    if (report.value || rawContent.value) scrollToReport()
   }
 }
 </script>
@@ -370,7 +616,14 @@ function onFilterQuery(): void {
         :disabled="!canStart"
         @click="startDiagnosis"
       >
-        {{ running ? 'AI 分析中…' : '🤖 开始 AI 分析' }}
+        {{ running ? 'AI 分析中…' : (report || rawContent ? '重新分析' : '🤖 开始 AI 分析') }}
+      </el-button>
+      <div v-if="cachedAt" class="cache-status">
+        <span>已保存：{{ cachedTimeText }}</span>
+      </div>
+      <el-button :icon="Clock" plain @click="openHistory">
+        历史分析与对话
+        <span v-if="historyEntries.length">（{{ historyEntries.length }}）</span>
       </el-button>
     </div>
 
@@ -389,8 +642,8 @@ function onFilterQuery(): void {
       </div>
     </div>
 
-    <!-- 报告区 -->
-    <div v-if="report" class="content-card">
+    <!-- 先展示诊断依据，再展示由诊断得出的分析报告 -->
+    <div v-if="report" ref="reportSectionRef" class="content-card report-section">
       <DiagnosisReportCard
         :report="report"
         @ask="toggleAsk"
@@ -400,14 +653,17 @@ function onFilterQuery(): void {
     </div>
 
     <!-- 非 JSON 降级展示 -->
-    <div v-else-if="rawContent && processError" class="content-card">
-      <div class="content-card__title">诊断原始内容</div>
+    <div v-else-if="rawContent" ref="reportSectionRef" class="content-card report-section">
+      <div class="content-card__title">AI 分析结果</div>
       <div class="raw-content">{{ rawContent }}</div>
       <el-button type="primary" plain size="small" @click="toggleAsk">💬 追问 AI</el-button>
     </div>
 
     <!-- 空状态引导 -->
-    <div v-else-if="!running && !processError" class="content-card empty-card">
+    <div
+      v-if="!report && !rawContent && !running && !processError"
+      class="content-card empty-card"
+    >
       <el-empty description="选择分析对象与维度，点击开始 AI 分析">
         <div class="quick-prompts">
           <el-button size="small" @click="dimensions = ['knowledge']; depth = 'detail'; startDiagnosis()">
@@ -449,6 +705,50 @@ function onFilterQuery(): void {
         </el-button>
       </div>
     </div>
+
+    <el-drawer v-model="historyVisible" title="历史分析与对话" size="420px">
+      <el-collapse v-if="historyEntries.length" class="history-list">
+        <el-collapse-item
+          v-for="entry in historyEntries"
+          :key="entry.key"
+          :name="entry.key"
+        >
+          <template #title>
+            <div class="history-item-title">
+              <strong>{{ historyTargetText(entry) }}</strong>
+              <span>{{ historySavedTime(entry) }} · {{ historyRoundCount(entry) }} 轮对话</span>
+            </div>
+          </template>
+          <div class="history-report-summary">
+            {{ entry.report?.overall.summary || '已保存 AI 分析结果' }}
+          </div>
+          <div class="history-context">
+            <div><span>分析对象</span><strong>{{ entry.scope === 'student' ? '学生' : '班级' }}</strong></div>
+            <div><span>学期</span><strong>{{ entry.semesterName || '未记录' }}</strong></div>
+            <div><span>班级</span><strong>{{ entry.className || entry.targetName || '未记录' }}</strong></div>
+            <div><span>课程</span><strong>{{ entry.courseName || '未记录' }}</strong></div>
+            <div><span>分析维度</span><strong>{{ historyDimensionText(entry) }}</strong></div>
+            <div><span>回答深度</span><strong>{{ entry.depth === 'brief' ? '概览' : '详细' }}</strong></div>
+          </div>
+          <div v-if="entry.askMessages.length" class="history-messages">
+            <div
+              v-for="(message, index) in entry.askMessages"
+              :key="index"
+              class="history-message"
+            >
+              <span>{{ message.role === 'user' ? '教师' : 'AI' }}</span>
+              <p>{{ message.content }}</p>
+            </div>
+          </div>
+          <div v-else class="history-no-chat">暂无追问记录</div>
+          <el-button type="primary" plain size="small" @click.stop="restoreHistoryEntry(entry)">
+            进入这条对话
+          </el-button>
+          <el-button link type="danger" @click.stop="removeHistoryEntry(entry)">删除这条记录</el-button>
+        </el-collapse-item>
+      </el-collapse>
+      <el-empty v-else description="暂无历史分析与对话" />
+    </el-drawer>
   </div>
 </template>
 
@@ -471,6 +771,113 @@ function onFilterQuery(): void {
 .depth-block {
   display: flex;
   align-items: center;
+}
+
+.cache-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.report-section {
+  scroll-margin-top: 16px;
+}
+
+.history-list {
+  border-top: 0;
+}
+
+.history-item-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.5;
+
+  strong {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #1e293b;
+  }
+
+  span {
+    color: #94a3b8;
+    font-size: 12px;
+    font-weight: 400;
+  }
+}
+
+.history-report-summary {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+
+.history-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-bottom: 14px;
+
+  > div {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  span {
+    color: #94a3b8;
+    font-size: 12px;
+  }
+
+  strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #334155;
+    font-size: 13px;
+  }
+}
+
+.history-no-chat {
+  color: #94a3b8;
+  font-size: 13px;
+  padding: 8px 0 12px;
+}
+
+.history-messages {
+  display: grid;
+  gap: 10px;
+}
+
+.history-message {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+
+  span {
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  p {
+    margin: 6px 0 0;
+    color: #334155;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
 }
 
 .retry-row {

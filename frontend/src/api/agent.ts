@@ -16,6 +16,7 @@ export interface ChatMessage {
 export interface StreamAgentChatParams {
   agentType: AgentType
   courseId: number
+  studentId?: number
   courseName?: string
   message: string
   sessionId?: string
@@ -62,6 +63,7 @@ export async function* streamAgentChat(
     body: JSON.stringify({
       message: params.message,
       course_id: params.courseId,
+      student_id: params.studentId,
       agent_type: params.agentType,
       session_id: params.sessionId,
       max_steps: params.maxSteps ?? 5,

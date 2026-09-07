@@ -56,6 +56,7 @@ class UserCreate(SQLModel):
     student_no: Optional[str] = Field(default=None, max_length=32)  # 仅学生：学号，默认与账号相同
     gender: Optional[int] = Field(default=None, ge=0, le=1)  # 仅学生：0=女, 1=男，默认男
     teacher_no: Optional[str] = Field(default=None, max_length=32)  # 仅教师：教工号，默认与账号相同
+    assistant_no: Optional[str] = Field(default=None, max_length=32)  # 仅助教：助教工号
     title: Optional[str] = Field(default=None, max_length=32)  # 仅教师：职称，可空
     phone: Optional[str] = Field(default=None, max_length=20)  # 学生/教师档案：手机号，可空
     email: Optional[str] = Field(default=None, max_length=64)  # 学生/教师档案：邮箱，可空
@@ -72,6 +73,7 @@ class UserUpdate(SQLModel):
     student_no: Optional[str] = Field(default=None, max_length=32)
     gender: Optional[int] = Field(default=None, ge=0, le=1)
     teacher_no: Optional[str] = Field(default=None, max_length=32)
+    assistant_no: Optional[str] = Field(default=None, max_length=32)
     title: Optional[str] = Field(default=None, max_length=32)
     phone: Optional[str] = Field(default=None, max_length=20)
     email: Optional[str] = Field(default=None, max_length=64)

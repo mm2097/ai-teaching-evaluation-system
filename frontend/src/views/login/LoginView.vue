@@ -26,6 +26,7 @@ const loading = ref(false)
 const demoAccounts = [
   { username: 'admin', label: '张管理（管理员）' },
   { username: 'teacher', label: '王建国（任课教师）' },
+  { username: 'assistant', label: '周助教（课程助教）' },
   { username: '201726010101', label: '孔祥宁（软件1801）' },
 ]
 
@@ -61,7 +62,9 @@ async function handleLogin(): Promise<void> {
         ? '/admin/dashboard'
         : role === 'student'
           ? '/student/dashboard'
-          : '/dashboard'
+          : role === 'assistant'
+            ? '/data/import'
+            : '/dashboard'
       const redirect = (route.query.redirect as string) || defaultPath
       router.push(redirect)
     }

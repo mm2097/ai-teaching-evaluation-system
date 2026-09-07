@@ -29,7 +29,7 @@ export const menuList: MenuItem[] = [
     path: '/data',
     title: '数据采集',
     icon: 'Upload',
-    roles: ['teacher'],
+    roles: ['teacher', 'assistant'],
     children: [
       { path: '/data/import', title: '数据上传', icon: 'Upload' },
       { path: '/data/manage', title: '数据管理', icon: 'Document' },

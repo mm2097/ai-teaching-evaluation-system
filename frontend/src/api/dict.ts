@@ -173,6 +173,12 @@ export async function fetchCourses(params?: {
   return (res.data as any[]).map(mapCourse)
 }
 
+/** 当前教师所授课程或助教获授权课程。 */
+export async function fetchMyCourses(): Promise<Course[]> {
+  const res = await request.get('/v1/courses/my')
+  return (res.data as any[]).map(mapCourse)
+}
+
 /* ---------- 学生搜索 ---------- */
 
 export async function searchStudents(params?: {

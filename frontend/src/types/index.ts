@@ -3,7 +3,7 @@
  */
 
 /** 用户角色枚举 */
-export type UserRole = 'admin' | 'teacher' | 'student'
+export type UserRole = 'admin' | 'teacher' | 'assistant' | 'student'
 
 /** 分析/评价对象类型（对应 t_analysis_result.target_type） */
 export type TargetType = 'student' | 'class'
@@ -22,9 +22,11 @@ export interface UserInfo {
   studentId?: number
   studentNo?: string
   teacherId?: number
+  assistantId?: number
+  assistantNo?: string
   classId?: number
   avatar?: string
-  /** 联系方式（学生/教师，可空） */
+  /** 联系方式（学生/教师/助教，可空） */
   phone?: string
   email?: string
 }
@@ -44,11 +46,13 @@ export interface SystemUser {
   gender?: number | null
   /** 教工号（教师角色，存于教师表） */
   teacherNo?: string
+  /** 助教工号（助教角色，存于助教档案表） */
+  assistantNo?: string
   /** 职称（教师角色，可空） */
   title?: string
-  /** 手机号（学生/教师档案，可空） */
+  /** 手机号（学生/教师/助教档案，可空） */
   phone?: string
-  /** 邮箱（学生/教师档案，可空） */
+  /** 邮箱（学生/教师/助教档案，可空） */
   email?: string
   status: boolean
   createTime: string
@@ -495,6 +499,7 @@ export interface QuizSubmission {
 export const RoleLabels: Record<UserRole, string> = {
   admin: '系统管理员',
   teacher: '任课教师',
+  assistant: '课程助教',
   student: '学生用户',
 }
 

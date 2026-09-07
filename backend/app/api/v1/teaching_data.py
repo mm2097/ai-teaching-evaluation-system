@@ -34,7 +34,7 @@ from app.models import (
     InteractionRecord,
 )
 from app.services.file_import import import_file, ImportResult, TEMPLATE_META, generate_template_xlsx, generate_template_txt
-from app.services.analysis_refresh import refresh_course_analysis
+from app.services.analysis_refresh import invalidate_course_analysis, refresh_course_analysis
 from app.services.assessment_types import (
     classify_assessment_type,
     display_assessment_batch_name,
@@ -445,12 +445,24 @@ def query_teaching_data(
 # ============================================================================
 
 
+def _queue_analysis_refresh(
+    session: Session,
+    course_id: int,
+    background_tasks: BackgroundTasks | None,
+) -> None:
+    """立即失效旧快照，并安排基于当前源数据的完整重算。"""
+    if background_tasks is not None:
+        invalidate_course_analysis(session, course_id)
+        background_tasks.add_task(_refresh_analysis_in_background, course_id)
+
+
 # NOTE: /{record_id}/row 必须放在 /{record_type}/{record_id} 之前，
 # 否则旧路由会错误匹配 "112/row" → record_type=112, record_id="row"
 @router.put("/teaching-data/{record_id}/row", tags=["教学数据"])
 def update_row_data(
     record_id: int,
     payload: Any = Body(...),
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -461,43 +473,60 @@ def update_row_data(
       - 对于考试扣分类型，删除旧的各题子记录，按新数据重建
     """
     src = payload.get("source_data") if isinstance(payload, dict) else None
-
-    record = session.get(ScoreRecord, record_id)
-    if record is None:
-        record = session.get(AttendanceRecord, record_id)
-    if record is None:
-        record = session.get(IndividualScore, record_id)
-    if record is None:
-        record = session.get(CourseTestDetail, record_id)
-    if record is None:
-        record = session.get(AttendanceSheet, record_id)
+    record_type = payload.get("record_type") if isinstance(payload, dict) else None
+    if not isinstance(src, dict):
+        raise HTTPException(status_code=422, detail="source_data 必须是对象")
+    model_by_type = {
+        "score": ScoreRecord,
+        "attendance": AttendanceRecord,
+        "individual_score": IndividualScore,
+        "course_test_detail": CourseTestDetail,
+        "attendance_sheet": AttendanceSheet,
+        "participation_sheet": ParticipationSheet,
+    }
+    model = model_by_type.get(record_type)
+    if model is None:
+        raise HTTPException(status_code=422, detail="record_type 不正确或缺失")
+    record = session.get(model, record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="记录不存在")
+
+    def _number(*keys: str) -> float | None:
+        for key in keys:
+            value = src.get(key) if isinstance(src, dict) else None
+            if value is None or str(value).strip() == "":
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _integer(default: int, *keys: str) -> int:
+        value = _number(*keys)
+        return int(value) if value is not None else default
 
     if isinstance(record, ScoreRecord):
         course_id = record.course_id
         _require_teacher_for_course(current_user, course_id, session)
 
-        if src is not None:
-            # 更新主记录分数
-            total = src.get("总成绩")
-            if total is not None:
-                try:
-                    record.score = float(total)
-                    record.is_pass = 1 if record.score >= 60 else 0
-                except (ValueError, TypeError):
-                    pass
-            # 更新 source_data
-            record.source_data = json.dumps(src, ensure_ascii=False)
-            record.update_time = datetime.now()
-            session.add(record)
+        # 更新主记录分数
+        total = _number("总成绩", "成绩", "分数")
+        if total is not None:
+            record.score = total
+            record.is_pass = 1 if record.score >= 60 else 0
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
 
-            # 对于考试扣分类型：删除旧子记录，按新数据重建各题扣分
-            batch = session.get(ExamBatch, record.batch_id)
-            if batch and "大题" not in (batch.batch_name or ""):
-                _rebuild_question_sub_records(session, record, src)
+        # 对于考试扣分类型：删除旧子记录，按新数据重建各题扣分
+        batch = session.get(ExamBatch, record.batch_id)
+        if batch and "大题" not in (batch.batch_name or ""):
+            _rebuild_question_sub_records(session, record, src)
 
-            session.commit()
+        session.commit()
+
+        _queue_analysis_refresh(session, course_id, background_tasks)
 
         return {"recordId": record_id, "recordType": "score", "updated": True}
 
@@ -505,11 +534,17 @@ def update_row_data(
         course_id = record.course_id
         _require_teacher_for_course(current_user, course_id, session)
 
-        if src is not None:
-            record.source_data = json.dumps(src, ensure_ascii=False)
-            record.update_time = datetime.now()
-            session.add(record)
-            session.commit()
+        status = src.get("考勤状态", src.get("状态"))
+        if status is not None:
+            reverse_status = {label: code for code, label in STATUS_MAP.items()}
+            if str(status).strip() in reverse_status:
+                record.status = reverse_status[str(status).strip()]
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+
+        _queue_analysis_refresh(session, course_id, background_tasks)
 
         return {"recordId": record_id, "recordType": "attendance", "updated": True}
 
@@ -519,17 +554,15 @@ def update_row_data(
             raise HTTPException(status_code=404, detail="关联考试批次不存在")
         _require_teacher_for_course(current_user, batch.course_id, session)
 
-        if src is not None:
-            score_val = src.get("成绩")
-            if score_val is not None:
-                try:
-                    record.score = float(score_val)
-                except (ValueError, TypeError):
-                    pass
-            record.source_data = json.dumps(src, ensure_ascii=False)
-            record.update_time = datetime.now()
-            session.add(record)
-            session.commit()
+        score_val = _number("成绩", "分数", "总成绩")
+        if score_val is not None:
+            record.score = score_val
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
 
         return {"recordId": record_id, "recordType": "individual_score", "updated": True}
 
@@ -539,17 +572,26 @@ def update_row_data(
             raise HTTPException(status_code=404, detail="关联考试批次不存在")
         _require_teacher_for_course(current_user, batch.course_id, session)
 
-        if src is not None:
-            total = src.get("总成绩")
-            if total is not None:
-                try:
-                    record.total_score = float(total)
-                except (ValueError, TypeError):
-                    pass
-            record.source_data = json.dumps(src, ensure_ascii=False)
-            record.update_time = datetime.now()
-            session.add(record)
-            session.commit()
+        total = _number("总成绩", "成绩", "分数")
+        if total is not None:
+            record.total_score = total
+        for index in range(1, 6):
+            deduction = _number(f"第{index}大题", f"第 {index} 大题")
+            setattr(record, f"question{index}_score", deduction)
+            knowledge = src.get(f"第 {index} 大题扣分的主要知识点")
+            if knowledge is None:
+                knowledge = src.get(f"第{index}大题扣分知识点")
+            setattr(
+                record,
+                f"question{index}_knowledge",
+                str(knowledge).strip() if knowledge not in (None, "") else None,
+            )
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
 
         return {"recordId": record_id, "recordType": "course_test_detail", "updated": True}
 
@@ -559,13 +601,58 @@ def update_row_data(
             raise HTTPException(status_code=404, detail="关联考试批次不存在")
         _require_teacher_for_course(current_user, batch.course_id, session)
 
-        if src is not None:
-            record.source_data = json.dumps(src, ensure_ascii=False)
-            record.update_time = datetime.now()
-            session.add(record)
-            session.commit()
+        attendance_values = []
+        for index in range(1, 33):
+            value = src.get(f"考勤{index}")
+            value = str(value).strip() if value not in (None, "") else None
+            attendance_values.append(value)
+            setattr(record, f"attendance_{index}", value)
+        record.total_count = _integer(len([v for v in attendance_values if v]), "考勤总数")
+        record.present_count = _integer(sum(v == "出勤" for v in attendance_values), "到课数")
+        record.leave_count = _integer(sum(v == "请假" for v in attendance_values), "请假数")
+        record.late_count = _integer(sum(v == "迟到" for v in attendance_values), "迟到数")
+        record.early_leave_count = _integer(sum(v == "早退" for v in attendance_values), "早退数")
+        rate = _number("到课率")
+        if rate is None and record.total_count:
+            rate = record.present_count / record.total_count
+        if rate is not None and rate > 1:
+            rate /= 100
+        record.attendance_rate = rate
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
 
         return {"recordId": record_id, "recordType": "attendance_sheet", "updated": True}
+
+    elif isinstance(record, ParticipationSheet):
+        batch = session.get(ExamBatch, record.exam_batch_id)
+        if not batch:
+            raise HTTPException(status_code=404, detail="关联考试批次不存在")
+        _require_teacher_for_course(current_user, batch.course_id, session)
+
+        participation_values = []
+        for index in range(1, 33):
+            value = src.get(f"课堂{index}")
+            value = str(value).strip() if value not in (None, "") else None
+            participation_values.append(value)
+            setattr(record, f"participation_{index}", value)
+        record.total_count = _integer(len([v for v in participation_values if v]), "课堂总数")
+        rate = _number("课堂参与度")
+        if rate is None and record.total_count:
+            rate = sum(v == "是" for v in participation_values) / record.total_count
+        if rate is not None and rate > 1:
+            rate /= 100
+        record.participation_rate = rate
+        record.source_data = json.dumps(src, ensure_ascii=False)
+        record.update_time = datetime.now()
+        session.add(record)
+        session.commit()
+
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
+        return {"recordId": record_id, "recordType": "participation_sheet", "updated": True}
 
     raise HTTPException(status_code=400, detail="记录类型不支持")
 
@@ -632,6 +719,7 @@ def edit_teaching_data(
     score: float | None = Query(default=None, description="成绩值（score/individual_score 类型）"),
     status_code: int | None = Query(default=None, description="考勤状态: 0=出勤 1=迟到 2=早退 3=缺勤 4=请假"),
     remark: str | None = Query(default=None, description="备注"),
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -656,6 +744,7 @@ def edit_teaching_data(
         session.add(record)
         session.commit()
         session.refresh(record)
+        _queue_analysis_refresh(session, course_id, background_tasks)
         return {
             "recordType": "score",
             "recordId": record.score_id,
@@ -679,6 +768,7 @@ def edit_teaching_data(
         session.add(record)
         session.commit()
         session.refresh(record)
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
         return {
             "recordType": "individual_score",
             "recordId": record.score_id,
@@ -700,6 +790,7 @@ def edit_teaching_data(
         session.add(record)
         session.commit()
         session.refresh(record)
+        _queue_analysis_refresh(session, batch.course_id, background_tasks)
         return {
             "recordType": "course_test_detail",
             "recordId": record.score_id,
@@ -723,6 +814,7 @@ def edit_teaching_data(
         session.add(record)
         session.commit()
         session.refresh(record)
+        _queue_analysis_refresh(session, course_id, background_tasks)
         return {
             "recordType": "attendance",
             "recordId": record.attendance_id,
@@ -862,6 +954,7 @@ def delete_teaching_data(
     record_type: str,
     record_id: int,
     request: Request = None,  # type: ignore[assignment]
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -881,6 +974,7 @@ def delete_teaching_data(
             f"删除{label}（学生：{student_name}，学号：{student_no}，课程ID：{course_id}）",
             get_client_ip(request),
         )
+    _queue_analysis_refresh(session, course_id, background_tasks)
     return {"recordType": record_type, "recordId": record_id, "deleted": True}
 
 
@@ -888,6 +982,7 @@ def delete_teaching_data(
 def batch_delete_teaching_data(
     payload: dict = Body(...),
     request: Request = None,  # type: ignore[assignment]
+    background_tasks: BackgroundTasks = None,  # type: ignore[assignment]
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -907,6 +1002,7 @@ def batch_delete_teaching_data(
         normalized.append((record_type, record_id))
 
     client_ip = get_client_ip(request) if request else ""
+    affected_courses: set[int] = set()
     for record_type, record_id in normalized:
         label, student_no, student_name, course_id = _delete_teaching_record(
             record_type, record_id, session, current_user
@@ -919,6 +1015,9 @@ def batch_delete_teaching_data(
             f"删除{label}（学生：{student_name}，学号：{student_no}，课程ID：{course_id}）",
             client_ip,
         )
+        affected_courses.add(course_id)
+    for course_id in affected_courses:
+        _queue_analysis_refresh(session, course_id, background_tasks)
     return {"deleted": len(normalized)}
 
 
@@ -993,11 +1092,7 @@ def clear_teaching_data(
 
     # 清空后的分析重算可能遍历整门课的学生和知识点，不能阻塞本次删除响应。
     # 通过 BackgroundTasks 延后执行，避免前端 10 秒请求超时后误报“无法连接后端”。
-    if background_tasks is not None:
-        background_tasks.add_task(_refresh_analysis_in_background, course_id)
-    else:
-        # 保留直接调用兼容性，方便单元测试直接调用路由函数。
-        _refresh_analysis_in_background(course_id)
+    _queue_analysis_refresh(session, course_id, background_tasks)
     return {"deleted": deleted, "dataType": data_type}
 
 
@@ -1243,9 +1338,7 @@ def upload_teaching_data(
         # 使用 BackgroundTasks 后台异步执行，避免长时间阻塞上传响应
         analysis_refresh: dict = {}
         if result.success_count > 0:
-            background_tasks.add_task(
-                _refresh_analysis_in_background, course_id
-            )
+            _queue_analysis_refresh(session, course_id, background_tasks)
             analysis_refresh = {"scheduled": True}
 
 
@@ -1408,6 +1501,7 @@ class InteractionRecordPayload(BaseModel):
 def create_interaction_record(
     payload: InteractionRecordPayload,
     request: Request,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -1436,6 +1530,7 @@ def create_interaction_record(
         f"{INTERACTION_TYPE_LABELS.get(payload.interaction_type, '互动')}打分：学生{student.real_name}，{payload.score}分",
         get_client_ip(request) if request else "",
     )
+    _queue_analysis_refresh(session, payload.course_id, background_tasks)
     return _interaction_to_dict(record, student)
 
 
@@ -1466,6 +1561,7 @@ def list_interaction_records(
 @router.delete("/teaching-data/interactions/{interaction_id}", tags=["教学数据"])
 def delete_interaction_record(
     interaction_id: int,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict:
@@ -1474,8 +1570,10 @@ def delete_interaction_record(
     if not record:
         raise HTTPException(status_code=404, detail="互动记录不存在")
     _require_teacher_for_course(current_user, record.course_id, session)
+    course_id = record.course_id
     session.delete(record)
     session.commit()
+    _queue_analysis_refresh(session, course_id, background_tasks)
     return {"interactionId": interaction_id, "deleted": True}
 
 

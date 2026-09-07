@@ -42,7 +42,7 @@ const defaultIndicators = [
   { name: '学习进步', max: 100 },
   { name: '综合能力', max: 100 },
 ]
-const defaultValues = [80, 80, 80, 80, 80]
+const defaultValues = [0, 0, 0, 0, 0]
 
 const radarIndicators = computed(() => profileData.value?.radarIndicators ?? defaultIndicators)
 

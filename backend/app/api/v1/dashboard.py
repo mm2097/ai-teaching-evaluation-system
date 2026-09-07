@@ -775,6 +775,7 @@ def get_student_score_archive(
         assessment_type = classify_assessment_type("score", batch.batch_name)
         records.append({
             "id": batch.batch_id,
+            "courseId": batch.course_id,
             "courseName": course.course_name if course else "",
             "semester": batch.semester,
             "type": display_assessment_type_name(

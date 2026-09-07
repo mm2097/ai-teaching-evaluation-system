@@ -5,7 +5,7 @@
     小班讨论（单项成绩）/ 期中考试（各题得分）/ 期末考试（各题得分）/
     考勤（到课率）/ 作业（单项成绩，批次名含"作业"）/
     其他（实验等其余单项成绩，占比自动补足 100−其余）
-- D03：学习态度 = 0.5×考勤(到课率) + 0.5×课堂参与度（内部合计固定 100%）
+- D03：学习态度默认由考勤 40% + 课堂参与 30% + 作业提交 30% 构成
 - D04：复用 predict.slope_to_progress_score
 """
 from __future__ import annotations
@@ -58,8 +58,8 @@ class ProfileScores:
     progress_score: float       # D04
     attendance_rate: float      # 到课率 0-1（D03 子项，优先新表 AttendanceSheet）
     interaction_count: int      # 课堂参与次数（D03 子项）
-    participation_rate: float   # 课堂参与度 0-1（D03 子项，无数据基线 0.9）
-    homework_rate: float        # 作业提交率 0-1（保留字段，暂无作业数据）
+    participation_rate: float   # 课堂参与度 0-1（无数据为 0，并由 data_availability 区分）
+    homework_rate: float        # 作业提交率 0-1
     # D03 子项得分（0-100）+ 权重，供前端展示态度分构成
     attendance_score: float = 0.0
     interaction_score: float = 0.0
@@ -67,6 +67,12 @@ class ProfileScores:
     w_attendance: float = 0.5
     w_interaction: float = 0.5
     w_homework: float = 0.0
+    attendance_available: bool = False
+    interaction_available: bool = False
+    homework_available: bool = False
+    homework_assigned_count: int = 0
+    homework_submitted_count: int = 0
+    data_availability: dict[str, bool] | None = None
 
 
 # ===== D02 学业水平 =====
@@ -239,7 +245,7 @@ def compute_academic_score(
 
     - 配比来源：评价配置（load_academic_parts），未配置时用默认配比
     - 某部分无数据时，其配比按比例分摊到有数据的部分（归一化）
-    - 全部无数据时基线 75 分
+    - 全部无数据时返回 0 分，并通过 ProfileScores.data_availability 标记为无数据
     """
     if parts is None:
         parts = load_academic_parts(session, course_id)
@@ -253,11 +259,11 @@ def compute_academic_score(
             scored[part] = float(value)
 
     if not scored:
-        return 75.0  # 无数据基线
+        return 0.0
 
     total_weight = sum(parts[p] for p in scored)
     if total_weight <= 0:
-        return 75.0
+        return 0.0
     score = sum(scored[p] * parts[p] for p in scored) / total_weight
     return round(max(0.0, min(100.0, score)), 1)
 
@@ -269,7 +275,7 @@ def _attendance_rate(session: Session, student_id: int, course_id: int) -> float
 
     - 新表存在记录时，取到课率（attendance_rate）平均值
     - 旧表按状态权重：status=0 计为出勤，迟到/早退/请假按半扣
-    - 无任何数据时基线 90%
+    - 无任何数据时返回 0；上层同时标记该维度为无数据
     """
     # 新表：AttendanceSheet（含导入时计算的到课率）
     batch_ids = session.exec(
@@ -293,7 +299,7 @@ def _attendance_rate(session: Session, student_id: int, course_id: int) -> float
         )
     ).all()
     if not records:
-        return 0.9  # 无数据基线 90%
+        return 0.0
     weights = {0: 1.0, 1: 0.5, 2: 0.5, 3: 0.0, 4: 0.7}
     total = sum(weights.get(r.status, 0.0) for r in records)
     return total / len(records)
@@ -304,7 +310,7 @@ def _participation_rate(
 ) -> tuple[float, int]:
     """课堂参与度：读 ParticipationSheet（上传的课堂参与数据）。
 
-    返回 (参与度 0-1, 参与课堂次数)。无数据时基线 90%、参与次数 0。
+    返回 (参与度 0-1, 参与课堂次数)。无数据时返回 (0, 0)。
     """
     batch_ids = session.exec(
         select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
@@ -316,13 +322,13 @@ def _participation_rate(
         )
     ).all()
     if not sheets:
-        return 0.9, 0
+        return 0.0, 0
     rates = [s.participation_rate for s in sheets if s.participation_rate is not None]
     participated = sum(
         1 for s in sheets for i in range(1, 33)
         if getattr(s, f"participation_{i}") == "是"
     )
-    rate = sum(rates) / len(rates) if rates else 0.9
+    rate = sum(rates) / len(rates) if rates else 0.0
     return float(rate), participated
 
 
@@ -346,12 +352,14 @@ def _interaction_score(
     return rate * 100.0, count
 
 
-def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
+def _homework_progress(
+    session: Session, student_id: int, course_id: int,
+) -> tuple[float, int, int]:
     """作业提交率：基于教师发布的作业任务（AnswerTask, task_type=assignment）。
 
     应交 = 课程内 task_type=assignment 且 status≥1（已发布/进行中/已结束）的任务数；
     已交 = 该学生有 StudentAnswerRecord 的此类任务数。
-    提交率 = 已交 / 应交；无应交任务时返回基线 0.9。
+    提交率 = 已交 / 应交；无应交任务时返回 0，上层标记为无数据。
     """
     tasks = session.exec(
         select(AnswerTask.task_id).where(
@@ -361,7 +369,7 @@ def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
         )
     ).all()
     if not tasks:
-        return 0.9
+        return 0.0, 0, 0
 
     submitted = session.exec(
         select(StudentAnswerRecord.task_id).where(
@@ -370,7 +378,14 @@ def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
         )
     ).all()
     submitted_task_count = len(set(submitted))
-    return max(0.0, min(1.0, submitted_task_count / len(tasks)))
+    rate = max(0.0, min(1.0, submitted_task_count / len(tasks)))
+    return rate, submitted_task_count, len(tasks)
+
+
+def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
+    """作业提交率兼容入口。"""
+    rate, _, _ = _homework_progress(session, student_id, course_id)
+    return rate
 
 
 def _attitude_component_weights(
@@ -430,7 +445,9 @@ def compute_attitude_score(
 
     int_score, int_count = _interaction_score(session, student_id, course_id)
     part_rate, _ = _participation_rate(session, student_id, course_id)
-    hw_rate = _homework_rate(session, student_id, course_id)
+    hw_rate, hw_submitted, hw_assigned = _homework_progress(
+        session, student_id, course_id
+    )
     hw_score = hw_rate * 100.0
 
     score = (
@@ -446,6 +463,8 @@ def compute_attitude_score(
         "interaction_score": round(int_score, 1),
         "homework_rate": round(hw_rate, 3),
         "homework_score": round(hw_score, 1),
+        "homework_assigned_count": hw_assigned,
+        "homework_submitted_count": hw_submitted,
         "w_attendance": round(w_attendance, 3),
         "w_interaction": round(w_interaction, 3),
         "w_homework": round(w_homework, 3),
@@ -496,9 +515,56 @@ def compute_profile(
     class_slopes: list[float] | None = None,
 ) -> ProfileScores:
     """三维度同时计算。class_slopes 供批量计算复用（见 compute_class_slopes）。"""
-    academic = compute_academic_score(session, student_id, course_id)
+    parts = load_academic_parts(session, course_id)
+    academic_values = [
+        _academic_part_score(session, student_id, course_id, part)
+        for part, weight in parts.items()
+        if weight > 0
+    ]
+    academic = compute_academic_score(session, student_id, course_id, parts=parts)
     attitude, detail = compute_attitude_score(session, student_id, course_id)
     progress = compute_progress_score(session, student_id, course_id, class_slopes)
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+    has_participation = session.exec(
+        select(ParticipationSheet.score_id).where(
+            ParticipationSheet.student_id == student_id,
+            ParticipationSheet.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+        ).limit(1)
+    ).first() is not None
+    has_interaction = session.exec(
+        select(InteractionRecord.interaction_id).where(
+            InteractionRecord.student_id == student_id,
+            InteractionRecord.course_id == course_id,
+            InteractionRecord.type != 3,
+        ).limit(1)
+    ).first() is not None
+    has_homework_task = session.exec(
+        select(AnswerTask.task_id).where(
+            AnswerTask.course_id == course_id,
+            AnswerTask.task_type == TASK_TYPE_ASSIGNMENT,
+            AnswerTask.status >= 1,
+        ).limit(1)
+    ).first() is not None
+    score_record_count = len(session.exec(
+        select(ScoreRecord.score_id).where(
+            ScoreRecord.student_id == student_id,
+            ScoreRecord.course_id == course_id,
+        )
+    ).all())
+    individual_count = len(session.exec(
+        select(IndividualScore.score_id).where(
+            IndividualScore.student_id == student_id,
+            IndividualScore.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+        )
+    ).all())
+    detail_count = len(session.exec(
+        select(CourseTestDetail.score_id).where(
+            CourseTestDetail.student_id == student_id,
+            CourseTestDetail.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+        )
+    ).all())
     return ProfileScores(
         academic_score=round(academic, 1),
         attitude_score=round(attitude, 1),
@@ -513,4 +579,19 @@ def compute_profile(
         w_attendance=detail["w_attendance"],
         w_interaction=detail["w_interaction"],
         w_homework=detail["w_homework"],
+        attendance_available=_has_attendance_data(session, student_id, course_id),
+        interaction_available=has_participation or has_interaction,
+        homework_available=has_homework_task,
+        homework_assigned_count=detail["homework_assigned_count"],
+        homework_submitted_count=detail["homework_submitted_count"],
+        data_availability={
+            "academic": any(value is not None for value in academic_values),
+            "attitude": (
+                _has_attendance_data(session, student_id, course_id)
+                or has_participation
+                or has_interaction
+                or has_homework_task
+            ),
+            "progress": score_record_count + individual_count + detail_count >= 2,
+        },
     )

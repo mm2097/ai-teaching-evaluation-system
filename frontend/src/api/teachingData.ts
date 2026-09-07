@@ -168,9 +168,13 @@ export async function fetchTeachingData(
 /** 更新一条记录的完整行数据（含各题子记录等） */
 export async function updateRowData(
   recordId: number,
+  recordType: string,
   sourceData: Record<string, unknown>,
 ): Promise<void> {
-  await request.put(`/v1/teaching-data/${recordId}/row`, { source_data: sourceData })
+  await request.put(`/v1/teaching-data/${recordId}/row`, {
+    record_type: recordType,
+    source_data: sourceData,
+  })
 }
 
 /**

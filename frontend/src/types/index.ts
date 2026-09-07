@@ -213,6 +213,7 @@ export interface StudentProfileData {
   radarValues: number[]
   radarIndicators?: { name: string; max: number }[]
   dimensionScores: { name: string; score: number; desc: string }[]
+  hasEvaluationData?: boolean
   /** 学习态度维度子项明细（出勤/互动/作业） */
   attitudeDetail?: {
     score: number

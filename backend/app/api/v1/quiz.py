@@ -46,7 +46,7 @@ from app.models import (
     Teacher,
 )
 from app.models.question import TASK_TYPE_ASSIGNMENT, TASK_TYPE_SELF_PRACTICE
-from app.services.mastery import refresh_student_mastery
+from app.services.analysis_refresh import refresh_student_analysis
 from app.services.question_answers import (
     answer_for_response,
     encode_correct_answer,
@@ -680,7 +680,7 @@ def _grade_task_answers(
             StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
-    refresh_student_mastery(session, student.student_id, task.course_id)
+    refresh_student_analysis(session, student.student_id, task.course_id)
     records_by_question = _latest_records_by_question(records)
     question_results = []
     include_solution = True
@@ -1132,7 +1132,7 @@ def delete_answer_task(
 
     删除记录后同步修正知识点掌握度持久化数据：
       - 无剩余答题记录的 (学生, 知识点) 删除其掌握度行
-      - 仍有剩余记录的按剩余记录重算（refresh_student_mastery）
+      - 仍有剩余记录的按剩余记录重算，并同步画像、评价和预警
     """
     task = session.get(AnswerTask, task_id)
     if not task:
@@ -1191,7 +1191,7 @@ def delete_answer_task(
             session.delete(km)
     affected_students = {sid for sid, _ in affected_pairs}
     for sid in affected_students:
-        refresh_student_mastery(session, sid, course_id)
+        refresh_student_analysis(session, sid, course_id)
     session.commit()
 
     return {

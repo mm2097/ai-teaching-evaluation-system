@@ -271,6 +271,7 @@ watch([deptId, majorId, classId], () => {
 
 const editVisible = ref(false)
 const editRecordId = ref(0)
+const editRecordType = ref('')
 const editTitle = ref('')
 /** 可编辑的字段列表 [{ key, value }] */
 const editFields = ref<{ key: string; value: string }[]>([])
@@ -278,6 +279,7 @@ const selectedRows = ref<TeachingDataRecord[]>([])
 
 function handleEdit(row: TeachingDataRecord): void {
   editRecordId.value = row.id
+  editRecordType.value = recordTypeOf(row)
   editTitle.value = `${row.studentName}（${row.studentId}）- ${row.batchName || row.courseName || ''}`
 
   if (row.sourceData) {
@@ -308,7 +310,7 @@ async function saveEdit(): Promise<void> {
   }
 
   try {
-    await updateRowData(editRecordId.value, srcData)
+    await updateRowData(editRecordId.value, editRecordType.value, srcData)
     await loadTeachingData()
     editVisible.value = false
     ElMessage.success('数据修改成功')

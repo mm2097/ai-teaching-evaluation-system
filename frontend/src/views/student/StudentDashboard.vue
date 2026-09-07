@@ -3,7 +3,7 @@
   展示个人课程概览、核心学习指标
 -->
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import type { EChartsOption } from 'echarts'
 import StatCard from '@/components/common/StatCard.vue'
 import BaseChart from '@/components/charts/BaseChart.vue'
@@ -21,6 +21,7 @@ const overview = ref<StudentDashboardOverview | null>(null)
 
 /** 学生个人课程概览 */
 const courses = computed<StudentDashboardCourse[]>(() => overview.value?.courses ?? [])
+const selectedTrendCourseId = ref<number | null>(null)
 const trendMonths = ref<string[]>([])
 const trendAvgScore = ref<number[]>([])
 
@@ -91,9 +92,18 @@ const scoreBarOption = computed<EChartsOption>(() => ({
     {
       name: '我的成绩',
       type: 'bar',
-      data: courses.value.map((c) => c.score),
+      data: courses.value.map((course) => ({
+        value: course.score ?? 0,
+        itemStyle: {
+          color: course.score === null ? '#cbd5e1' : '#2563eb',
+          borderRadius: [6, 6, 0, 0],
+        },
+        label: course.score === null
+          ? { show: true, position: 'top', formatter: '暂无', color: '#94a3b8' }
+          : { show: false },
+      })),
       barWidth: 28,
-      itemStyle: { color: '#2563eb', borderRadius: [6, 6, 0, 0] },
+      barMinHeight: 3,
     },
   ],
   legend: { show: false },
@@ -104,9 +114,33 @@ const hasCourseScores = computed(() => courses.value.some(
   (course) => course.score !== null || course.avgScore !== null,
 ))
 const hasTrendScores = computed(() => trendAvgScore.value.length > 0)
+const selectedTrendCourse = computed(() => courses.value.find(
+  (course) => course.id === selectedTrendCourseId.value,
+))
 
 function formatScore(score: number | null): string {
   return score === null ? '暂无' : `${score} 分`
+}
+
+async function loadTrend(courseId: number | null) {
+  const studentId = userStore.userInfo?.studentId
+  if (!studentId || !courseId) {
+    trendMonths.value = []
+    trendAvgScore.value = []
+    return
+  }
+
+  try {
+    const trendRes = await request.get('/v1/dashboard/grade-trend', {
+      params: { student_id: studentId, course_id: courseId },
+    })
+    const data = trendRes.data
+    trendMonths.value = data?.months ?? data?.labels ?? []
+    trendAvgScore.value = data?.avgScore ?? data?.avg_score ?? []
+  } catch {
+    trendMonths.value = []
+    trendAvgScore.value = []
+  }
 }
 
 /** 成绩趋势 */
@@ -126,31 +160,19 @@ const trendOption = computed<EChartsOption>(() => ({
 }))
 
 onMounted(async () => {
-  const studentId = userStore.userInfo?.studentId
-  const overviewPromise = fetchStudentDashboardOverview()
-  const trendPromise = studentId
-    ? request.get('/v1/dashboard/grade-trend', { params: { student_id: studentId } })
-    : Promise.resolve(null)
-
-  const [overviewResult, trendResult] = await Promise.allSettled([
-    overviewPromise,
-    trendPromise,
-  ])
-
-  if (overviewResult.status === 'fulfilled') {
-    overview.value = overviewResult.value
-  }
-  if (trendResult.status === 'fulfilled' && trendResult.value) {
-    const trendRes = trendResult.value
-    if (trendRes.data?.months) {
-      trendMonths.value = trendRes.data.months
-      trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
-    } else if (trendRes.data?.labels) {
-      trendMonths.value = trendRes.data.labels
-      trendAvgScore.value = trendRes.data.avgScore ?? trendRes.data.avg_score ?? []
-    }
+  try {
+    overview.value = await fetchStudentDashboardOverview()
+    const firstScoredCourse = courses.value.find((course) => course.score !== null)
+    selectedTrendCourseId.value = (firstScoredCourse ?? courses.value[0])?.id ?? null
+    await loadTrend(selectedTrendCourseId.value)
+  } catch {
+    overview.value = null
   }
   loading.value = false
+})
+
+watch(selectedTrendCourseId, (courseId, previousCourseId) => {
+  if (courseId !== previousCourseId) void loadTrend(courseId)
 })
 </script>
 
@@ -215,9 +237,29 @@ onMounted(async () => {
       </el-col>
       <el-col :xs="24" :md="12">
         <div class="content-card">
-          <div class="content-card__title">成绩变化趋势</div>
+          <div class="content-card__title trend-title">
+            <span>成绩变化趋势</span>
+            <el-select
+              v-model="selectedTrendCourseId"
+              class="trend-course-select"
+              size="small"
+              placeholder="选择课程"
+              :disabled="!courses.length"
+            >
+              <el-option
+                v-for="course in courses"
+                :key="course.id"
+                :label="course.name"
+                :value="course.id"
+              />
+            </el-select>
+          </div>
           <BaseChart v-if="hasTrendScores" :option="trendOption" height="300px" />
-          <el-empty v-else class="chart-empty" description="暂无成绩趋势" />
+          <el-empty
+            v-else
+            class="chart-empty"
+            :description="selectedTrendCourse ? `${selectedTrendCourse.name} 暂无成绩趋势` : '暂无成绩趋势'"
+          />
         </div>
       </el-col>
     </el-row>
@@ -282,5 +324,16 @@ onMounted(async () => {
 
 .chart-empty {
   min-height: 300px;
+}
+
+.trend-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trend-course-select {
+  width: 150px;
 }
 </style>

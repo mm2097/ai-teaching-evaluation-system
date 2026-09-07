@@ -1,0 +1,91 @@
+我已收集到足够数据。现在综合分析并生成班级学情诊断报告。
+
+数据汇总：
+- **课程总览**：计算机网络，74名学生，均分68.2，及格率66.7%，出勤率76.5%，预警75个
+- **成绩趋势**：平时作业76.2 → 实验报告69.7 → 期中67.3 → 期末68.2
+- **薄弱知识点**：以太网帧格式、ARP协议、TCP四次挥手、OSI七层模型、TCP/IP协议族（均为0%正确率）
+- **预警**：75个，其中孙浩然为高危（成绩下滑17分、缺勤3次、薄弱6个），其余多为"薄弱知识点18个"的低级预警
+- **知识点掌握度**：综合22.7%薄弱，多数核心知识点在0-25%之间
+
+让我生成诊断报告。
+
+{
+  "scope": "class",
+  "overall": {
+    "grade": "D",
+    "score": 68,
+    "summary": "计算机网络班级共74名学生，整体均分68.2分，及格率仅66.7%，出勤率76.5%。班级成绩从平时作业76.2分一路下滑至期中67.3分，期末虽微回升至68.2但仍处于低位；知识点综合掌握度仅22.7%（薄弱），预警学生高达75人次，学情整体堪忧。"
+  },
+  "findings": {
+    "strengths": [
+      {"point": "TCP三次握手掌握度良好，正确率达100%", "value": "100%", "evidence": "get_knowledge_mastery"},
+      {"point": "TCP/IP协议族部分掌握良好，正确率100%", "value": "100%", "evidence": "get_knowledge_mastery"},
+      {"point": "IP地址与子网划分、TCP可靠传输、DNS解析等知识点达到一般水平", "value": "75%", "evidence": "get_knowledge_mastery"}
+    ],
+    "risks": [
+      {
+        "level": "高",
+        "subject": "核心协议知识点全面崩塌",
+        "evidence": "ARP协议、TCP四次挥手、TCP/IP协议族、以太网帧格式正确率均为0%，OSI七层模型部分正确率0%，综合掌握度仅22.7%",
+        "students": ["孙浩然"]
+      },
+      {
+        "level": "中",
+        "subject": "成绩呈下滑趋势",
+        "evidence": "班级均分从平时作业76.2降至期中67.3，及格率仅66.7%，近半数学生成绩不理想",
+        "students": ["孙浩然"]
+      },
+      {
+        "level": "中",
+        "subject": "出勤率偏低",
+        "evidence": "全班出勤率仅76.5%，孙浩然缺勤3次（缺勤率50%），郑小红缺勤1次（缺勤率25%）",
+        "students": ["孙浩然", "郑小红"]
+      },
+      {
+        "level": "低",
+        "subject": "大面积学生存在知识点薄弱",
+        "evidence": "大量学生被预警为'薄弱知识点18个'，知识掌握体系存在系统性缺口",
+        "students": ["徐颖", "甘凌志", "陈佳伟", "张峻宇", "蔡君浩", "钟婧", "丁嘉欣", "肖云杰", "张馀玎", "詹家坤", "张楠", "何楚强", "李雨辰"]
+      }
+    ]
+  },
+  "causes": [
+    {"issue": "核心协议知识点掌握度为0%", "rootCause": "ARP、TCP四次挥手、以太网帧格式等基础概念性知识点整体未掌握，可能是课堂讲解深度不足或缺乏针对性练习，导致概念记忆与应用均缺失", "dataRef": "get_weak_knowledge_points"},
+    {"issue": "班级均分下滑且及格率低", "rootCause": "成绩从平时作业到期中持续下滑，结合出勤率仅76.5%，反映出部分学生课堂参与度和学习投入下降", "dataRef": "get_score_trend"},
+    {"issue": "综合掌握度仅22.7%", "rootCause": "OSI七层模型、TCP/IP协议族等网络基础框架概念掌握薄弱，说明基础概念体系未建立，后续进阶内容难以衔接", "dataRef": "get_knowledge_mastery"}
+  ],
+  "suggestions": [
+    {
+      "action": "针对ARP协议、TCP四次挥手、以太网帧格式、OSI七层模型、TCP/IP协议族等0%掌握度知识点组织专项练习与复习",
+      "priority": "高",
+      "toolHint": "weakness_driven_quiz",
+      "target": "计算机网络班级",
+      "knowledgePoints": ["ARP协议", "TCP四次挥手", "以太网帧格式", "OSI七层模型", "TCP/IP协议族"]
+    },
+    {
+      "action": "对高危预警学生孙浩然进行约谈，其成绩大幅下滑且缺勤严重，需了解原因并制定个性化帮扶计划",
+      "priority": "高",
+      "toolHint": "talk",
+      "target": "孙浩然",
+      "knowledgePoints": []
+    },
+    {
+      "action": "对全体预警学生（薄弱知识点达15-18个）发送学习提醒通知，督促其补齐基础概念",
+      "priority": "中",
+      "toolHint": "notify",
+      "target": "计算机网络班级预警学生",
+      "knowledgePoints": ["OSI七层模型", "TCP/IP协议族", "以太网帧格式"]
+    }
+  ],
+  "radar": {
+    "成绩": 68,
+    "考勤": 77,
+    "互动": 60,
+    "进步": 55,
+    "综合": 68
+  },
+  "meta": {
+    "source": "llm",
+    "toolsUsed": ["get_course_overview", "get_score_trend", "get_weak_knowledge_points", "get_knowledge_mastery", "get_warning_students"]
+  }
+}

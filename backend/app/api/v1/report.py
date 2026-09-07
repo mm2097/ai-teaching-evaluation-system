@@ -42,7 +42,7 @@ from sqlmodel import Session, select
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser, SysOperationLog
-from app.api.v1.analysis import _check_course_access
+from app.api.v1.analysis import _check_course_access, _check_profile_access
 from app.services.report_template import (
     build_class_context,
     build_student_context,
@@ -65,6 +65,7 @@ _REPORT_TYPE_NAMES: dict[int, str] = {
     2: "学生个人学情报告",
     3: "课程知识点分析报告",
     4: "学生学习质量报告",
+    5: "AI学情诊断报告",
 }
 
 
@@ -1157,6 +1158,144 @@ def export_report(
             ),
         },
     )
+
+
+# ============================================================================
+# 3. AI 学情诊断报告快照 —— Diagnosis.Export
+# ============================================================================
+
+class DiagnosisReportRequest(BaseModel):
+    """AI 学情诊断报告导出请求（前端把 LLM 输出的诊断 JSON 整体回传）。"""
+
+    course_id: int
+    student_id: int | None = None        # None=班级诊断，非 None=学生诊断
+    scope: str = Field(pattern="^(class|student)$")
+    diagnosis_json: dict                  # LLM 输出的完整诊断 JSON
+    export_format: str = Field(default="pdf", pattern="^(pdf|xlsx)$")
+
+
+def _diagnosis_to_report_fields(diag: dict) -> dict:
+    """诊断 JSON → 报告三段式字段 {summary, conclusion, suggestion}，缺字段用 "-" 兜底。
+
+    report.py 的 _snapshot_pdf / _snapshot_workbook 只读这三个字段，
+    适配后诊断报告可直接复用下载管线（TC-DIAG-EXPORT-04 兜底）。
+    """
+    overall = diag.get("overall", {}) or {}
+    findings = diag.get("findings", {}) or {}
+    causes = diag.get("causes", []) or []
+    suggestions = diag.get("suggestions", []) or []
+
+    summary = overall.get("summary") or "-"
+
+    # conclusion：优势 + 风险 + 归因 拼接
+    parts: list[str] = []
+    strengths = findings.get("strengths", []) or []
+    if strengths:
+        parts.append("优势：")
+        for s in strengths:
+            parts.append(f"  · {s.get('point', '-')}（{s.get('value', '-')}）")
+    risks = findings.get("risks", []) or []
+    if risks:
+        parts.append("风险：")
+        for r in risks:
+            students = r.get("students", []) or []
+            stu_text = ", ".join(students) if students else "-"
+            parts.append(
+                f"  · [{r.get('level', '-')}] {r.get('subject', '-')}："
+                f"{r.get('evidence', '-')}（涉及：{stu_text}）"
+            )
+    if causes:
+        parts.append("根因分析：")
+        for c in causes:
+            parts.append(
+                f"  · {c.get('issue', '-')} ← {c.get('rootCause', '-')}"
+                f"（数据：{c.get('dataRef', '-')}）"
+            )
+    conclusion = "\n".join(parts) if parts else "-"
+
+    # suggestion：建议列表拼接
+    if suggestions:
+        sug_parts = []
+        for s in suggestions:
+            kp = s.get("knowledgePoints", []) or []
+            kp_text = ", ".join(kp) if kp else "-"
+            sug_parts.append(
+                f"[{s.get('priority', '-')}] {s.get('action', '-')}"
+                f"（{s.get('toolHint', '-')}）→ 对象：{s.get('target', '-')}，知识点：{kp_text}"
+            )
+        suggestion = "\n".join(sug_parts)
+    else:
+        suggestion = "-"
+
+    return {"summary": summary, "conclusion": conclusion, "suggestion": suggestion}
+
+
+@router.post("/report/diagnosis", tags=["报告生成"])
+def save_diagnosis_report(
+    payload: DiagnosisReportRequest,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
+) -> dict:
+    """保存 AI 学情诊断报告快照，返回 report_id 供下载。
+
+    diagnosis 为教师专用：校验课程授课权 + 学生归属。
+    诊断 JSON 经 _diagnosis_to_report_fields 适配为三段式后写入 ReportHistory，
+    下载复用 GET /report/history/{id}/download（_snapshot_pdf / _snapshot_workbook）。
+    report_type=5 标记诊断报告，学生不在 {2,3,4} 白名单内，天然教师专用。
+    """
+    # 1. 权限校验（注意两函数参数顺序不同）
+    _check_course_access(session, current_user, payload.course_id)
+    if payload.student_id:
+        _check_profile_access(current_user, payload.student_id, payload.course_id, session)
+
+    # 2. 诊断 JSON → 报告三段式字段
+    report_fields = _diagnosis_to_report_fields(payload.diagnosis_json)
+
+    # 3. 查课程/学生名，构造 report_name
+    course = session.get(Course, payload.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="课程不存在")
+    if payload.student_id:
+        student = session.get(Student, payload.student_id)
+        subject_name = student.real_name if student else ""
+    else:
+        subject_name = "班级"
+    report_name = " - ".join([subject_name, course.course_name, "AI学情诊断报告"])
+
+    # 4. 构造快照（stats 放雷达+评级，供 PDF/Excel 展示）
+    parameters = {
+        "course_id": payload.course_id,
+        "student_id": payload.student_id,
+        "scope": payload.scope,
+        "export_format": payload.export_format,
+    }
+    radar = payload.diagnosis_json.get("radar", {}) or {}
+    stats = {
+        "radar": radar,
+        "grade": (payload.diagnosis_json.get("overall", {}) or {}).get("grade", "-"),
+    }
+
+    history = ReportHistory(
+        creator_user_id=current_user.user_id,
+        course_id=payload.course_id,
+        report_type=5,                              # 5=AI学情诊断报告
+        scope=payload.scope,
+        class_id=None,
+        student_id=payload.student_id,
+        export_format=payload.export_format,
+        report_name=report_name,
+        course_name=course.course_name,
+        class_name=None,
+        student_name=subject_name if payload.student_id else None,
+        parameter_snapshot=json.dumps(parameters, ensure_ascii=False),
+        report_snapshot=json.dumps(report_fields, ensure_ascii=False),
+        stats_snapshot=json.dumps(stats, ensure_ascii=False),
+        created_at=datetime.now(),
+    )
+    session.add(history)
+    session.commit()
+    session.refresh(history)
+    return _history_to_dict(history, include_snapshot=True)
 
 
 

@@ -19,6 +19,7 @@ export interface StreamAgentChatParams {
   courseName?: string
   message: string
   sessionId?: string
+  maxSteps?: number
 }
 
 /** 清空 Agent 会话记忆（后端进程内 6 轮记忆） */
@@ -63,7 +64,7 @@ export async function* streamAgentChat(
       course_id: params.courseId,
       agent_type: params.agentType,
       session_id: params.sessionId,
-      max_steps: 5,
+      max_steps: params.maxSteps ?? 5,
     }),
   })
 
@@ -117,11 +118,12 @@ export async function* streamAgentChat(
           }
 
         } else if (type === 'tool_result') {
-          // 匹配最后一个同名工具调用
+          // 工具名用于 DiagnosisView 精确匹配（后端 SSE 的 tool_result 事件携带 name）
           const name = evt.name as string
           yield {
             type: 'tool_result',
             callId: `tc-${toolCallCounter}`,
+            name,
             result: evt.result,
             summary: _summarizeResult(name, evt.result),
           }

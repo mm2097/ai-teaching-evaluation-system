@@ -2,7 +2,14 @@
  * AI 分析 API（调用真实后端 /api/v1/analysis/*）
  */
 import request from '@/utils/request'
-import type { AnalysisQuery, StudentProfileData, TargetType, WarningRecord } from '@/types'
+import { streamAgentChat } from '@/api/agent'
+import type {
+  AgentStreamEvent,
+  AnalysisQuery,
+  StudentProfileData,
+  TargetType,
+  WarningRecord,
+} from '@/types'
 
 export interface KnowledgeHeatmapResult {
   knowledgePoints: string[]
@@ -203,3 +210,76 @@ export const targetTypeOptions: { label: string; value: TargetType }[] = [
   { label: '学生', value: 'student' },
   { label: '班级', value: 'class' },
 ]
+
+// ============================================================================
+// AI 学情诊断（diagnosis Agent）
+// ============================================================================
+
+/** 诊断维度标识 → 中文标签 */
+export const DIAGNOSIS_DIMENSIONS: { key: string; label: string }[] = [
+  { key: 'score', label: '成绩' },
+  { key: 'attendance', label: '考勤' },
+  { key: 'knowledge', label: '知识点' },
+  { key: 'warning', label: '预警' },
+  { key: 'exercise', label: '答题' },
+]
+
+/** 诊断流式参数 */
+export interface StreamDiagnosisParams {
+  courseId: number
+  studentId?: number
+  scope: 'class' | 'student'
+  dimensions: string[]
+  depth: 'detail' | 'brief'
+  sessionId?: string
+}
+
+/** 拼装首条诊断消息（分析对象 + 维度 + 深度） */
+export function buildDiagnosisMessage(p: StreamDiagnosisParams): string {
+  const dimLabels = p.dimensions
+    .map((k) => DIAGNOSIS_DIMENSIONS.find((d) => d.key === k)?.label || k)
+    .join('、')
+  const target =
+    p.scope === 'student' ? `学生(student_id=${p.studentId})` : '班级'
+  const depth = p.depth === 'brief' ? '概览(只调3个核心工具)' : '详细'
+  return `请对${target}做${depth}学情诊断，分析维度：${dimLabels}。按工具编排策略调用学情查询工具全面收集数据，最后输出结构化JSON诊断报告。`
+}
+
+/**
+ * 流式 AI 学情诊断（SSE）。
+ * 封装 streamAgentChat，固定 agentType='diagnosis' + 预设首条消息 + maxSteps=8。
+ * 透传 SSE 事件（thinking/tool_call/tool_result/content_done/error）。
+ */
+export async function* streamDiagnosis(
+  params: StreamDiagnosisParams,
+): AsyncGenerator<AgentStreamEvent> {
+  const message = buildDiagnosisMessage(params)
+  const stream = streamAgentChat({
+    agentType: 'diagnosis',
+    message,
+    courseId: params.courseId,
+    sessionId: params.sessionId ?? `diagnosis_c${params.courseId}`,
+    maxSteps: 8,
+  })
+  for await (const evt of stream) {
+    yield evt
+  }
+}
+
+/** 保存 AI 学情诊断报告快照，返回 report_id 供下载 */
+export async function saveDiagnosisReport(params: {
+  courseId: number
+  studentId?: number
+  scope: 'class' | 'student'
+  diagnosisJson: Record<string, unknown>
+  exportFormat?: 'pdf' | 'xlsx'
+}): Promise<{ id: number; name: string }> {
+  const { data } = await request.post('/v1/report/diagnosis', {
+    course_id: params.courseId,
+    student_id: params.studentId ?? null,
+    scope: params.scope,
+    diagnosis_json: params.diagnosisJson,
+    export_format: params.exportFormat ?? 'pdf',
+  })
+  return { id: data.id, name: data.name }
+}

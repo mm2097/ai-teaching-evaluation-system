@@ -423,7 +423,7 @@ export interface AiReportResult {
 }
 
 /** Agent 类型 */
-export type AgentType = 'qa' | 'exam' | 'tutor'
+export type AgentType = 'qa' | 'exam' | 'tutor' | 'diagnosis'
 
 /** Agent 工具调用记录 */
 export interface AgentToolCall {
@@ -450,7 +450,7 @@ export interface AgentMessage {
 export type AgentStreamEvent =
   | { type: 'thinking' }
   | { type: 'tool_call'; call: AgentToolCall }
-  | { type: 'tool_result'; callId: string; result: unknown; summary: string }
+  | { type: 'tool_result'; callId: string; name: string; result: unknown; summary: string }
   | { type: 'content_delta'; delta: string }
   | { type: 'content_done'; content: string; sources?: string[] }
   | { type: 'error'; message: string }
@@ -600,3 +600,57 @@ export interface RagReference {
 
 /** 逐题审核状态 */
 export type ReviewStatus = 'pending' | 'accepted' | 'rejected' | 'edited'
+
+/** 干预建议的工具提示（对应后端 suggestions.toolHint） */
+export type DiagnosisToolHint = 'weakness_driven_quiz' | 'notify' | 'talk'
+
+/** AI 学情诊断报告（对应后端 diagnosis Agent 输出的 JSON 结构） */
+export interface DiagnosisReport {
+  scope: 'class' | 'student'
+  overall: {
+    grade: string
+    score: number
+    summary: string
+  }
+  findings: {
+    strengths: { point: string; value: string; evidence: string }[]
+    risks: {
+      level: string
+      subject: string
+      evidence: string
+      students: string[]
+    }[]
+  }
+  causes: { issue: string; rootCause: string; dataRef: string }[]
+  suggestions: {
+    action: string
+    priority: string
+    toolHint: DiagnosisToolHint
+    target: string
+    knowledgePoints: string[]
+  }[]
+  radar: Record<string, number>
+  meta: { source: string; toolsUsed: string[] }
+  /** 学生视角额外字段 */
+  studentInfo?: { name: string; studentNo: string; studentId: number }
+  scoreHistory?: { assessment: string; score: number }[]
+  attitudeDetail?: {
+    attendanceRate: number
+    weakPoints: string[]
+    strongPoints: string[]
+  }
+}
+
+/** 诊断过程区单步记录 */
+export interface DiagnosisStep {
+  step: number
+  toolCalls: {
+    id: string
+    name: string
+    arguments: Record<string, unknown>
+    result?: unknown
+    summary?: string
+    status: 'running' | 'done' | 'error'
+  }[]
+  status: 'running' | 'done'
+}

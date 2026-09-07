@@ -45,6 +45,7 @@ export const menuList: MenuItem[] = [
       { path: '/analysis/trend', title: '成绩趋势预测', icon: 'TrendCharts' },
       { path: '/analysis/knowledge', title: '知识点掌握度', icon: 'Grid' },
       { path: '/analysis/warning', title: '异常学情预警', icon: 'Bell' },
+      { path: '/analysis/diagnosis', title: 'AI 学情分析', icon: 'Histogram' },
     ],
   },
   // ---- 学生端分析 ----
@@ -144,6 +145,7 @@ export const routeTitleMap: Record<string, string> = {
   '/analysis/trend': '成绩趋势预测',
   '/analysis/knowledge': '知识点掌握度',
   '/analysis/warning': '异常学情预警',
+  '/analysis/diagnosis': 'AI 学情分析',
   '/quiz/bank': '题库管理',
   '/quiz/manage': 'AI 出题',
   '/quiz/records': '答题记录',
@@ -173,6 +175,7 @@ export const routeParentMap: Record<string, { path: string; title: string }> = {
   '/analysis/trend': { path: '/analysis', title: '智能分析' },
   '/analysis/knowledge': { path: '/analysis', title: '智能分析' },
   '/analysis/warning': { path: '/analysis', title: '智能分析' },
+  '/analysis/diagnosis': { path: '/analysis', title: '智能分析' },
   '/quiz/bank': { path: '/quiz', title: '数智化教学分析评价' },
   '/quiz/manage': { path: '/quiz', title: '数智化教学分析评价' },
   '/quiz/records': { path: '/quiz', title: '数智化教学分析评价' },

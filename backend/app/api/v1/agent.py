@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
+from app.api.v1.analysis import _check_course_access, _check_profile_access
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.core.permissions import ensure_roles, require_teacher, require_teaching_user
@@ -33,8 +34,8 @@ class AgentChatRequest(BaseModel):
     course_id: int | None = Field(default=None, description="当前课程上下文")
     student_id: int | None = Field(default=None, description="当前学生上下文")
     session_id: str | None = Field(default=None, description="会话 ID（跨轮保持上下文）")
-    agent_type: str = Field(default="qa", description="qa=学情问答 / exam=组卷")
-    max_steps: int = Field(default=5, ge=1, le=8)
+    agent_type: str = Field(default="qa", description="qa=学情问答 / exam=组卷 / diagnosis=AI 学情诊断")
+    max_steps: int = Field(default=5, ge=1, le=10)
 
 
 class AgentChatResponse(BaseModel):
@@ -52,6 +53,26 @@ def _session_factory():
     return Session(engine)
 
 
+def _check_diagnosis_access(
+    session: Session, current_user: SysUser, req: "AgentChatRequest"
+) -> None:
+    """diagnosis 为教师专用：校验课程授课权 + 学生归属。
+
+    仅对 agent_type=="diagnosis" 生效，qa/exam/tutor 维持原行为（不校验）。
+    复用 analysis 的权限函数（注意参数顺序差异）：
+      _check_course_access(session, current_user, course_id)       # session 在前
+      _check_profile_access(current_user, student_id, course_id, session)  # session 在后
+    校验失败抛 HTTPException，调用方需在 try 外调用或在 except HTTPException 中透传。
+    _check_course_access 内部已拒绝 student/admin 角色，无需额外 require_teacher。
+    """
+    if req.agent_type != "diagnosis":
+        return
+    if req.course_id:
+        _check_course_access(session, current_user, req.course_id)
+    if req.student_id:
+        _check_profile_access(current_user, req.student_id, req.course_id, session)
+
+
 @router.post("/agent/chat", response_model=AgentChatResponse, tags=["Agent"])
 def agent_chat(
     req: AgentChatRequest,
@@ -61,9 +82,14 @@ def agent_chat(
     """同步版 Agent 对话（阻塞等待完整结果）。
 
     user_id 从当前 JWT 登录用户解析。
+
+    diagnosis 为教师专用，校验课程与学生访问权限；qa/exam/tutor 维持原行为。
     """
     _ensure_registered()
     user_id = current_user.user_id
+
+    # 仅 diagnosis 做权限校验（教师授课课程 + 课程内学生），HTTPException 直接抛出
+    _check_diagnosis_access(session, current_user, req)
 
     try:
         result = run_agent(
@@ -77,6 +103,8 @@ def agent_chat(
             max_steps=req.max_steps,
         )
         return AgentChatResponse(**result.to_dict())
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Agent chat 异常：{e}")
         return AgentChatResponse(
@@ -93,10 +121,17 @@ def agent_chat(
 def agent_chat_stream(
     req: AgentChatRequest,
     current_user: SysUser = Depends(get_current_user),
+    session: Session = Depends(get_session),
 ) -> StreamingResponse:
-    """SSE 流式版：实时推送工具调用过程，最后推送最终答案。"""
+    """SSE 流式版：实时推送工具调用过程，最后推送最终答案。
+
+    diagnosis 权限校验在 event_stream 之外执行，403/404 在 SSE 建立前以正常 HTTP 响应返回。
+    """
     _ensure_registered()
     user_id = current_user.user_id
+
+    # 仅 diagnosis 做权限校验，HTTPException 在生成器之外抛出（不进 SSE 流）
+    _check_diagnosis_access(session, current_user, req)
 
     def event_stream():
         try:

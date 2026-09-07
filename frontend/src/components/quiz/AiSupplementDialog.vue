@@ -7,16 +7,15 @@ import { ElMessage } from 'element-plus'
 import { MagicStick } from '@element-plus/icons-vue'
 import { exerciseTypeLabels } from '@/utils/exerciseJudge'
 import type { ExerciseType } from '@/types'
-import type { DifficultyDistribution } from './QuizWizardStep1Config.vue'
 
 const props = defineProps<{
   visible: boolean
   loading: boolean
   initialConfig?: {
     questionTypes: ExerciseType[]
-    difficultyDistribution: DifficultyDistribution
     extraRequirements: string
     knowledgePoints: string[]
+    typeCounts: Record<ExerciseType, number>
   } | null
 }>()
 
@@ -26,13 +25,20 @@ const emit = defineEmits<{
     knowledgePoints: string[]
     questionTypes: ExerciseType[]
     questionCount: number
-    difficultyDistribution: DifficultyDistribution
+    difficultyDistribution: { easy: number; medium: number; hard: number }
     extraRequirements: string
+    typeCounts: Record<ExerciseType, number>
   }]
 }>()
 
 const questionTypes = ref<ExerciseType[]>(['single_choice', 'multi_choice', 'judge', 'fill_blank', 'short_answer'])
-const difficultyDistribution = ref<DifficultyDistribution>({ easy: 2, medium: 2, hard: 1 })
+const typeCounts = ref<Record<ExerciseType, number>>({
+  single_choice: 1,
+  multi_choice: 1,
+  judge: 1,
+  fill_blank: 1,
+  short_answer: 1,
+})
 const extraRequirements = ref('')
 const knowledgePoints = ref<string[]>([])
 
@@ -45,19 +51,24 @@ const questionTypeOptions = [
 ]
 
 const totalCount = computed(() =>
-  difficultyDistribution.value.easy +
-  difficultyDistribution.value.medium +
-  difficultyDistribution.value.hard,
+  questionTypes.value.reduce((sum, t) => sum + (typeCounts.value[t] || 0), 0),
 )
+
+function ensureTypeCounts(): void {
+  questionTypes.value.forEach((t) => {
+    if (!typeCounts.value[t] || typeCounts.value[t] <= 0) typeCounts.value[t] = 1
+  })
+}
 
 watch(
   () => props.visible,
   (open) => {
     if (!open || !props.initialConfig) return
     questionTypes.value = [...props.initialConfig.questionTypes]
-    difficultyDistribution.value = { ...props.initialConfig.difficultyDistribution }
+    typeCounts.value = { ...props.initialConfig.typeCounts }
     extraRequirements.value = props.initialConfig.extraRequirements
     knowledgePoints.value = [...props.initialConfig.knowledgePoints]
+    ensureTypeCounts()
   },
 )
 
@@ -66,6 +77,7 @@ function handleConfirm(): void {
     ElMessage.warning('请至少选择一种题型')
     return
   }
+  ensureTypeCounts()
   if (totalCount.value === 0) {
     ElMessage.warning('请至少分配 1 道题')
     return
@@ -74,8 +86,10 @@ function handleConfirm(): void {
     knowledgePoints: knowledgePoints.value,
     questionTypes: questionTypes.value,
     questionCount: totalCount.value,
-    difficultyDistribution: { ...difficultyDistribution.value },
+    // 保留难度占比（沿用原始试卷，仅用于拆分新增题到各难度）
+    difficultyDistribution: { easy: 1, medium: 1, hard: 1 },
     extraRequirements: extraRequirements.value,
+    typeCounts: { ...typeCounts.value },
   })
 }
 </script>
@@ -84,7 +98,7 @@ function handleConfirm(): void {
   <el-dialog
     :model-value="visible"
     title="AI 补题"
-    width="520px"
+    width="560px"
     :close-on-click-modal="!loading"
     @update:model-value="emit('update:visible', $event)"
   >
@@ -99,16 +113,14 @@ function handleConfirm(): void {
         </el-checkbox-group>
       </el-form-item>
 
-      <el-form-item label="难度分布">
-        <div class="diff-row">
-          <span class="diff easy">简单</span>
-          <el-input-number v-model="difficultyDistribution.easy" :min="0" :max="20" size="small" />
-          <span class="diff medium">中等</span>
-          <el-input-number v-model="difficultyDistribution.medium" :min="0" :max="20" size="small" />
-          <span class="diff hard">困难</span>
-          <el-input-number v-model="difficultyDistribution.hard" :min="0" :max="20" size="small" />
-          <span class="total">共 {{ totalCount }} 题</span>
+      <el-form-item label="每题型数量">
+        <div class="count-grid">
+          <div v-for="t in questionTypeOptions" :key="t.value" v-show="questionTypes.includes(t.value)" class="count-cell">
+            <span class="count-label">{{ t.label }}</span>
+            <el-input-number v-model="typeCounts[t.value]" :min="0" :max="30" size="small" controls-position="right" />
+          </div>
         </div>
+        <span class="total">共 {{ totalCount }} 题</span>
       </el-form-item>
 
       <el-form-item label="补充说明">
@@ -139,24 +151,31 @@ function handleConfirm(): void {
   margin: 0 0 16px;
 }
 
-.diff-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+.count-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px 16px;
+  width: 100%;
 
-  .diff {
-    font-size: 13px;
-    &.easy { color: #67c23a; }
-    &.medium { color: #e6a23c; }
-    &.hard { color: #f56c6c; }
-  }
+  .count-cell {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
 
-  .total {
-    font-size: 13px;
-    color: #64748b;
-    margin-left: 4px;
+    .count-label {
+      font-size: 13px;
+      color: #475569;
+      white-space: nowrap;
+    }
   }
+}
+
+.total {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: #64748b;
 }
 </style>
 

@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="AI 辅助教学评价系统后端 API",
+    description="数智化教学分析评价系统后端 API",
     lifespan=lifespan,
 )
 

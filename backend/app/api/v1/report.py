@@ -728,7 +728,7 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
     document = SimpleDocTemplate(
         output, pagesize=A4, leftMargin=22 * mm, rightMargin=22 * mm,
         topMargin=20 * mm, bottomMargin=20 * mm,
-        title=history.report_name, author="AI 辅助教学评价系统",
+        title=history.report_name, author="数智化教学分析评价",
     )
     document.build(story, onFirstPage=_draw_footer, onLaterPages=_draw_footer)
     return output.getvalue()
@@ -1022,7 +1022,7 @@ def preview_report(
 <div class="card">{report.get("suggestion", "")}</div>
 
 <div class="footer">
-  AI 辅助教学评价系统 · {type_name} · 数据源：成绩、考勤、课堂互动、答题记录
+  数智化教学分析评价 · {type_name} · 数据源：成绩、考勤、课堂互动、答题记录
 </div>
 </body></html>"""
 

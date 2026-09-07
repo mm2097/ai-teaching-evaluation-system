@@ -31,6 +31,9 @@ export type GenerateConfig = {
   difficultyDistribution: DifficultyDistribution
   extraRequirements: string
   title: string
+  totalScore: number
+  typeRatios: Record<ExerciseType, number>
+  typeCounts: Record<ExerciseType, number>
 }
 
 const emit = defineEmits<{
@@ -52,6 +55,21 @@ const form = ref({
   questionTypes: ['single_choice', 'multi_choice', 'judge', 'fill_blank', 'short_answer'] as ExerciseType[],
   difficultyDistribution: { easy: 2, medium: 2, hard: 1 } as DifficultyDistribution,
   extraRequirements: '',
+  totalScore: 100,
+  typeRatios: {
+    single_choice: 0,
+    multi_choice: 0,
+    judge: 0,
+    fill_blank: 0,
+    short_answer: 0,
+  } as Record<ExerciseType, number>,
+  typeCounts: {
+    single_choice: 3,
+    multi_choice: 2,
+    judge: 2,
+    fill_blank: 2,
+    short_answer: 2,
+  } as Record<ExerciseType, number>,
 })
 
 const questionTypeOptions = [
@@ -62,21 +80,94 @@ const questionTypeOptions = [
   { label: exerciseTypeLabels.short_answer, value: 'short_answer' as ExerciseType },
 ]
 
+/** 总题量 = 已选题型的题目数量之和 */
 const totalCount = computed(() =>
-  form.value.difficultyDistribution.easy +
-  form.value.difficultyDistribution.medium +
-  form.value.difficultyDistribution.hard
+  form.value.questionTypes.reduce((sum, t) => sum + (form.value.typeCounts[t] || 0), 0)
 )
 
-const distributionHint = computed(() => {
+/** 难度占比提示（难度仅用于把每种题型按比例拆分到简单/中等/困难） */
+const difficultyRatioHint = computed(() => {
   const d = form.value.difficultyDistribution
-  if (totalCount.value === 0) return '请分配题量'
   const parts: string[] = []
-  if (d.easy) parts.push(`简单 ${d.easy}`)
-  if (d.medium) parts.push(`中等 ${d.medium}`)
-  if (d.hard) parts.push(`困难 ${d.hard}`)
-  return `${parts.join(' · ')}（共 ${totalCount.value} 题）`
+  if (d.easy) parts.push(`简单 : ${d.easy}`)
+  if (d.medium) parts.push(`中等 : ${d.medium}`)
+  if (d.hard) parts.push(`困难 : ${d.hard}`)
+  return `难度占比（${parts.join('  ')}）：将每种题型的题数按该比例分配到各难度`
 })
+
+/** 已选题型的数量（用于均分占比兜底） */
+const selectedTypeCount = computed(() => form.value.questionTypes.length)
+
+/** 已选题型的占比合计(%) */
+const totalRatio = computed(() => {
+  if (!form.value.questionTypes.length) return 0
+  return form.value.questionTypes.reduce(
+    (sum, t) => sum + (form.value.typeRatios[t] || 0),
+    0,
+  )
+})
+
+/** 将当前占比按比例归一化到 100%（避免四舍五入误差累积） */
+function normalizeRatios(): void {
+  const types = form.value.questionTypes
+  if (!types.length) return
+  const sum = types.reduce((s, t) => s + (form.value.typeRatios[t] || 0), 0)
+  if (sum === 0) {
+    // 全部为 0：均分
+    let rest = 100
+    types.forEach((t, i) => {
+      const v = i === types.length - 1 ? rest : Math.round(rest / types.length)
+      form.value.typeRatios[t] = v
+      rest -= v
+    })
+    return
+  }
+  let rest = 100
+  types.forEach((t, i) => {
+    if (i === types.length - 1) {
+      form.value.typeRatios[t] = rest
+      return
+    }
+    const v = Math.round((form.value.typeRatios[t] / sum) * 100)
+    form.value.typeRatios[t] = Math.max(0, v)
+    rest -= v
+  })
+  // 负值防呆
+  types.forEach((t) => {
+    form.value.typeRatios[t] = Math.max(0, form.value.typeRatios[t])
+  })
+}
+
+function handleTypeChange(): void {
+  // 保证每个已选题型占比与题数为正（至少 1），避免后端按 0 占比/0 题数算漏分
+  form.value.questionTypes.forEach((t) => {
+    if ((form.value.typeRatios[t] || 0) <= 0) form.value.typeRatios[t] = 1
+    if ((form.value.typeCounts[t] || 0) <= 0) form.value.typeCounts[t] = 1
+  })
+}
+
+/** 智能分配：按当前已选数量均分占比 */
+function autoBalanceRatios(): void {
+  if (!form.value.questionTypes.length) return
+  const types = form.value.questionTypes
+  const per = Math.floor(100 / types.length)
+  let rest = 100
+  types.forEach((t, i) => {
+    const v = i === types.length - 1 ? rest : per
+    form.value.typeRatios[t] = v
+    rest -= v
+  })
+}
+
+/** 均分每种题型的题数（按已选题型均分总题数） */
+function autoBalanceCounts(): void {
+  if (!form.value.questionTypes.length) return
+  const types = form.value.questionTypes
+  const per = Math.floor(30 / types.length) || 1
+  types.forEach((t) => {
+    form.value.typeCounts[t] = per
+  })
+}
 
 async function loadClassOptions(): Promise<void> {
   const teacherId = userStore.userInfo?.role === 'teacher' ? userStore.userInfo?.teacherId : undefined
@@ -104,6 +195,16 @@ function validateAndGetConfig(): GenerateConfig | null {
     ElMessage.warning('请至少分配 1 道题')
     return null
   }
+  if (!form.value.totalScore || form.value.totalScore <= 0) {
+    ElMessage.warning('请输入有效的总分')
+    return null
+  }
+  // 汇总占比前先归一化到 100%
+  normalizeRatios()
+  if (totalRatio.value !== 100) {
+    ElMessage.warning('题型分数占比须合计为 100%')
+    return null
+  }
   return {
     courseId: form.value.courseId,
     classId: form.value.classId,
@@ -113,6 +214,9 @@ function validateAndGetConfig(): GenerateConfig | null {
     difficultyDistribution: { ...form.value.difficultyDistribution },
     extraRequirements: form.value.extraRequirements,
     title: form.value.title,
+    totalScore: form.value.totalScore,
+    typeRatios: { ...form.value.typeRatios },
+    typeCounts: { ...form.value.typeCounts },
   }
 }
 
@@ -195,22 +299,89 @@ defineExpose({
         </el-form-item>
 
         <el-form-item label="题型">
-          <el-checkbox-group v-model="form.questionTypes">
+          <el-checkbox-group v-model="form.questionTypes" @change="handleTypeChange">
             <el-checkbox v-for="t in questionTypeOptions" :key="t.value" :value="t.value">
               {{ t.label }}
             </el-checkbox>
           </el-checkbox-group>
         </el-form-item>
 
-        <!-- 难度分布 -->
-        <el-form-item label="难度分布">
+        <!-- 每题型数量（题型数量优先，总题量=各题型之和） -->
+        <el-form-item label="每题型数量">
+          <div class="ratio-box">
+            <div v-if="selectedTypeCount" class="ratio-rows">
+              <div v-for="t in questionTypeOptions" :key="t.value" v-show="form.questionTypes.includes(t.value)" class="ratio-row">
+                <span class="ratio-label">{{ t.label }}</span>
+                <el-input-number
+                  :model-value="form.typeCounts[t.value]"
+                  :min="0"
+                  :max="30"
+                  size="small"
+                  controls-position="right"
+                  @update:model-value="(v: number | undefined) => { form.typeCounts[t.value] = v ?? 0 }"
+                />
+              </div>
+              <div class="ratio-actions">
+                <span class="count-sum">共 {{ totalCount }} 题</span>
+                <el-link type="primary" :underline="false" @click="autoBalanceCounts">均分</el-link>
+              </div>
+            </div>
+            <span v-else class="ratio-empty">请先选择题型</span>
+          </div>
+        </el-form-item>
+
+        <!-- 试卷总分与题型分数占比 -->
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="试卷总分">
+              <el-input-number
+                v-model="form.totalScore"
+                :min="1"
+                :max="1000"
+                :step="10"
+                controls-position="right"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="题型分数占比">
+              <div class="ratio-box">
+                <div v-if="selectedTypeCount" class="ratio-rows">
+                  <div v-for="t in questionTypeOptions" :key="t.value" v-show="form.questionTypes.includes(t.value)" class="ratio-row">
+                    <span class="ratio-label">{{ t.label }}</span>
+                    <el-input-number
+                      :model-value="form.typeRatios[t.value]"
+                      :min="0"
+                      :max="100"
+                      :step="5"
+                      size="small"
+                      controls-position="right"
+                      @update:model-value="(v: number | undefined) => { form.typeRatios[t.value] = v ?? 0 }"
+                    />
+                  </div>
+                  <div class="ratio-actions">
+                    <span :class="['ratio-sum', { 'ok': totalRatio === 100 }]">
+                      合计 {{ totalRatio }}%
+                    </span>
+                    <el-link type="primary" :underline="false" @click="autoBalanceRatios">均分</el-link>
+                  </div>
+                </div>
+                <span v-else class="ratio-empty">请先选择题型</span>
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <!-- 难度占比（仅用于把每种题型按比例拆分到各难度） -->
+        <el-form-item label="难度占比">
           <div class="difficulty-distribution">
             <div class="diff-input">
               <span class="diff-label easy">🟢 简单</span>
               <el-input-number
                 v-model="form.difficultyDistribution.easy"
                 :min="0"
-                :max="20"
+                :max="100"
                 size="small"
                 controls-position="right"
               />
@@ -220,7 +391,7 @@ defineExpose({
               <el-input-number
                 v-model="form.difficultyDistribution.medium"
                 :min="0"
-                :max="20"
+                :max="100"
                 size="small"
                 controls-position="right"
               />
@@ -230,12 +401,12 @@ defineExpose({
               <el-input-number
                 v-model="form.difficultyDistribution.hard"
                 :min="0"
-                :max="20"
+                :max="100"
                 size="small"
                 controls-position="right"
               />
             </div>
-            <span class="distribution-hint">{{ distributionHint }}</span>
+            <span class="distribution-hint">{{ difficultyRatioHint }}</span>
           </div>
         </el-form-item>
 
@@ -316,6 +487,38 @@ defineExpose({
       color: #64748b;
       margin-left: 8px;
     }
+  }
+
+  .ratio-box {
+    width: 100%;
+    .ratio-rows {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ratio-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      .ratio-label { font-size: 13px; color: #475569; }
+    }
+    .ratio-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+      .ratio-sum {
+        font-size: 13px;
+        color: #f56c6c;
+        &.ok { color: #67c23a; }
+      }
+      .count-sum {
+        font-size: 13px;
+        color: #475569;
+      }
+    }
+    .ratio-empty { font-size: 13px; color: #94a3b8; }
   }
 
   .compose-actions {

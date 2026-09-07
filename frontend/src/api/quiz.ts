@@ -124,6 +124,12 @@ export interface GenerateQuizParams {
   difficulty?: DifficultyLevel  // 兼容旧前端单一难度
   difficultyDistribution?: { easy: number; medium: number; hard: number }
   extraRequirements?: string
+  /** 试卷总分（默认 100） */
+  totalScore?: number
+  /** 题型分数占比（单位 %，如 {"single_choice":60,"short_answer":40}，可省略则均分） */
+  typeRatios?: Record<string, number>
+  /** 每题型数量（题型数量优先模式，如 {"single_choice":4,"short_answer":2}） */
+  typeCounts?: Record<string, number>
 }
 
 /** AI 生成练习题响应 */
@@ -166,6 +172,9 @@ function buildGeneratePayload(params: GenerateQuizParams) {
     extraRequirements: string
     difficultyDistribution?: GenerateQuizParams['difficultyDistribution']
     difficulty?: DifficultyLevel
+    totalScore?: number
+    typeRatios?: Record<string, number>
+    typeCounts?: Record<string, number>
   } = {
     courseId: params.courseId,
     knowledgePoints: params.knowledgePoints.length ? params.knowledgePoints : ['综合'],
@@ -179,6 +188,9 @@ function buildGeneratePayload(params: GenerateQuizParams) {
   } else {
     payload.difficulty = params.difficulty || 'medium'
   }
+  if (params.totalScore !== undefined) payload.totalScore = params.totalScore
+  if (params.typeRatios) payload.typeRatios = params.typeRatios
+  if (params.typeCounts) payload.typeCounts = params.typeCounts
   return payload
 }
 
@@ -191,7 +203,7 @@ async function postWithGenerateRetry<T>(url: string, params: GenerateQuizParams)
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await request.post(url, payload, {
-        timeout: 70000,
+        timeout: 180000,
         silentError: attempt < maxAttempts,
       } as Parameters<typeof request.post>[2])
       return res.data as T
@@ -232,7 +244,7 @@ export async function startSelfPractice(params: GenerateQuizParams): Promise<Sta
 export interface StreamCallbacks {
   onStage?: (stage: string, difficulty?: string) => void
   onQuestion?: (question: QuizQuestion) => void
-  onDone?: (ragReferences: RagReference[], totalCount: number, meta?: GenerateQuizResult['meta']) => void
+  onDone?: (ragReferences: RagReference[], totalCount: number, meta?: GenerateQuizResult['meta'], questions?: QuizQuestion[]) => void
   onError?: (message: string) => void
 }
 
@@ -273,7 +285,7 @@ export async function generateQuizStream(params: GenerateQuizParams, callbacks: 
           const event = JSON.parse(line.slice(6))
           if (event.type === 'stage') callbacks.onStage?.(event.stage, event.difficulty)
           else if (event.type === 'question') callbacks.onQuestion?.(event.question)
-          else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0, event.meta)
+          else if (event.type === 'done') callbacks.onDone?.(event.ragReferences || [], event.totalCount || 0, event.meta, event.questions)
           else if (event.type === 'error') callbacks.onError?.(event.message || '生成失败')
         } catch { /* skip malformed */ }
       }

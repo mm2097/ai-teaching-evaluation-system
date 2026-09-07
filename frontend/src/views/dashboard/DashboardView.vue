@@ -388,7 +388,7 @@ onMounted(() => {
           {{ greeting }}，{{ userStore.userInfo?.name || '老师' }}
         </h2>
         <p class="welcome-panel__subtitle">
-          欢迎使用 AI 数智化教学分析评价系统综合看板
+          欢迎使用数智化教学分析评价系统综合看板
         </p>
         <p class="welcome-panel__desc">
           请在上方完成筛选后点击「查询」，系统将展示对应班级在选定课程下的学情概览、成绩分布与知识点掌握情况。

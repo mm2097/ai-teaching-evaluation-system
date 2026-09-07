@@ -233,7 +233,7 @@ onMounted(loadOverview)
             </div>
           </div>
           <div class="system-version">
-            <span>{{ overview?.system.appName || 'AI 教学评价系统' }}</span>
+            <span>{{ overview?.system.appName || '数智化教学分析评价' }}</span>
             <span>v{{ overview?.system.version || '--' }}</span>
           </div>
         </div>

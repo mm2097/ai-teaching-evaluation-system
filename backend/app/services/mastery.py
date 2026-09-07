@@ -7,6 +7,8 @@
 
 数据来源：
     - 考试题目标注知识点 + AI 答题记录（StudentAnswerRecord + AiQuestion.point_id）
+    - 课程测试各题扣分（CourseTestDetail.question{1..5}_score/_knowledge）
+      按扣分知识点折算掌握度，与答题正确率并存时取平均
     - 兜底：KnowledgeMastery 表的 mastery_score
 """
 from __future__ import annotations
@@ -21,6 +23,8 @@ from app.models import (
     AiQuestion,
     AnswerTask,
     CourseStudent,
+    CourseTestDetail,
+    ExamBatch,
     KnowledgeMastery,
     KnowledgeModule,
     KnowledgePoint,
@@ -28,6 +32,12 @@ from app.models import (
     StudentAnswerRecord,
 )
 from app.models.question import TASK_TYPE_ASSIGNMENT
+from app.services.knowledge_utils import split_knowledge_names
+
+# 课程测试模板固定 5 大题，按满分 100 分均摊：每题满分 20 分。
+# 每题掌握度 = (20 - 该题扣分) / 20 * 100；
+# 一格多个知识点时扣分与可得分均摊到各知识点。
+EXAM_QUESTION_FULL_SCORE = 20.0
 
 
 @dataclass
@@ -47,6 +57,76 @@ def accuracy_to_level(accuracy: float) -> tuple[str, str]:
     if accuracy >= 60:
         return "一般", "yellow"
     return "薄弱", "red"
+
+
+def compute_exam_mastery_indexes(
+    session: Session,
+    course_id: int,
+    student_ids: list[int],
+) -> dict[tuple[int, int], float]:
+    """基于课程测试各题扣分计算学生-知识点掌握度（0-100）。
+
+    数据来源：CourseTestDetail（教师上传「各题扣分情况」模板落库）。
+    每题按满分 EXAM_QUESTION_FULL_SCORE 计，掌握度 = 该知识点累计
+    可得分扣去累计扣分后的得分率；一格含多个知识点时均摊。
+    只返回有扣分数据的 (student_id, point_id) 组合。
+    """
+    if not student_ids:
+        return {}
+
+    modules = session.exec(
+        select(KnowledgeModule).where(KnowledgeModule.course_id == course_id)
+    ).all()
+    module_ids = [m.module_id for m in modules]
+    if not module_ids:
+        return {}
+
+    points = session.exec(
+        select(KnowledgePoint).where(KnowledgePoint.module_id.in_(module_ids))  # type: ignore
+    ).all()
+    name_to_point = {p.point_name.strip(): p.point_id for p in points}
+    if not name_to_point:
+        return {}
+
+    batch_ids = session.exec(
+        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    ).all()
+    if not batch_ids:
+        return {}
+
+    details = session.exec(
+        select(CourseTestDetail).where(
+            CourseTestDetail.exam_batch_id.in_(batch_ids),  # type: ignore[arg-type]
+            CourseTestDetail.student_id.in_(student_ids),  # type: ignore[arg-type]
+        )
+    ).all()
+
+    loss: dict[tuple[int, int], float] = {}
+    chance: dict[tuple[int, int], float] = {}
+    for detail in details:
+        for qn in range(1, 6):
+            try:
+                deduction = float(getattr(detail, f"question{qn}_score") or 0)
+            except (TypeError, ValueError):
+                deduction = 0.0
+            if deduction <= 0:
+                continue
+            names = split_knowledge_names(getattr(detail, f"question{qn}_knowledge"))
+            point_ids = [name_to_point[n] for n in names if n in name_to_point]
+            if not point_ids:
+                continue
+            per_deduction = deduction / len(point_ids)
+            per_chance = EXAM_QUESTION_FULL_SCORE / len(point_ids)
+            for point_id in point_ids:
+                key = (detail.student_id, point_id)
+                loss[key] = loss.get(key, 0.0) + per_deduction
+                chance[key] = chance.get(key, 0.0) + per_chance
+
+    return {
+        key: round((ch - loss.get(key, 0.0)) / ch * 100.0, 1)
+        for key, ch in chance.items()
+        if ch > 0
+    }
 
 
 def compute_student_mastery(
@@ -99,11 +179,20 @@ def compute_student_mastery(
     ).all()
     km_scores = {km.point_id: km.mastery_score for km in km_rows}
 
+    # 考试扣分折算的掌握度（仅覆盖有扣分数据的知识点）
+    exam_index = compute_exam_mastery_indexes(session, course_id, [student_id])
+
     results: list[MasteryStat] = []
     for p in points:
         total, correct = answer_stats.get(p.point_id, (0, 0))
+        exam_score = exam_index.get((student_id, p.point_id))
         if total and total > 0:
             accuracy = (correct or 0) * 100.0 / total
+            # 答题正确率与考试扣分并存时取平均
+            if exam_score is not None:
+                accuracy = round((accuracy + exam_score) / 2.0, 1)
+        elif exam_score is not None:
+            accuracy = exam_score
         else:
             accuracy = km_scores.get(p.point_id, 0.0)
 
@@ -122,7 +211,11 @@ def compute_student_mastery(
 
 
 def refresh_student_mastery(session: Session, student_id: int, course_id: int) -> None:
-    """按该生全部答题记录刷新持久化个人掌握度。"""
+    """按该生全部答题记录 + 课程测试扣分刷新持久化个人掌握度。
+
+    答题正确率与考试扣分折算值并存时取平均；
+    仅考试扣分覆盖的知识点也写入（替代旧的成绩均值估算）。
+    """
     session.flush()
     rows = session.exec(
         select(
@@ -137,11 +230,24 @@ def refresh_student_mastery(session: Session, student_id: int, course_id: int) -
         )
         .group_by(AiQuestion.point_id)
     ).all()
+    answer_stats = {point_id: (total, correct) for point_id, total, correct in rows}
 
-    for point_id, total, correct in rows:
-        if not total:
+    exam_index = compute_exam_mastery_indexes(session, course_id, [student_id])
+
+    point_ids = set(answer_stats.keys()) | {
+        point_id for (sid, point_id) in exam_index if sid == student_id
+    }
+    for point_id in point_ids:
+        total, correct = answer_stats.get(point_id, (0, 0))
+        exam_score = exam_index.get((student_id, point_id))
+        if total:
+            score = round((correct or 0) * 100.0 / total, 1)
+            if exam_score is not None:
+                score = round((score + exam_score) / 2.0, 1)
+        elif exam_score is not None:
+            score = exam_score
+        else:
             continue
-        score = round((correct or 0) * 100.0 / total, 1)
         mastery = session.exec(
             select(KnowledgeMastery).where(
                 KnowledgeMastery.course_id == course_id,
@@ -171,10 +277,20 @@ def compute_mastery_index_with_fallback(
 ) -> dict[tuple[int, int], float]:
     """教师/管理员视角：优先答题记录，无记录时回退到 KnowledgeMastery 表。
 
+    课程测试扣分折算的掌握度与答题正确率并存时取平均；
+    其余无答题/无扣分数据的组合再回退 KnowledgeMastery 表，
     这样即使学生没有答题记录（如预注入的演示数据），教师也能看到
     知识点掌握度热力图，而不是全为 0。
     """
     answer_index = compute_assignment_accuracy_index(session, course_id, student_ids)
+
+    # 考试扣分折算掌握度合并进索引（并存取平均）
+    exam_index = compute_exam_mastery_indexes(session, course_id, student_ids)
+    for pair, exam_score in exam_index.items():
+        if pair in answer_index:
+            answer_index[pair] = round((answer_index[pair] + exam_score) / 2.0, 1)
+        else:
+            answer_index[pair] = exam_score
 
     # 收集 answer_index 中已有的 (student_id, point_id) 组合
     answered_pairs = set(answer_index.keys())
@@ -263,6 +379,14 @@ def compute_class_mastery(
         stmt = stmt.where(Student.class_id == class_id)
     student_ids = list(session.exec(stmt).all())
     accuracy_index = compute_assignment_accuracy_index(session, course_id, student_ids)
+
+    # 考试扣分折算掌握度合并进索引（并存取平均），保持"仅有数据的学生计入均值"语义
+    exam_index = compute_exam_mastery_indexes(session, course_id, student_ids)
+    for pair, exam_score in exam_index.items():
+        if pair in accuracy_index:
+            accuracy_index[pair] = round((accuracy_index[pair] + exam_score) / 2.0, 1)
+        else:
+            accuracy_index[pair] = exam_score
 
     results: list[MasteryStat] = []
     for p in points:

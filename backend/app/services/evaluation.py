@@ -17,7 +17,6 @@ import json
 from dataclasses import dataclass, field
 from collections import Counter, defaultdict
 from math import isfinite
-
 from sqlmodel import Session, select
 
 from app.models import (

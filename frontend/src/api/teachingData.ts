@@ -99,10 +99,17 @@ interface TeachingDataApiRow {
   totalCount?: number
 }
 
+/** 后端查询 data_type 与落库 recordType 的映射（participation 查询实际落在 participation_sheet 表） */
+const RECORD_TYPE_ALIASES: Record<'score' | 'attendance' | 'participation', TeachingRecordType> = {
+  score: 'score',
+  attendance: 'attendance',
+  participation: 'participation_sheet',
+}
+
 function mapTeachingDataRow(row: TeachingDataApiRow, courseName: string): TeachingDataRecord {
   return {
     id: row.recordId,
-    recordType: row.recordType || row.dataType,
+    recordType: row.recordType || RECORD_TYPE_ALIASES[row.dataType],
     studentId: row.studentId,
     studentName: row.studentName,
     courseId: String(row.courseId),

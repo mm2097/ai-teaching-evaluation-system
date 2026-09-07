@@ -29,6 +29,7 @@ def init_db() -> None:
     _migrate_dimension_weight()
     _migrate_evaluation_levels()
     _migrate_student_answers()
+    _migrate_split_combined_knowledge_points()
 
 
 def _migrate_evaluation_levels() -> None:
@@ -409,6 +410,101 @@ def _migrate_student_answers() -> None:
             connection.execute(text(
                 "UPDATE student_answer_record SET score = score * :factor WHERE task_id = :tid"
             ), {"factor": factor, "tid": task_id})
+
+
+def _migrate_split_combined_knowledge_points() -> None:
+    """历史复合知识点（如「传输时延、TCP/UDP协议」）拆分（幂等）。
+
+    早期导入把一格多个知识点整体建为一个知识点，考试扣分无法归属到
+    具体知识点。现将名称含分隔符（、/，/；）的知识点拆分为多个独立
+    知识点：
+    - 拆分片段在课程内同名知识点已存在时复用，否则在原模块下新建
+    - 删除复合点的掌握度记录与复合点自身（CourseTestDetail 中的原始
+      文本不动，计算掌握度/失分率时按分隔符拆分归属）
+    - AiQuestion 若引用复合点，改挂到第一个拆分片段
+    - 重算受影响课程的全部分析（失败不阻塞启动）
+    """
+    from sqlmodel import select
+
+    from app.models import AiQuestion, KnowledgeMastery, KnowledgeModule, KnowledgePoint
+    from app.services.knowledge_utils import split_knowledge_names
+
+    with Session(engine) as session:
+        combined_points = [
+            p for p in session.exec(select(KnowledgePoint)).all()
+            if len(split_knowledge_names(p.point_name)) > 1
+        ]
+        if not combined_points:
+            return
+
+        affected_courses: set[int] = set()
+        for point in combined_points:
+            module = session.get(KnowledgeModule, point.module_id)
+            course_id = module.course_id if module else None
+            if course_id is None:
+                continue
+            affected_courses.add(course_id)
+
+            # 课程内知识点按名称查重（跨模块复用同名点，避免拆出重复点）
+            course_module_ids = [
+                m.module_id
+                for m in session.exec(
+                    select(KnowledgeModule).where(KnowledgeModule.course_id == course_id)
+                ).all()
+            ]
+            existing_by_name = {
+                p2.point_name.strip(): p2
+                for p2 in session.exec(
+                    select(KnowledgePoint).where(
+                        KnowledgePoint.module_id.in_(course_module_ids)  # type: ignore[arg-type]
+                    )
+                ).all()
+                if p2.point_id != point.point_id
+            }
+
+            split_points = []
+            for piece in split_knowledge_names(point.point_name):
+                target = existing_by_name.get(piece)
+                if target is None:
+                    target = KnowledgePoint(
+                        module_id=point.module_id,
+                        point_name=piece,
+                        description="",
+                        sort_num=0,
+                    )
+                    session.add(target)
+                    session.flush()
+                    existing_by_name[piece] = target
+                split_points.append(target)
+
+            # AiQuestion 引用复合点 → 改挂第一个拆分片段
+            for question in session.exec(
+                select(AiQuestion).where(AiQuestion.point_id == point.point_id)
+            ).all():
+                question.point_id = split_points[0].point_id
+                session.add(question)
+
+            # 清理复合点的掌握度记录与复合点自身
+            for km in session.exec(
+                select(KnowledgeMastery).where(KnowledgeMastery.point_id == point.point_id)
+            ).all():
+                session.delete(km)
+            session.delete(point)
+
+        session.commit()
+
+    # 扣分归属口径变化 → 重算受影响课程的掌握度与画像（失败不阻塞启动）
+    try:
+        from app.services.analysis_refresh import refresh_course_analysis
+
+        for course_id in sorted(affected_courses):
+            with Session(engine) as bg_session:
+                refresh_course_analysis(bg_session, course_id)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Split combined knowledge points refresh failed (courses=%s)",
+            sorted(affected_courses),
+        )
 
 
 def _migrate_ai_question() -> None:

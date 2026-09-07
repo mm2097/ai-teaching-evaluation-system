@@ -162,6 +162,7 @@ export interface MockConfig {
   url: string
   params?: Record<string, unknown>
   data?: unknown
+  headers?: Record<string, unknown>
 }
 
 export function handleRequest(config: MockConfig): { status: number; data: unknown } {

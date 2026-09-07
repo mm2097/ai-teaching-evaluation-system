@@ -100,6 +100,16 @@ const heatmapTitle = computed(() => {
     : '学生个人知识点掌握度热力图'
 })
 
+/**
+ * 热力图高度：班级视角按学生人数动态加长（每人约 24px），
+ * 保证所有学生姓名在 Y 轴完整显示；个人视角固定 240px（班级均值 + 个人两行）。
+ */
+const heatmapHeight = computed(() => {
+  if (viewMode.value === 'student') return '240px'
+  const rows = heatmapData.value.students.length
+  return `${Math.max(400, rows * 24 + 120)}px`
+})
+
 const heatmapOption = computed<EChartsOption>(() => {
   const isPersonal = viewMode.value === 'student'
   const hasCompareRow = isPersonal && heatmapData.value.classAvgByKp?.length
@@ -142,7 +152,7 @@ const heatmapOption = computed<EChartsOption>(() => {
       data: yLabels,
       splitArea: { show: true },
       inverse: Boolean(isPersonal && hasCompareRow),
-      axisLabel: { fontSize: 11 },
+      axisLabel: { fontSize: 11, interval: 0 },
     },
     visualMap: {
       min: 0,
@@ -279,7 +289,7 @@ watch(
       <BaseChart
         v-if="heatmapData.data.length"
         :option="heatmapOption"
-        :height="viewMode === 'student' ? '240px' : '400px'"
+        :height="heatmapHeight"
       />
     </div>
 

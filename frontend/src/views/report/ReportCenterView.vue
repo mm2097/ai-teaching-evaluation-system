@@ -164,7 +164,7 @@ const hasAnyChart = computed(() =>
 
 const reportMetrics = computed(() => ({
   ...dashboardStats.value,
-  ...(reportData.value?.metrics ?? {}),
+  ...reportData.value?.metrics,
 }))
 
 const reportFindings = computed(() => reportData.value?.findings ?? [])

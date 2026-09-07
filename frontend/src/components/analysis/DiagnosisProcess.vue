@@ -40,18 +40,47 @@ function renderResult(result: unknown): string {
   return JSON.stringify(result, null, 2)
 }
 
+/** 工具名 → 中文标签（对老师友好，不暴露英文函数名） */
+const TOOL_LABELS: Record<string, string> = {
+  get_course_overview: '课程总览',
+  get_score_list: '成绩列表',
+  get_score_trend: '成绩趋势',
+  get_attendance: '考勤统计',
+  get_knowledge_mastery: '知识点掌握度',
+  get_weak_knowledge_points: '薄弱知识点',
+  get_warning_students: '预警学生',
+  get_student_detail: '学生档案',
+  get_exercise_records: '答题记录',
+  search_student: '搜索学生',
+}
+
+function toolLabel(name: string): string {
+  return TOOL_LABELS[name] || name
+}
+
+/** 工具参数 → 中文友好描述 */
+function toolArgsText(name: string, args: Record<string, unknown>): string {
+  const parts: string[] = []
+  if ('student_id' in args && args.student_id && args.student_id !== 0) {
+    parts.push(`学生 ${args.student_id}`)
+  }
+  if ('top_k' in args && args.top_k) parts.push(`前 ${args.top_k}`)
+  if ('keyword' in args && args.keyword) parts.push(`"${args.keyword}"`)
+  return parts.length ? `（${parts.join('、')}）` : ''
+}
+
 /** 工具名 → 中文摘要 */
 function summarize(name: string, result: unknown): string {
   if (!result || typeof result !== 'object') return ''
   const r = result as Record<string, unknown>
   if ('error' in r) return `失败：${r.error}`
   const map: Record<string, string> = {
-    get_course_overview: `${r.student_count ?? 0} 人·均分 ${r.avg_score ?? '-'}`,
+    get_course_overview: `${r.student_count ?? 0} 人·均分 ${r.avg_score ?? '-'}·预警 ${r.warning_count ?? 0}`,
     get_score_list: `${(r.scores as unknown[])?.length ?? 0} 条成绩`,
-    get_score_trend: `${(r.trend as unknown[])?.length ?? 0} 个数据点`,
+    get_score_trend: `${(r.trend as unknown[])?.length ?? 0} 次考核趋势`,
     get_attendance: `出勤率 ${r.rate ?? r.avg_rate ?? '-'}`,
     get_knowledge_mastery: `${(r.points as unknown[])?.length ?? 0} 个知识点`,
-    get_weak_knowledge_points: `${(r.weak_points as unknown[])?.length ?? 0} 个薄弱点`,
+    get_weak_knowledge_points: `薄弱 ${(r.weak_points as unknown[])?.length ?? 0} 个`,
     get_warning_students: `${(r.warning_students as unknown[])?.length ?? 0} 人预警`,
     get_student_detail: `${r.name ?? ''} 综合档案`,
     get_exercise_records: `${r.count ?? 0} 条答题`,
@@ -95,8 +124,8 @@ function summarize(name: string, result: unknown): string {
               <span v-else-if="call.status === 'error'" class="dot error">✕</span>
               <span v-else class="dot done">✓</span>
             </span>
-            <span class="tool-name">{{ call.name }}</span>
-            <span class="tool-args">({{ JSON.stringify(call.arguments) }})</span>
+            <span class="tool-name">{{ toolLabel(call.name) }}</span>
+            <span class="tool-args">{{ toolArgsText(call.name, call.arguments) }}</span>
             <el-tag
               v-if="call.status === 'running'"
               size="small"

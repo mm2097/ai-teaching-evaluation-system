@@ -78,16 +78,37 @@ const canStart = computed(
   () => !running.value && !!courseId.value && (diagnosisScope.value === 'class' || !!studentId.value),
 )
 
-/** 解析诊断 JSON，失败走文本降级 */
+/** 从 LLM 输出中提取诊断 JSON。
+ * LLM 偶发在 JSON 前后附带说明文字（如"我已收集数据...{...}"），
+ * 用正则匹配第一个 { 到最后一个 } 的片段再做 JSON.parse，提高容错。 */
 function parseDiagnosis(content: string): DiagnosisReport | null {
-  try {
-    const trimmed = content.trim().replace(/^```json\s*|\s*```$/g, '').trim()
-    const obj = JSON.parse(trimmed) as DiagnosisReport
-    if (!obj.scope || !obj.overall) return null
-    return obj
-  } catch {
-    return null
+  if (!content) return null
+  // 先尝试整体解析（理想情况：纯 JSON）
+  const tryParse = (s: string): DiagnosisReport | null => {
+    try {
+      const obj = JSON.parse(s) as DiagnosisReport
+      if (obj && obj.scope && obj.overall) return obj
+      return null
+    } catch {
+      return null
+    }
   }
+  // 去 markdown 代码块包裹
+  const stripped = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+  const whole = tryParse(stripped)
+  if (whole) return whole
+  // 提取第一个 { 到最后一个 } 的子串（LLM 前后带说明文字时）
+  const first = stripped.indexOf('{')
+  const last = stripped.lastIndexOf('}')
+  if (first !== -1 && last > first) {
+    const fragment = stripped.slice(first, last + 1)
+    return tryParse(fragment)
+  }
+  return null
 }
 
 /** 重置一次新诊断的状态 */
@@ -135,18 +156,24 @@ async function startDiagnosis(): Promise<void> {
 
       } else if (evt.type === 'tool_result') {
         // 用 name 精确匹配最后一个同名 running 工具（修正 streamAgentChat 的 callId 脆弱性，D5）
-        const step = processSteps.value[processSteps.value.length - 1]
-        if (!step) continue
-        const match = [...step.toolCalls]
-          .reverse()
-          .find((c) => c.name === evt.name && c.status === 'running')
-        if (match) {
-          match.status = 'done'
-          match.result = evt.result
-          match.summary = evt.summary
+        // 跨 step 查找：tool_result 可能在新 step_start 之后才到达
+        const allSteps = processSteps.value
+        for (let i = allSteps.length - 1; i >= 0; i--) {
+          const match = [...allSteps[i].toolCalls]
+            .reverse()
+            .find((c) => c.name === evt.name && c.status === 'running')
+          if (match) {
+            match.status = 'done'
+            match.result = evt.result
+            match.summary = evt.summary
+            break
+          }
         }
-        if (step.status === 'running' && step.toolCalls.every((c) => c.status !== 'running')) {
-          step.status = 'done'
+        // 标记所有工具都已完成的 step 为 done
+        for (const s of allSteps) {
+          if (s.status === 'running' && s.toolCalls.length && s.toolCalls.every((c) => c.status !== 'running')) {
+            s.status = 'done'
+          }
         }
 
       } else if (evt.type === 'content_done') {
@@ -154,13 +181,17 @@ async function startDiagnosis(): Promise<void> {
         const parsed = parseDiagnosis(evt.content)
         if (parsed) {
           report.value = parsed
-        } else {
-          // 非 JSON 降级：展示原文 + 提示
-          processError.value = '报告格式异常，已展示原始内容，可追问'
+          processError.value = '' // 解析成功，清掉之前可能的瞬时 error
+        } else if (!processError.value) {
+          // 非 JSON 但无 error：保留原文展示，不标"诊断失败"
+          rawContent.value = evt.content
         }
 
       } else if (evt.type === 'error') {
-        processError.value = evt.message || '诊断服务暂不可用'
+        // 仅当还没收到 content 时才记 error；content 已到则忽略后续 error
+        if (!report.value && !rawContent.value) {
+          processError.value = evt.message || '诊断服务暂不可用'
+        }
       }
     }
 

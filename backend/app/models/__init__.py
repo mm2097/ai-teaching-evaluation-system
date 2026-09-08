@@ -29,6 +29,7 @@ from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
 from app.models.notification import Notification
 from app.models.log import AiGenerationLog, SysOperationLog
 from app.models.report import ReportHistory
+from app.models.agent import AgentConversation
 
 __all__ = [
     "SysUser", "SysRole", "LoginRequest", "UserCreate", "UserRead", "UserUpdate",
@@ -45,4 +46,5 @@ __all__ = [
     "Notification",
     "AiGenerationLog", "SysOperationLog",
     "ReportHistory",
+    "AgentConversation",
 ]

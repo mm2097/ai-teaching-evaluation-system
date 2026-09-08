@@ -69,12 +69,12 @@ export interface IndexMutationResult extends EvalIndexItem {
 
 /** 计分方式（映射后端 score_rule JSON） */
 export const SCORE_RULE_PRESETS = [
-  { value: 'part_discussion', label: '小班讨论（单项成绩）', rule: { type: 'academic_part', part: 'discussion' } },
-  { value: 'part_midterm', label: '期中考试（各题得分）', rule: { type: 'academic_part', part: 'midterm' } },
-  { value: 'part_final', label: '期末考试（各题得分）', rule: { type: 'academic_part', part: 'final' } },
-  { value: 'part_attendance', label: '考勤（到课率）', rule: { type: 'academic_part', part: 'attendance' } },
-  { value: 'part_homework', label: '作业（单项成绩，批次名含“作业”）', rule: { type: 'academic_part', part: 'homework' } },
-  { value: 'part_other', label: '其他（实验等，占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
+  { value: 'part_discussion', label: '课堂讨论成绩', rule: { type: 'academic_part', part: 'discussion' } },
+  { value: 'part_midterm', label: '期中考试成绩', rule: { type: 'academic_part', part: 'midterm' } },
+  { value: 'part_final', label: '期末考试成绩', rule: { type: 'academic_part', part: 'final' } },
+  { value: 'part_attendance', label: '课程考勤成绩', rule: { type: 'academic_part', part: 'attendance' } },
+  { value: 'part_homework', label: '平时作业成绩', rule: { type: 'academic_part', part: 'homework' } },
+  { value: 'part_other', label: '其他过程性成绩（占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
   { value: 'attendance', label: '出勤率', rule: { type: 'attendance', full_score: 100 } },
   { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },
   { value: 'homework', label: '测试提交率', rule: { type: 'homework', full_score: 100 } },
@@ -94,16 +94,16 @@ export const SCORE_RULE_PRESET_GROUPS: ReadonlyArray<{
   {
     label: '已有成绩数据',
     options: [
-      { value: 'part_discussion', label: '小班讨论（单项成绩）' },
-      { value: 'part_midterm', label: '期中考试（各题得分）' },
-      { value: 'part_final', label: '期末考试（各题得分）' },
-      { value: 'part_homework', label: '作业（单项成绩，批次名含“作业”）' },
+      { value: 'part_discussion', label: '课堂讨论成绩' },
+      { value: 'part_midterm', label: '期中考试成绩' },
+      { value: 'part_final', label: '期末考试成绩' },
+      { value: 'part_homework', label: '平时作业成绩' },
     ],
   },
   {
     label: '过程数据',
     options: [
-      { value: 'part_attendance', label: '考勤（到课率）' },
+      { value: 'part_attendance', label: '课程考勤成绩' },
       { value: 'interaction', label: '课堂参与（参与度）' },
       { value: 'attendance', label: '出勤率' },
       { value: 'homework', label: '测试提交率' },
@@ -111,7 +111,7 @@ export const SCORE_RULE_PRESET_GROUPS: ReadonlyArray<{
   },
   {
     label: '其他',
-    options: [{ value: 'part_other', label: '其他（实验等，占比自动补足）' }],
+    options: [{ value: 'part_other', label: '其他过程性成绩（占比自动补足）' }],
   },
   {
     label: '旧版直读（兼容存量）',
@@ -203,12 +203,12 @@ export function formatScoreRule(rule: Record<string, unknown> | null | undefined
   if (type === 'academic_part') {
     const part = rule.part as string | undefined
     const partLabels: Record<string, string> = {
-      discussion: '小班讨论',
-      midterm: '期中考试',
-      final: '期末考试',
-      attendance: '考勤',
-      homework: '作业',
-      other: '其他（占比自动补足）',
+      discussion: '课堂讨论成绩',
+      midterm: '期中考试成绩',
+      final: '期末考试成绩',
+      attendance: '课程考勤成绩',
+      homework: '平时作业成绩',
+      other: '其他过程性成绩（占比自动补足）',
     }
     return partLabels[part ?? ''] || '学业水平组成部分'
   }

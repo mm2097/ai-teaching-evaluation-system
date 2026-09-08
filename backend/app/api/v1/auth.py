@@ -73,8 +73,14 @@ def create_token(user_id: int, username: str) -> str:
 
 @router.post("/login", response_model=LoginResponse, tags=["认证"])
 def login(payload: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
-    """账号密码登录。成功返回 JWT + 用户信息;密码错返回 401,账号禁用返回 403。"""
+    """账号或学生学号登录。成功返回 JWT + 用户信息。"""
     user = session.exec(select(SysUser).where(SysUser.username == payload.username)).first()
+    if not user:
+        student = session.exec(
+            select(Student).where(Student.student_no == payload.username)
+        ).first()
+        if student and student.user_id:
+            user = session.get(SysUser, student.user_id)
     stored_password = user.password if user else _DUMMY_PASSWORD_HASH
     if not verify_password(payload.password, stored_password) or not user:
         raise HTTPException(status_code=401, detail="账号或密码错误")

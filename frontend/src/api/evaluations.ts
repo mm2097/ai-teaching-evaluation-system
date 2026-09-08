@@ -11,6 +11,29 @@ export interface EvalDimensionScore {
   weight: number
 }
 
+export interface AcademicPartScore {
+  part: 'discussion' | 'midterm' | 'final' | 'attendance' | 'homework' | 'other'
+  name: string
+  weight: number
+  score: number | null
+}
+
+export interface AttitudeDetail {
+  score: number
+  attendanceRate: number
+  attendanceScore: number
+  attendanceAvailable: boolean
+  interactionScore: number
+  interactionCount: number
+  interactionAvailable: boolean
+  homeworkRate: number
+  homeworkScore: number
+  homeworkAvailable: boolean
+  homeworkAssignedCount: number
+  homeworkSubmittedCount: number
+  weights: { attendance: number; interaction: number; homework: number }
+}
+
 /** GET /evaluations 返回项 */
 export interface StudentEvaluationItem {
   id: number
@@ -21,9 +44,11 @@ export interface StudentEvaluationItem {
   targetType: string
   courseId: number
   courseName: string
-  totalScore: number
+  totalScore: number | null
   grade: string
   dimensions: EvalDimensionScore[]
+  academicParts?: AcademicPartScore[]
+  attitudeDetail?: AttitudeDetail
 }
 
 /** GET /evaluations/results 返回项 */
@@ -32,7 +57,7 @@ export interface EvaluationResultItem {
   studentId: number
   studentName: string
   courseId: number
-  totalScore: number
+  totalScore: number | null
   grade: string
   computed?: boolean
 }

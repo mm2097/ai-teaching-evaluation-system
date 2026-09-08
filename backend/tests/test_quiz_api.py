@@ -132,6 +132,39 @@ def test_answer_record_detail_uses_real_submission_id(session):
     assert detail["questionResults"][0]["isCorrect"] is True
 
 
+def test_answer_record_detail_deduplicates_repeated_question_records(session):
+    """历史重复答题记录不能被重复累加到总分。"""
+    task = _create_task(session, [1])
+    session.add_all([
+        StudentAnswerRecord(
+            task_id=task.task_id, question_id=1, student_id=1,
+            user_answer="C", score=100, is_correct=1,
+        ),
+        StudentAnswerRecord(
+            task_id=task.task_id, question_id=1, student_id=1,
+            user_answer="A", score=0, is_correct=0,
+        ),
+    ])
+    session.commit()
+    records = session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.task_id == task.task_id,
+            StudentAnswerRecord.student_id == 1,
+        ).order_by(StudentAnswerRecord.answer_id)
+    ).all()
+
+    detail = quiz.get_answer_record_detail(
+        records[0].answer_id,
+        session=session,
+        current_user=_user(session, 2),
+    )
+
+    assert detail["score"] == 0
+    assert detail["totalScore"] == 100
+    assert detail["questionResults"][0]["userAnswer"] == "A"
+    assert detail["questionResults"][0]["isCorrect"] is False
+
+
 def test_student_can_see_submitted_task_and_record_when_review_disabled(session):
     task = _create_task(session, [1], allow_review=0)
     _assign_task_to_class(session, task)

@@ -4,9 +4,11 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from app.api.v1.auth import create_token
+from app.api.v1.courses import list_my_courses
 from app.api.v1.dashboard import router as dashboard_router
+from app.api.v1.evaluations import list_evaluations
 from app.core.database import get_session
-from app.models import SysUser
+from app.models import Course, CourseStudent, SysUser
 
 
 def _build_client(test_session: Session) -> TestClient:
@@ -84,3 +86,62 @@ def test_student_overview_rejects_non_students_and_anonymous_users(session: Sess
         "/api/v1/dashboard/student-overview",
         headers=_auth_header(teacher_user),
     ).status_code == 403
+
+
+def test_student_score_archive_uses_standard_assessment_names(session: Session):
+    student_user = session.get(SysUser, 2)
+    assert student_user is not None
+    response = _build_client(session).get(
+        "/api/v1/dashboard/student-score-archive",
+        headers=_auth_header(student_user),
+    )
+
+    assert response.status_code == 200
+    records = response.json()["records"]
+    assert records
+    assert all(record["courseId"] for record in records)
+    assert all(record["type"].endswith("成绩") for record in records)
+    assert all(record["batchName"] for record in records)
+
+
+def test_student_my_courses_uses_all_active_enrollments(session: Session):
+    student_user = session.get(SysUser, 2)
+    assert student_user is not None
+
+    courses = list_my_courses(session=session, current_user=student_user)
+
+    assert [course["course_id"] for course in courses] == [1]
+
+
+def test_student_evaluations_include_enrolled_course_without_scores(session: Session):
+    student_user = session.get(SysUser, 2)
+    assert student_user is not None
+    course = Course(
+        course_id=997,
+        course_code="EMPTY997",
+        course_name="暂无成绩课程",
+        teacher_id=1,
+        semester="2024-2025-1",
+        college="计算机学院",
+        status=1,
+    )
+    enrollment = CourseStudent(course_id=997, student_id=1)
+    session.add_all([course, enrollment])
+    session.commit()
+
+    evaluations = list_evaluations(
+        course_id=None,
+        eval_level=None,
+        student_id=1,
+        session=session,
+        current_user=student_user,
+    )
+
+    assert {item["courseId"] for item in evaluations} == {1, 997}
+    empty = next(item for item in evaluations if item["courseId"] == 997)
+    assert empty["totalScore"] is None
+    assert empty["grade"] == "—"
+
+    session.delete(enrollment)
+    session.delete(course)
+    session.commit()

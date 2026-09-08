@@ -7,6 +7,7 @@ from app.core.operation_log import get_current_user
 from app.models import (
     Student, Course, CourseStudent, ClassInfo,
     KnowledgeMastery, KnowledgePoint, KnowledgeModule,
+    AiQuestion, StudentAnswerRecord,
     StudyWarning, StudentProfile,
     Notification,
     ScoreRecord, EvalDimensionScore, StudentEvaluationResult, EvalDimension,
@@ -15,11 +16,15 @@ from app.models import (
     AttendanceSheet, ParticipationSheet,
 )
 from app.services.predict import predict_student_scores
-from app.services.mastery import compute_mastery_index_with_fallback
+from app.services.mastery import (
+    compute_exam_mastery_indexes,
+    compute_mastery_index_with_fallback,
+    compute_student_mastery,
+)
 from app.services.knowledge_utils import split_knowledge_names
 from app.services.warning import scan_course_warnings, persist_warnings
 from app.services.profile import compute_profile
-from app.services.evaluation import compute_evaluation
+from app.services.evaluation import compute_evaluation, custom_dimension_key, dimension_key
 
 router = APIRouter()
 
@@ -245,55 +250,61 @@ def get_student_profile(
         stmt = stmt.where(StudentProfile.course_id == course_id)
     profile = session.exec(stmt).first()
     if not profile:
-        return None
+        if course_id is None:
+            enrollment = session.exec(
+                select(CourseStudent)
+                .where(CourseStudent.student_id == student_id)
+                .order_by(CourseStudent.course_id)
+                .limit(1)
+            ).first()
+            if not enrollment:
+                return None
+            course_id = enrollment.course_id
+        enrolled = session.exec(
+            select(CourseStudent).where(
+                CourseStudent.student_id == student_id,
+                CourseStudent.course_id == course_id,
+            )
+        ).first()
+        if not enrolled:
+            return None
+
+        # 允许刚导入/清空后缓存尚未重建时直接读取实时结果。
+        profile_course_id = course_id
+    else:
+        profile_course_id = profile.course_id
 
     student = session.get(Student, student_id)
-    course = session.get(Course, profile.course_id)
+    course = session.get(Course, profile_course_id)
     cls = session.get(ClassInfo, student.class_id) if student else None
 
-    # 获取维度得分
-    eval_result = session.exec(
-        select(StudentEvaluationResult).where(
-            StudentEvaluationResult.student_id == student_id,
-            StudentEvaluationResult.course_id == profile.course_id,
-        )
-    ).first()
+    tags = [
+        t.strip() for t in ((profile.study_tags if profile else "") or "").split(",")
+        if t.strip()
+    ]
 
+    # 画像和评价均按当前源数据实时计算，避免读取导入/删除前的持久化快照。
+    computed = compute_profile(session, student_id, profile_course_id)
+    evaluation = compute_evaluation(
+        session, student_id, profile_course_id, profile=computed
+    )
+    comprehensive = evaluation.total_score if evaluation.has_data else 0.0
     dim_scores = []
-    if eval_result:
-        ds = session.exec(
-            select(EvalDimensionScore).where(EvalDimensionScore.eval_id == eval_result.eval_id)
-        ).all()
-        dimension_ids = [d.dimension_id for d in ds]
-        dimensions = {
-            dim.dimension_id: dim
-            for dim in session.exec(
-                select(EvalDimension).where(EvalDimension.dimension_id.in_(dimension_ids))
-            ).all()
-        } if dimension_ids else {}
-        for d in ds:
-            dim = dimensions.get(d.dimension_id)
-            dim_scores.append({
-                "id": d.dimension_id,
-                "name": dim.dimension_name if dim else f"维度{d.dimension_id}",
-                "description": dim.description if dim else "",
-                "score": d.dimension_score,
-            })
-
-    tags = [t.strip() for t in (profile.study_tags or "").split(",") if t.strip()]
-
-    # 雷达五轴：实时计算，保证上传考勤/课堂参与后立即同步到雷达图
-    computed = compute_profile(session, student_id, profile.course_id)
-    if eval_result is not None:
-        comprehensive = eval_result.total_score
-    else:
-        # 无落库结果时用综合评价新口径（含维度占比配置与回退逻辑），保持雷达口径一致
-        try:
-            comprehensive = compute_evaluation(
-                session, student_id, profile.course_id, profile=computed
-            ).total_score
-        except Exception:
-            comprehensive = profile.total_profile_score
+    dimensions = session.exec(
+        select(EvalDimension)
+        .where(EvalDimension.course_id == profile_course_id)
+        .order_by(EvalDimension.sort_num)
+    ).all()
+    for dim in dimensions:
+        key = dimension_key(dim.dimension_name) or custom_dimension_key(dim.dimension_id or 0)
+        if not evaluation.dimension_availability.get(key, True):
+            continue
+        dim_scores.append({
+            "id": dim.dimension_id,
+            "name": dim.dimension_name,
+            "description": dim.description or "",
+            "score": round(float(evaluation.dimensions.get(key, 0.0)), 1),
+        })
 
     return {
         "viewType": "student",
@@ -327,8 +338,9 @@ def get_student_profile(
             },
         },
         "dimensionScores": dim_scores,
-        "strongPoints": profile.good_modules or "",
-        "weakPoints": profile.weak_modules or "",
+        "hasEvaluationData": evaluation.has_data,
+        "strongPoints": (profile.good_modules if profile else "") or "",
+        "weakPoints": (profile.weak_modules if profile else "") or "",
     }
 
 
@@ -373,21 +385,21 @@ def _get_class_profile(
         select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
     ).all()
 
-    # 学业水平/学习态度/学习进步：持久化画像平均
-    profiles = session.exec(
-        select(StudentProfile).where(
-            StudentProfile.course_id == course_id,
-            StudentProfile.student_id.in_(student_ids),  # type: ignore[arg-type]
-        )
-    ).all()
-    if profiles:
-        academic = sum(p.academic_score for p in profiles) / len(profiles)
-        attitude = sum(p.attitude_score for p in profiles) / len(profiles)
-        progress = sum(p.progress_score for p in profiles) / len(profiles)
-    else:
-        academic = attitude = progress = 75.0
+    # 班级画像也从当前源数据实时聚合，避免使用上传/删除前的画像快照。
+    computed_profiles = [compute_profile(session, sid, course_id) for sid in student_ids]
 
-    # 到课率：新表平均（无数据基线 90%）
+    def _available_average(key: str, attr: str) -> float:
+        values = [
+            float(getattr(item, attr)) for item in computed_profiles
+            if (item.data_availability or {}).get(key, False)
+        ]
+        return sum(values) / len(values) if values else 0.0
+
+    academic = _available_average("academic", "academic_score")
+    attitude = _available_average("attitude", "attitude_score")
+    progress = _available_average("progress", "progress_score")
+
+    # 到课率：仅统计真实考勤数据
     att_rates = session.exec(
         select(AttendanceSheet.attendance_rate).where(
             AttendanceSheet.student_id.in_(student_ids),  # type: ignore[arg-type]
@@ -395,9 +407,9 @@ def _get_class_profile(
         )
     ).all()
     att_rates = [r for r in att_rates if r is not None]
-    attendance_rate = sum(att_rates) / len(att_rates) if att_rates else 0.9
+    attendance_rate = sum(att_rates) / len(att_rates) if att_rates else 0.0
 
-    # 课堂参与度：新表平均（无数据基线 90%）
+    # 课堂参与度：仅统计真实课堂参与数据
     part_rates = session.exec(
         select(ParticipationSheet.participation_rate).where(
             ParticipationSheet.student_id.in_(student_ids),  # type: ignore[arg-type]
@@ -405,21 +417,14 @@ def _get_class_profile(
         )
     ).all()
     part_rates = [r for r in part_rates if r is not None]
-    participation_rate = sum(part_rates) / len(part_rates) if part_rates else 0.9
+    participation_rate = sum(part_rates) / len(part_rates) if part_rates else 0.0
 
-    # 综合：评价总分平均 → 画像综合分平均兜底 → 态度分兜底
-    totals = session.exec(
-        select(StudentEvaluationResult.total_score).where(
-            StudentEvaluationResult.course_id == course_id,
-            StudentEvaluationResult.student_id.in_(student_ids),  # type: ignore[arg-type]
-        )
-    ).all()
-    if totals:
-        comprehensive = sum(totals) / len(totals)
-    elif profiles:
-        comprehensive = sum(p.total_profile_score for p in profiles) / len(profiles)
-    else:
-        comprehensive = attitude
+    live_evaluations = [
+        compute_evaluation(session, sid, course_id, profile=profile)
+        for sid, profile in zip(student_ids, computed_profiles)
+    ]
+    totals = [item.total_score for item in live_evaluations if item.has_data]
+    comprehensive = sum(totals) / len(totals) if totals else 0.0
 
     return {
         "viewType": "class",
@@ -434,6 +439,7 @@ def _get_class_profile(
             academic, attendance_rate, participation_rate, progress, comprehensive,
         ),
         "dimensionScores": [],
+        "hasEvaluationData": bool(totals),
         "strongPoints": "",
         "weakPoints": "",
     }
@@ -483,6 +489,28 @@ def get_knowledge_heatmap(
     points = session.exec(
         select(KnowledgePoint).where(KnowledgePoint.module_id.in_(module_ids))  # type: ignore
     ).all() if module_ids else []
+
+    # 学生个人视角只展示当前仍有数据依据的知识点。历史 KnowledgeMastery
+    # 可能来自已经删除的题目，不能再把这些知识点作为 0 分显示。
+    if role_code == "student" and student_id and points:
+        point_ids = [point.point_id for point in points]
+        answered_point_ids = set(session.exec(
+            select(AiQuestion.point_id)
+            .join(StudentAnswerRecord, StudentAnswerRecord.question_id == AiQuestion.question_id)
+            .where(
+                StudentAnswerRecord.student_id == student_id,
+                AiQuestion.course_id == course_id,
+                AiQuestion.point_id.in_(point_ids),  # type: ignore[arg-type]
+            )
+        ).all())
+        exam_point_ids = {
+            point_id
+            for (sid, point_id) in compute_exam_mastery_indexes(session, course_id, [student_id])
+            if sid == student_id
+        }
+        active_point_ids = answered_point_ids | exam_point_ids
+        points = [point for point in points if point.point_id in active_point_ids]
+
     for p in points:
         point_module_map[p.point_id] = p.module_id
 
@@ -512,15 +540,11 @@ def get_knowledge_heatmap(
 
     # 个人视图包含自主练习；班级视图只展示教师任务，避免自主练习污染班级统计。
     if role_code == "student":
-        all_masteries = session.exec(
-            select(KnowledgeMastery).where(
-                KnowledgeMastery.course_id == course_id,
-                KnowledgeMastery.student_id.in_(student_ids),  # type: ignore
-            )
-        ).all()
+        current_masteries = compute_student_mastery(session, student_id, course_id)
         mastery_index = {
-            (mastery.student_id, mastery.point_id): mastery.mastery_score
-            for mastery in all_masteries
+            (student_id, mastery.point_id): mastery.accuracy
+            for mastery in current_masteries
+            if mastery.point_id in {point.point_id for point in points}
         }
     else:
         mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
@@ -963,6 +987,8 @@ def get_grade_predictions(
             continue
 
         pred = predict_student_scores(session, sid, course_id)
+        if not pred["history"]:
+            continue
 
         result.append({
             "studentId": sid,

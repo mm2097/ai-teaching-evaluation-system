@@ -8,6 +8,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Check, Close, Refresh } from '@element-plus/icons-vue'
 import { fetchQuizResult } from '@/api/quiz'
 import { useUserStore } from '@/stores/user'
+import { formatJudgeAnswer } from '@/utils/exerciseJudge'
 import type { QuizQuestion } from '@/types'
 
 const route = useRoute()
@@ -17,7 +18,7 @@ const loading = ref(true)
 
 interface QuestionResult {
   question: QuizQuestion
-  userAnswer: string | string[]
+  userAnswer: string | string[] | boolean
   isCorrect: boolean
   manualRequired?: boolean
   aiScore?: number | null
@@ -68,6 +69,18 @@ const typeLabel: Record<string, string> = {
 
 function getOptionLetter(idx: number): string {
   return String.fromCharCode(65 + idx)
+}
+
+function formatAnswer(question: QuizQuestion, answer: string | string[] | boolean): string {
+  if (question.type === 'judge') return formatJudgeAnswer(Array.isArray(answer) ? answer[0] : answer)
+  return Array.isArray(answer) ? answer.join('、') : String(answer ?? '')
+}
+
+function optionMatchesAnswer(question: QuizQuestion, answer: string | string[] | boolean, optionText: string, optionKey: string): boolean {
+  if (question.type === 'judge') {
+    return formatJudgeAnswer(Array.isArray(answer) ? answer[0] : answer) === optionText
+  }
+  return Array.isArray(answer) ? answer.includes(optionKey) : answer === optionKey
 }
 
 /** 判断是否为部分得分（简答题 AI 判分未满） */
@@ -199,12 +212,9 @@ function backToQuiz(): void {
             :key="i"
             class="eq-option"
             :class="{
-              'is-correct': Array.isArray(item.question.answer)
-                ? item.question.answer.includes(opt.key)
-                : item.question.answer === opt.key,
-              'is-wrong': Array.isArray(item.userAnswer)
-                ? item.userAnswer.includes(opt.key) && (Array.isArray(item.question.answer) ? !item.question.answer.includes(opt.key) : item.question.answer !== opt.key)
-                : item.userAnswer === opt.key && item.question.answer !== opt.key,
+              'is-correct': optionMatchesAnswer(item.question, item.question.answer, opt.text, opt.key),
+              'is-wrong': optionMatchesAnswer(item.question, item.userAnswer, opt.text, opt.key)
+                && !optionMatchesAnswer(item.question, item.question.answer, opt.text, opt.key),
             }"
           >
             {{ getOptionLetter(i) }}. {{ opt.text }}
@@ -214,11 +224,11 @@ function backToQuiz(): void {
         <div class="eq-answers">
           <div class="eq-my-answer">
             <span class="label">你的答案：</span>
-            <span class="value" :class="{ wrong: !item.isCorrect && !item.manualRequired }">{{ Array.isArray(item.userAnswer) ? item.userAnswer.join('、') : item.userAnswer }}</span>
+            <span class="value" :class="{ wrong: !item.isCorrect && !item.manualRequired }">{{ formatAnswer(item.question, item.userAnswer) }}</span>
           </div>
           <div v-if="!item.manualRequired" class="eq-correct-answer">
             <span class="label">{{ item.question.type === 'short_answer' ? '参考答案' : '正确答案' }}：</span>
-            <span class="value correct">{{ Array.isArray(item.question.answer) ? item.question.answer.join('、') : item.question.answer }}</span>
+            <span class="value correct">{{ formatAnswer(item.question, item.question.answer) }}</span>
           </div>
           <!-- 简答题 AI 判分依据 -->
           <div v-if="item.question.type === 'short_answer' && item.aiReason" class="eq-ai-judge">

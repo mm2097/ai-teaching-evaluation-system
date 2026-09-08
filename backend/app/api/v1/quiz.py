@@ -46,7 +46,7 @@ from app.models import (
     Teacher,
 )
 from app.models.question import TASK_TYPE_ASSIGNMENT, TASK_TYPE_SELF_PRACTICE
-from app.services.mastery import refresh_student_mastery
+from app.services.analysis_refresh import refresh_student_analysis
 from app.services.question_answers import (
     answer_for_response,
     encode_correct_answer,
@@ -61,6 +61,18 @@ _STATUS_MAP = {0: "draft", 1: "published", 2: "closed"}
 _TYPE_MAP = {1: "single_choice", 2: "multi_choice", 3: "judge", 4: "fill_blank", 5: "short_answer"}
 _JUDGE_OPTIONS = [{"key": "A", "text": "对"}, {"key": "B", "text": "错"}]
 _SELF_PRACTICE_PREFIX = "【自主练习】"
+
+
+def _latest_records_by_question(
+    records: list[StudentAnswerRecord],
+) -> dict[int, StudentAnswerRecord]:
+    """同一任务重复提交时，每道题只保留最新一条记录参与展示和计分。"""
+    latest: dict[int, StudentAnswerRecord] = {}
+    for record in records:
+        previous = latest.get(record.question_id)
+        if previous is None or (record.answer_id or 0) > (previous.answer_id or 0):
+            latest[record.question_id] = record
+    return latest
 
 
 def _role_code(current_user: SysUser, session: Session) -> str:
@@ -362,11 +374,16 @@ def list_answer_records(
             select(func.count(TaskQuestion.rel_id)).where(TaskQuestion.task_id == tid)
         ).one()
         total_score = 100.0
-        obtained = sum(float(r.score) for r in records)
+        latest_records = _latest_records_by_question(records)
+        obtained = sum(float(r.score) for r in latest_records.values())
+        anchor_record = max(
+            latest_records.values(),
+            key=lambda record: record.answer_id or 0,
+        )
 
         course = session.get(Course, task.course_id)
         result.append({
-            "id": records[0].answer_id,
+            "id": anchor_record.answer_id,
             "assignmentId": tid,
             "studentId": sid,
             "studentName": stu.real_name if stu else "",
@@ -376,7 +393,7 @@ def list_answer_records(
             "courseName": course.course_name if course else "",
             "score": round(obtained, 1),
             "totalScore": round(total_score),
-            "submitTime": records[0].submit_time.strftime("%Y-%m-%d %H:%M") if records[0].submit_time else "",
+            "submitTime": anchor_record.submit_time.strftime("%Y-%m-%d %H:%M") if anchor_record.submit_time else "",
             "status": "submitted",
         })
 
@@ -415,7 +432,7 @@ def get_answer_record_detail(
             StudentAnswerRecord.student_id == first_record.student_id,
         )
     ).all()
-    records_by_question = {record.question_id: record for record in records}
+    records_by_question = _latest_records_by_question(records)
     task_questions = session.exec(
         select(TaskQuestion, AiQuestion)
         .join(AiQuestion, TaskQuestion.question_id == AiQuestion.question_id)
@@ -443,7 +460,7 @@ def get_answer_record_detail(
         "submissionId": submission_id,
         "taskId": first_record.task_id,
         "studentId": first_record.student_id,
-        "score": round(sum(float(record.score) for record in records), 1),
+        "score": round(sum(float(record.score) for record in records_by_question.values()), 1),
         "totalScore": 100,
         "questionResults": question_results,
     }
@@ -663,8 +680,8 @@ def _grade_task_answers(
             StudentAnswerRecord.student_id == student.student_id,
         )
     ).all()
-    refresh_student_mastery(session, student.student_id, task.course_id)
-    records_by_question = {record.question_id: record for record in records}
+    refresh_student_analysis(session, student.student_id, task.course_id)
+    records_by_question = _latest_records_by_question(records)
     question_results = []
     include_solution = True
     for _, question in tq_rows:
@@ -1115,7 +1132,7 @@ def delete_answer_task(
 
     删除记录后同步修正知识点掌握度持久化数据：
       - 无剩余答题记录的 (学生, 知识点) 删除其掌握度行
-      - 仍有剩余记录的按剩余记录重算（refresh_student_mastery）
+      - 仍有剩余记录的按剩余记录重算，并同步画像、评价和预警
     """
     task = session.get(AnswerTask, task_id)
     if not task:
@@ -1174,7 +1191,7 @@ def delete_answer_task(
             session.delete(km)
     affected_students = {sid for sid, _ in affected_pairs}
     for sid in affected_students:
-        refresh_student_mastery(session, sid, course_id)
+        refresh_student_analysis(session, sid, course_id)
     session.commit()
 
     return {

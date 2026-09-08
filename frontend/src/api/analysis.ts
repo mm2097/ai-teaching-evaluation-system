@@ -259,6 +259,7 @@ export async function* streamDiagnosis(
     agentType: 'diagnosis',
     message,
     courseId: params.courseId,
+    studentId: params.studentId,
     sessionId: params.sessionId ?? `diagnosis_c${params.courseId}`,
     maxSteps: 10,
   })

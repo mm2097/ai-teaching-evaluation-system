@@ -109,6 +109,7 @@ export async function* mockStreamAgentChat(message: string): AsyncGenerator<Agen
   yield {
     type: 'tool_result',
     callId,
+    name: route.toolName,
     result: route.toolResult,
     summary: route.toolSummary,
   }

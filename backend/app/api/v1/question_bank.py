@@ -25,9 +25,12 @@ from app.core.permissions import require_teacher
 from app.models import (
     AiQuestion,
     Course,
+    KnowledgeMastery,
     KnowledgePoint,
     KnowledgeModule,
+    StudentAnswerRecord,
 )
+from app.services.analysis_refresh import refresh_course_analysis
 from app.services.question_answers import answer_for_response, encode_correct_answer
 
 router = APIRouter(dependencies=[Depends(require_teacher)])
@@ -320,6 +323,7 @@ def update_question(
     if not q:
         raise HTTPException(status_code=404, detail="题目不存在")
 
+    previous_point_id = q.point_id
     if req.stem:
         q.content = req.stem
     if req.options is not None:
@@ -337,8 +341,17 @@ def update_question(
         if point_id:
             q.point_id = point_id
 
+    if q.point_id != previous_point_id:
+        for mastery in session.exec(
+            select(KnowledgeMastery).where(
+                KnowledgeMastery.course_id == q.course_id,
+                KnowledgeMastery.point_id == previous_point_id,
+            )
+        ).all():
+            session.delete(mastery)
     session.add(q)
     session.commit()
+    refresh_course_analysis(session, q.course_id)
     _sync_vector(session, q.course_id, q.question_id, "upsert")
     return {"id": q.question_id, "message": "更新成功"}
 
@@ -354,8 +367,9 @@ def delete_question(
         raise HTTPException(status_code=404, detail="题目不存在")
 
     course_id = q.course_id
+    point_id = q.point_id
 
-    # 清理 task_question 关联
+    # 清理任务关联和以该题为来源的答题记录，随后重建课程分析结果。
     from app.models import TaskQuestion
     links = session.exec(
         select(TaskQuestion).where(TaskQuestion.question_id == question_id)
@@ -363,8 +377,25 @@ def delete_question(
     for link in links:
         session.delete(link)
 
+    answers = session.exec(
+        select(StudentAnswerRecord).where(
+            StudentAnswerRecord.question_id == question_id
+        )
+    ).all()
+    for answer in answers:
+        session.delete(answer)
+
+    for mastery in session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.course_id == course_id,
+            KnowledgeMastery.point_id == point_id,
+        )
+    ).all():
+        session.delete(mastery)
+
     session.delete(q)
     session.commit()
+    refresh_course_analysis(session, course_id)
     _sync_vector(session, course_id, question_id, "delete")
     return {"id": question_id, "message": "已删除"}
 

@@ -16,14 +16,33 @@ from app.models import (
 )
 from app.api.v1.analysis import _check_course_access
 from app.services.evaluation import (
+    ACADEMIC_PART_LABELS,
     DEFAULT_WEIGHTS,
     compute_evaluation,
     custom_dimension_key,
     dimension_key,
     load_dimension_shares,
 )
+from app.services.profile import _academic_part_score, compute_profile, load_academic_parts
 
 router = APIRouter()
+
+
+def _academic_parts_for_student(
+    session: Session, student_id: int, course_id: int,
+) -> list[dict]:
+    """返回与评价引擎一致的课程考核构成、权重和学生实际得分。"""
+    return [
+        {
+            "part": part,
+            "name": ACADEMIC_PART_LABELS.get(part, part),
+            "weight": weight,
+            "score": round(float(score), 1) if score is not None else None,
+        }
+        for part, weight in load_academic_parts(session, course_id).items()
+        if (score := _academic_part_score(session, student_id, course_id, part)) is not None
+        or weight > 0
+    ]
 
 
 # ============================================================================
@@ -80,6 +99,7 @@ def _applied_dimension_weights(session: Session, course_id: int) -> dict[str, fl
 
 def _computed_dimensions(session: Session, course_id: int, result) -> list[dict]:
     """各维度得分：仅展示配置中的维度（含自定义），无配置时为空列表。"""
+    applied = _applied_dimension_weights(session, course_id)
     configured = session.exec(
         select(EvalDimension)
         .where(EvalDimension.course_id == course_id)
@@ -92,17 +112,23 @@ def _computed_dimensions(session: Session, course_id: int, result) -> list[dict]
         if key in seen:
             continue  # 同名 canonical 维度去重
         seen.add(key)
+        if not result.dimension_availability.get(key, True):
+            continue
         rows.append({
             "dimensionId": dim.dimension_id or 0,
             "name": dim.dimension_name,
             "score": round(float(result.dimensions.get(key, 0)), 1),
-            "weight": round(result.dimension_weights.get(key, 0.0) * 100, 1),
+            # 页面展示课程配置占比，而不是缺数据后参与总评的临时归一化占比。
+            "weight": round(applied.get(key, 0.0) * 100, 1),
         })
     return rows
 
 
 def _evaluation_item_from_algorithm(session: Session, student: Student, course: Course) -> dict:
-    result = compute_evaluation(session, student_id=student.student_id, course_id=course.course_id)
+    profile = compute_profile(session, student_id=student.student_id, course_id=course.course_id)
+    result = compute_evaluation(
+        session, student_id=student.student_id, course_id=course.course_id, profile=profile,
+    )
     return {
         "id": 0,
         "studentDbId": student.student_id,
@@ -112,9 +138,28 @@ def _evaluation_item_from_algorithm(session: Session, student: Student, course: 
         "targetType": "student",
         "courseId": course.course_id,
         "courseName": course.course_name,
-        "totalScore": result.total_score,
-        "grade": result.level,
+        "totalScore": result.total_score if result.has_data else None,
+        "grade": result.level if result.has_data else "—",
         "dimensions": _computed_dimensions(session, course.course_id, result),
+        "attitudeDetail": {
+            "score": profile.attitude_score,
+            "attendanceRate": profile.attendance_rate,
+            "attendanceScore": profile.attendance_score,
+            "attendanceAvailable": profile.attendance_available,
+            "interactionScore": profile.interaction_score,
+            "interactionCount": profile.interaction_count,
+            "interactionAvailable": profile.interaction_available,
+            "homeworkRate": profile.homework_rate,
+            "homeworkScore": profile.homework_score,
+            "homeworkAvailable": profile.homework_available,
+            "homeworkAssignedCount": profile.homework_assigned_count,
+            "homeworkSubmittedCount": profile.homework_submitted_count,
+            "weights": {
+                "attendance": profile.w_attendance,
+                "interaction": profile.w_interaction,
+                "homework": profile.w_homework,
+            },
+        },
         "computed": True,
     }
 
@@ -261,21 +306,51 @@ def list_evaluations(
         for student in students:
             sid = student.student_id
             cached = db_by_sid.get(sid)
-            if cached is not None:
+            if _student_id:
+                # 学生个人页必须反映当前原始数据，不能使用导入/删除前的评价快照。
+                item = _evaluation_item_from_algorithm(session, student, course)
+            elif cached is not None:
                 item = _evaluation_item_from_db(
                     session, student, course, cached, db_dims.get(cached.eval_id, [])
                 )
             else:
                 # 未落库学生实时兜底（单学生约 150ms）
                 item = _evaluation_item_from_algorithm(session, student, course)
+            if _student_id:
+                item["academicParts"] = _academic_parts_for_student(
+                    session, student.student_id, _course_id,
+                )
+            if _eval_level and item["grade"] != _eval_level:
+                continue
+            data.append(item)
+        return data
+
+    if _student_id:
+        student = session.get(Student, _student_id)
+        if not student:
+            return []
+        enrolled_course_ids = session.exec(
+            select(CourseStudent.course_id).where(
+                CourseStudent.student_id == _student_id,
+                CourseStudent.status == 1,
+            )
+        ).all()
+        courses = session.exec(
+            select(Course).where(Course.course_id.in_(enrolled_course_ids))  # type: ignore[arg-type]
+        ).all() if enrolled_course_ids else []
+        courses.sort(key=lambda item: (item.semester, item.course_name))
+        data = []
+        for course in courses:
+            item = _evaluation_item_from_algorithm(session, student, course)
+            item["academicParts"] = _academic_parts_for_student(
+                session, _student_id, course.course_id,
+            )
             if _eval_level and item["grade"] != _eval_level:
                 continue
             data.append(item)
         return data
 
     stmt = select(StudentEvaluationResult)
-    if _student_id:
-        stmt = stmt.where(StudentEvaluationResult.student_id == _student_id)
     results = session.exec(stmt).all()
 
     data = []
@@ -317,6 +392,58 @@ def list_evaluation_results(
     _student_id = student_id if not isinstance(student_id, QueryParam) else None
     _course_id = course_id if not isinstance(course_id, QueryParam) else None
 
+    # 个人页必须根据当前成绩/考勤/课堂参与实时计算。持久化评价仅用于
+    # 教师班级批量统计，不能在源数据增删改后继续作为学生个人结果返回。
+    if _student_id and _course_id:
+        student = session.get(Student, _student_id)
+        course = session.get(Course, _course_id)
+        enrolled = session.exec(
+            select(CourseStudent).where(
+                CourseStudent.student_id == _student_id,
+                CourseStudent.course_id == _course_id,
+            )
+        ).first()
+        if not student or not course or not enrolled:
+            return []
+        result = compute_evaluation(session, _student_id, _course_id)
+        return [{
+            "id": 0,
+            "studentId": _student_id,
+            "studentName": student.real_name,
+            "courseId": _course_id,
+            "totalScore": result.total_score if result.has_data else None,
+            "grade": result.level if result.has_data else "—",
+            "computed": True,
+        }]
+
+    if _student_id:
+        student = session.get(Student, _student_id)
+        if not student:
+            return []
+        enrolled_course_ids = session.exec(
+            select(CourseStudent.course_id).where(
+                CourseStudent.student_id == _student_id,
+                CourseStudent.status == 1,
+            )
+        ).all()
+        courses = session.exec(
+            select(Course).where(Course.course_id.in_(enrolled_course_ids))  # type: ignore[arg-type]
+        ).all() if enrolled_course_ids else []
+        courses.sort(key=lambda item: (item.semester, item.course_name))
+        data = []
+        for course in courses:
+            result = compute_evaluation(session, _student_id, course.course_id)
+            data.append({
+                "id": 0,
+                "studentId": _student_id,
+                "studentName": student.real_name,
+                "courseId": course.course_id,
+                "totalScore": result.total_score if result.has_data else None,
+                "grade": result.level if result.has_data else "—",
+                "computed": True,
+            })
+        return data
+
     stmt = select(StudentEvaluationResult)
     if _student_id:
         stmt = stmt.where(StudentEvaluationResult.student_id == _student_id)
@@ -351,7 +478,6 @@ def list_evaluation_results(
 
         if cs_course_id:
             try:
-                from app.services.evaluation import compute_evaluation
                 ev = compute_evaluation(session, student_id=_student_id, course_id=cs_course_id)
                 student = session.get(Student, _student_id)
                 return [{
@@ -359,8 +485,8 @@ def list_evaluation_results(
                     "studentId": _student_id,
                     "studentName": student.real_name if student else "",
                     "courseId": cs_course_id,
-                    "totalScore": round(ev.total_score, 1),
-                    "grade": ev.level,
+                    "totalScore": round(ev.total_score, 1) if ev.has_data else None,
+                    "grade": ev.level if ev.has_data else "—",
                     "computed": True,
                 }]
             except Exception:
@@ -427,10 +553,21 @@ def get_evaluation_distribution(
             })
         else:
             item = _evaluation_item_from_algorithm(session, student, course)
-            computed_results.append({
-                "totalScore": item["totalScore"],
-                "grade": item["grade"],
-            })
+            if item["totalScore"] is not None:
+                computed_results.append({
+                    "totalScore": item["totalScore"],
+                    "grade": item["grade"],
+                })
+
+    if not computed_results:
+        return {
+            "courseId": course_id,
+            "courseName": course.course_name,
+            "totalStudents": 0,
+            "levelDistribution": {},
+            "statistics": {},
+            "characteristic": "暂无评价数据",
+        }
 
     scores = [r["totalScore"] for r in computed_results]
     n = len(scores)

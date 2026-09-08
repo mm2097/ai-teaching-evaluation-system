@@ -24,7 +24,32 @@ const departmentOptions = ref<{ label: string; value: number; id?: number }[]>([
 const courseOptions = ref<{ label: string; value: number }[]>([])
 const courseId = ref<number | undefined>()
 const loading = ref(false)
-const dataTypeLabels: Record<string, string> = { score: '成绩', attendance: '考勤', participation: '课堂参与' }
+const clearing = ref(false)
+/** 与评价引擎的课程考核构成保持一致。 */
+const dataTypeLabels: Record<string, string> = {
+  score: '全部成绩',
+  discussion: '课堂讨论成绩',
+  midterm: '期中考试成绩',
+  final: '期末考试成绩',
+  attendance: '课程考勤成绩',
+  homework: '平时作业成绩',
+  other: '其他过程性成绩',
+  participation: '课堂参与情况',
+}
+
+type DataFilterType = '' | 'score' | 'discussion' | 'midterm' | 'final' | 'attendance' | 'homework' | 'other' | 'participation'
+
+function requestDataType(type: DataFilterType): 'score' | 'attendance' | 'participation' | undefined {
+  if (['score', 'discussion', 'midterm', 'final', 'homework', 'other'].includes(type)) return 'score'
+  if (type === 'attendance') return 'attendance'
+  if (type === 'participation') return 'participation'
+  return undefined
+}
+
+function recordDataTypeLabel(row: TeachingDataRecord): string {
+  if (row.assessmentTypeName) return row.assessmentTypeName
+  return dataTypeLabels[row.dataType] || row.dataType
+}
 
 async function loadTeachingData(): Promise<void> {
   if (!courseId.value) {
@@ -37,11 +62,7 @@ async function loadTeachingData(): Promise<void> {
     const { list } = await fetchTeachingData(
       {
         courseId: courseId.value,
-        dataType: query.value.dataType === 'score'
-          || query.value.dataType === 'attendance'
-          || query.value.dataType === 'participation'
-          ? query.value.dataType
-          : undefined,
+        dataType: requestDataType(query.value.dataType),
         pageSize: 10000,  // 一次性加载全部数据，确保客户端学期筛选覆盖所有记录
       },
       courseName,
@@ -88,7 +109,7 @@ onMounted(async () => {
 const query = ref({
   courseName: '',
   semester: '',
-  dataType: '' as '' | 'score' | 'attendance' | 'participation',
+  dataType: '' as DataFilterType,
   sourceFile: '',
 })
 
@@ -202,7 +223,8 @@ const filteredData = computed(() => {
       if (!item.courseName.toLowerCase().includes(courseKw)) return false
     }
     if (query.value.semester && item.semester !== query.value.semester) return false
-    if (query.value.dataType && item.dataType !== query.value.dataType) return false
+    if (query.value.dataType === 'score' && item.dataType !== 'score') return false
+    if (query.value.dataType && query.value.dataType !== 'score' && item.assessmentType !== query.value.dataType) return false
     if (deptId.value && item.deptId !== deptId.value) return false
     if (majorId.value && item.majorId !== majorId.value) return false
     if (classId.value && item.classId !== classId.value) return false
@@ -249,6 +271,7 @@ watch([deptId, majorId, classId], () => {
 
 const editVisible = ref(false)
 const editRecordId = ref(0)
+const editRecordType = ref('')
 const editTitle = ref('')
 /** 可编辑的字段列表 [{ key, value }] */
 const editFields = ref<{ key: string; value: string }[]>([])
@@ -256,6 +279,7 @@ const selectedRows = ref<TeachingDataRecord[]>([])
 
 function handleEdit(row: TeachingDataRecord): void {
   editRecordId.value = row.id
+  editRecordType.value = recordTypeOf(row)
   editTitle.value = `${row.studentName}（${row.studentId}）- ${row.batchName || row.courseName || ''}`
 
   if (row.sourceData) {
@@ -286,7 +310,7 @@ async function saveEdit(): Promise<void> {
   }
 
   try {
-    await updateRowData(editRecordId.value, srcData)
+    await updateRowData(editRecordId.value, editRecordType.value, srcData)
     await loadTeachingData()
     editVisible.value = false
     ElMessage.success('数据修改成功')
@@ -303,9 +327,18 @@ async function saveEdit(): Promise<void> {
 }
 
 /** 将记录映射为后端删除接口所需的 recordType */
-function recordTypeOf(row: TeachingDataRecord): string {
-  if (row.subType) return row.subType
+function recordTypeOf(row: TeachingDataRecord): TeachingDataRecord['recordType'] {
+  if (row.subType === 'individual_score'
+    || row.subType === 'course_test_detail'
+    || row.subType === 'attendance_sheet'
+    || row.subType === 'participation_sheet') {
+    return row.subType
+  }
   return row.dataType === 'score' ? 'score' : 'attendance'
+}
+
+function rowKey(row: TeachingDataRecord): string {
+  return `${recordTypeOf(row)}:${row.id}`
 }
 
 async function handleDelete(row: TeachingDataRecord): Promise<void> {
@@ -326,10 +359,14 @@ async function handleBatchDelete(): Promise<void> {
   }
   await ElMessageBox.confirm(`确定删除选中的 ${selectedRows.value.length} 条数据吗？`, '批量删除', { type: 'warning' })
   try {
-    await batchDeleteTeachingDataRecords(selectedRows.value.map((row) => ({ recordType: row.recordType, recordId: row.id })))
-    selectedRows.value = []
-    ElMessage.success(`已删除选中数据`)
+    await batchDeleteTeachingDataRecords(selectedRows.value.map((row) => ({
+      // 成绩/考勤新表通过 subType 区分，必须和单条删除使用同一映射。
+      recordType: recordTypeOf(row),
+      recordId: row.id,
+    })))
     await loadTeachingData()
+    selectedRows.value = []
+    ElMessage.success('已删除选中数据')
   } catch {
     ElMessage.error('部分数据删除失败，请稍后重试')
   }
@@ -337,12 +374,17 @@ async function handleBatchDelete(): Promise<void> {
 
 /** 一键清空当前课程某一数据类型的全部记录（需先在筛选栏选择数据类型） */
 async function handleClearAll(): Promise<void> {
+  if (clearing.value) return
   if (!courseId.value) {
     ElMessage.warning('请先选择课程')
     return
   }
   if (!query.value.dataType) {
-    ElMessage.warning('请先在「数据类型」筛选中选择要清空的类型（成绩/考勤/课堂参与）')
+    ElMessage.warning('请先在「数据类型」筛选中选择要清空的类型')
+    return
+  }
+  if (['discussion', 'midterm', 'final', 'homework', 'other'].includes(query.value.dataType)) {
+    ElMessage.warning('清空操作按“全部成绩”执行，请先选择“全部成绩”')
     return
   }
   const typeName = dataTypeLabels[query.value.dataType]
@@ -352,13 +394,18 @@ async function handleClearAll(): Promise<void> {
     '清空确认',
     { type: 'warning', confirmButtonText: '确认清空', cancelButtonText: '取消' },
   )
+  clearing.value = true
   try {
-    const { deleted } = await clearTeachingDataByType(courseId.value, query.value.dataType)
+    const clearType = requestDataType(query.value.dataType)
+    if (!clearType) return
+    const { deleted } = await clearTeachingDataByType(courseId.value, clearType)
     selectedRows.value = []
     ElMessage.success(`已清空「${typeName}」数据（${deleted} 条）`)
     await loadTeachingData()
   } catch {
     ElMessage.error('清空失败，请稍后重试')
+  } finally {
+    clearing.value = false
   }
 }
 
@@ -390,7 +437,7 @@ function handleDetail(row: TeachingDataRecord): void {
       { key: '学号', value: row.studentId },
       { key: '姓名', value: row.studentName },
       { key: '课程', value: row.courseName || String(row.courseId) },
-      { key: '数据类型', value: dataTypeLabels[row.dataType] || row.dataType },
+      { key: '数据类型', value: recordDataTypeLabel(row) },
       { key: '分数', value: row.score !== undefined ? String(row.score) : '-' },
       { key: '考勤', value: row.attendance || '-' },
       { key: '备注', value: row.remark || '-' },
@@ -412,11 +459,7 @@ async function handleExport(): Promise<void> {
       courseId: courseId.value,
       // 学生下拉选项的 id 即学号，交给后端做姓名/学号模糊匹配
       keyword: selectedStudentId.value !== undefined ? String(selectedStudentId.value) : undefined,
-      dataType: query.value.dataType === 'score'
-        || query.value.dataType === 'attendance'
-        || query.value.dataType === 'participation'
-        ? query.value.dataType
-        : undefined,
+      dataType: requestDataType(query.value.dataType),
     })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -463,10 +506,15 @@ function filterByCurrentFile(): void {
           <el-select v-model="query.semester" placeholder="学期" clearable style="width: 200px">
             <el-option v-for="s in semesterOptions" :key="s.value" :label="s.label" :value="s.value" />
           </el-select>
-          <el-select v-model="query.dataType" placeholder="数据类型" clearable style="width: 120px">
-            <el-option label="成绩" value="score" />
-            <el-option label="考勤" value="attendance" />
-            <el-option label="课堂参与" value="participation" />
+          <el-select v-model="query.dataType" placeholder="数据类型" clearable style="width: 220px">
+            <el-option label="全部成绩" value="score" />
+            <el-option label="课堂讨论成绩" value="discussion" />
+            <el-option label="期中考试成绩" value="midterm" />
+            <el-option label="期末考试成绩" value="final" />
+            <el-option label="课程考勤成绩" value="attendance" />
+            <el-option label="平时作业成绩" value="homework" />
+            <el-option label="实验及其他成绩" value="other" />
+            <el-option label="课堂参与情况" value="participation" />
           </el-select>
           <el-select v-model="deptId" placeholder="院系" clearable style="width: 140px">
             <el-option v-for="d in departmentOptions.filter(d => d.id)" :key="d.id" :label="d.label" :value="d.id!" />
@@ -493,7 +541,14 @@ function filterByCurrentFile(): void {
             {{ dataFlowStore.currentImportLog.fileName }}
           </el-button>
           <el-button type="danger" :icon="Delete" plain @click="handleBatchDelete">批量删除</el-button>
-          <el-button type="danger" :icon="Delete" plain @click="handleClearAll">清空全部</el-button>
+          <el-button
+            type="danger"
+            :icon="Delete"
+            :loading="clearing"
+            :disabled="clearing"
+            plain
+            @click="handleClearAll"
+          >清空全部</el-button>
           <el-button type="primary" :icon="Download" :loading="exporting" @click="handleExport">导出 Excel</el-button>
         </div>
       </div>
@@ -501,6 +556,7 @@ function filterByCurrentFile(): void {
       <el-table
         v-loading="loading"
         :data="pagedData"
+        :row-key="rowKey"
         stripe
         border
         @selection-change="(rows: TeachingDataRecord[]) => (selectedRows = rows)"
@@ -512,15 +568,15 @@ function filterByCurrentFile(): void {
             {{ row.sourceFileName || '-' }}
           </template>
         </el-table-column>
-        <el-table-column prop="dataType" label="类型" width="110" align="center">
+        <el-table-column prop="dataType" label="类型" width="220" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.dataType === 'score'" size="small" type="success">
-              {{ row.batchName || '成绩' }}
+              {{ recordDataTypeLabel(row) }}
             </el-tag>
             <el-tag v-else-if="row.dataType === 'participation'" size="small" type="warning">
-              {{ dataTypeLabels[row.dataType] }}
+              {{ recordDataTypeLabel(row) }}
             </el-tag>
-            <el-tag v-else size="small">{{ dataTypeLabels[row.dataType] }}</el-tag>
+            <el-tag v-else size="small">{{ recordDataTypeLabel(row) }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="studentId" label="学号" width="130" />

@@ -31,6 +31,7 @@ const agentTitle = computed(() => {
     qa: '学情问答助手',
     exam: '自适应组卷助手',
     tutor: '学生助学助手',
+    diagnosis: 'AI 学情诊断助手',
   }
   return map[props.agentType]
 })
@@ -40,6 +41,7 @@ const placeholder = computed(() => {
     qa: '例如：这次期中谁退步最明显？班里哪个知识点最差？',
     exam: '例如：给班级出 10 道 medium 难度的薄弱点题',
     tutor: '例如：帮我讲解红黑树的旋转操作',
+    diagnosis: '例如：诊断当前班级的整体学情并给出改进建议',
   }
   return map[props.agentType]
 })
@@ -50,6 +52,9 @@ const quickPrompts = computed(() => {
   }
   if (props.agentType === 'tutor') {
     return ['红黑树是什么？', '帮我分析这道错题', '二叉树遍历怎么记？']
+  }
+  if (props.agentType === 'diagnosis') {
+    return ['诊断班级整体学情', '分析主要薄弱知识点', '生成分层教学建议']
   }
   return ['班里均分和及格率多少？', '期中谁退步最明显？', '张三最近状态怎么样？', '有哪些同学被预警了？']
 })

@@ -26,6 +26,9 @@ def init_db() -> None:
     # 先加 eval_dimension.weight 列，后续迁移（academic_parts 等）查询该表时才不会报缺列
     _migrate_dimension_weight()
     _migrate_legacy_tables()
+    # Academic-part migration reads EvalDimension.weight, so add/backfill that
+    # column before querying the evaluation tables on legacy databases.
+    _migrate_dimension_weight()
     _migrate_academic_parts()
     _migrate_attitude_homework()
     _rename_homework_index()
@@ -157,6 +160,7 @@ def _migrate_academic_parts() -> None:
                 dimension_name="学业水平",
                 description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他，合计固定 100%）",
                 sort_num=1,
+                weight=60.0,
             )
             session.add(dim)
             session.commit()
@@ -351,6 +355,32 @@ def _migrate_dimension_weight() -> None:
                     session.add(dim)
                     if dim.course_id is not None:
                         refreshed.add(dim.course_id)
+
+        # 修复旧版本后补建学业维度留下的 0/40 配置。仅处理总占比不完整且
+        # 恰好符合旧缺陷特征的课程，不覆盖教师已经配置完整的自定义方案。
+        dims_by_course: dict[int, list[EvalDimension]] = {}
+        for dim in dims:
+            dims_by_course.setdefault(dim.course_id, []).append(dim)
+        for course_id, course_dims in dims_by_course.items():
+            academic_dims = [
+                dim for dim in course_dims
+                if (dim.dimension_name or "").strip() in ("学业成绩", "学业水平")
+            ]
+            attitude_share = sum(
+                float(dim.weight or 0) for dim in course_dims
+                if "态度" in (dim.dimension_name or "")
+            )
+            total_share = sum(float(dim.weight or 0) for dim in course_dims)
+            if (
+                len(academic_dims) == 1
+                and float(academic_dims[0].weight or 0) == 0
+                and abs(attitude_share - 40.0) < 0.01
+                and abs(total_share - 40.0) < 0.01
+            ):
+                academic_dims[0].weight = 60.0
+                academic_dims[0].update_time = datetime.now()
+                session.add(academic_dims[0])
+                refreshed.add(course_id)
 
         # 3) 补建默认「学习态度」维度（幂等，每次启动检查）
         attitude_course_ids = {

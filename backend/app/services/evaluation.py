@@ -31,15 +31,14 @@ from app.models import (
 )
 from app.services.mastery import compute_student_mastery
 from app.services.profile import ProfileScores, _academic_part_score, compute_profile
+from app.services.assessment_types import (
+    ACADEMIC_ASSESSMENT_TYPES,
+    ASSESSMENT_TYPE_LABELS,
+)
 
 
 ACADEMIC_PART_LABELS = {
-    "discussion": "小班讨论",
-    "midterm": "期中考试",
-    "final": "期末考试",
-    "attendance": "考勤",
-    "homework": "作业",
-    "other": "其他",
+    part: ASSESSMENT_TYPE_LABELS[part] for part in ACADEMIC_ASSESSMENT_TYPES
 }
 
 DEFAULT_WEIGHTS = {
@@ -68,6 +67,8 @@ class EvaluationResult:
     level: str           # 优 / 良 / 中 / 差
     dimensions: dict     # {canonical key | "custom:{id}": 0-100 分}；canonical 四键恒在
     dimension_weights: dict = field(default_factory=dict)  # 生效占比 {key: 0-1}
+    dimension_availability: dict[str, bool] = field(default_factory=dict)
+    has_data: bool = True
 
 
 def score_to_level(score: float) -> str:
@@ -318,7 +319,7 @@ def score_eval_scheme_for_student(
         profile = compute_profile(session, student_id, course_id)
     masteries = compute_student_mastery(session, student_id, course_id)
     mastery_score = (
-        sum(item.accuracy for item in masteries) / len(masteries) if masteries else 60.0
+        sum(item.accuracy for item in masteries) / len(masteries) if masteries else 0.0
     )
     evaluation = compute_evaluation(session, student_id, course_id, profile=profile)
     radar: dict[str, float] = {}
@@ -330,7 +331,7 @@ def score_eval_scheme_for_student(
         for item in dim["indexes"]:
             rule = _parse_score_rule(item.get("score_rule", "{}"))
             score = round(float(_score_for_rule(
-                session, student_id, course_id, rule, 75.0, profile, mastery_score,
+                session, student_id, course_id, rule, 0.0, profile, mastery_score,
             )), 1)
             index_rows.append({
                 "id": item["id"],
@@ -486,7 +487,7 @@ def compute_evaluation(
     masteries = compute_student_mastery(session, student_id, course_id)
     mastery_score = (
         sum(m.accuracy for m in masteries) / len(masteries)
-        if masteries else 60.0
+        if masteries else 0.0
     )
 
     base_scores = {
@@ -499,13 +500,39 @@ def compute_evaluation(
         session, student_id, course_id, base_scores, profile, mastery_score
     )
 
-    total = sum(w[key] * dim_scores.get(key, 0.0) for key in w)
+    profile_availability = getattr(profile, "data_availability", None)
+    availability = (
+        dict(profile_availability)
+        if profile_availability is not None
+        else {key: True for key in CANONICAL_KEYS}
+    )
+    if profile_availability is not None:
+        availability["mastery"] = bool(masteries)
+    active_weights = {
+        key: weight for key, weight in w.items()
+        if availability.get(key, True) and weight > 0
+    }
+    active_total = sum(active_weights.values())
+    normalized_weights = (
+        {key: weight / active_total for key, weight in active_weights.items()}
+        if active_total > 0 else {}
+    )
+    # 综合学习质量必须至少有一项真实课程成绩作为基础。仅有考勤、
+    # 课堂参与或作业提交数据时可展示态度维度，但不能生成课程总评。
+    if profile_availability is not None and not availability.get("academic", False):
+        normalized_weights = {}
+    total = sum(
+        normalized_weights[key] * dim_scores.get(key, 0.0)
+        for key in normalized_weights
+    )
     total = max(0.0, min(100.0, total))
     return EvaluationResult(
         total_score=round(total, 1),
-        level=score_to_level(total),
+        level=score_to_level(total) if normalized_weights else "—",
         dimensions=dim_scores,
-        dimension_weights=w,
+        dimension_weights=normalized_weights,
+        dimension_availability=availability,
+        has_data=bool(normalized_weights),
     )
 
 
@@ -541,6 +568,10 @@ def persist_evaluation(
     for o in old:
         session.delete(o)
     session.commit()
+
+    # 没有任何真实来源数据时只清理旧快照，不写入 0 分伪评价。
+    if not result.has_data:
+        return 0
 
     er = StudentEvaluationResult(
         course_id=course_id,

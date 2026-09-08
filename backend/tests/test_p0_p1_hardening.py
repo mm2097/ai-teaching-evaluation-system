@@ -190,6 +190,8 @@ def test_self_practice_updates_personal_but_not_class_mastery(session):
         session=session,
         current_user=_user(session, 2),
     )
+    # 仅存在历史 KnowledgeMastery、没有当前答题/考试数据的知识点不应展示。
+    assert "归并排序" not in heatmap["knowledgePoints"]
     point_index = heatmap["knowledgePoints"].index(point.point_name)
     heatmap_score = next(row[2] for row in heatmap["data"] if row[:2] == [point_index, 0])
 
@@ -347,6 +349,9 @@ def test_teaching_data_query_exposes_record_type(session):
 
     assert result["data"]
     assert all("recordType" in row for row in result["data"])
+    assert all("assessmentType" in row for row in result["data"])
+    assert all("assessmentTypeName" in row for row in result["data"])
+    assert all("assessmentBatchName" in row for row in result["data"])
 
 
 def test_teaching_data_delete_and_batch_delete_persist(session):

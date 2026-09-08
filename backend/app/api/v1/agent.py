@@ -187,10 +187,12 @@ def list_tools(
 def clear_session(
     session_id: str,
     current_user: SysUser = Depends(require_teaching_user),
+    session: Session = Depends(get_session),
 ) -> dict:
     """清空会话记忆。"""
-    from app.services.agent.memory import clear_session as _clear
-    _clear(session_id)
+    from app.services.agent.memory import clear_session as _clear, delete_persisted_session
+    _clear(session_id, current_user.user_id)
+    delete_persisted_session(session_id, current_user.user_id, session)
     return {"status": "ok", "session_id": session_id}
 
 

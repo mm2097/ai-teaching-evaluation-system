@@ -186,6 +186,9 @@ def compute_student_mastery(
     for p in points:
         total, correct = answer_stats.get(p.point_id, (0, 0))
         exam_score = exam_index.get((student_id, p.point_id))
+        stored_score = km_scores.get(p.point_id)
+        if not total and exam_score is None and stored_score is None:
+            continue
         if total and total > 0:
             accuracy = (correct or 0) * 100.0 / total
             # 答题正确率与考试扣分并存时取平均
@@ -194,7 +197,7 @@ def compute_student_mastery(
         elif exam_score is not None:
             accuracy = exam_score
         else:
-            accuracy = km_scores.get(p.point_id, 0.0)
+            accuracy = stored_score
 
         level, color = accuracy_to_level(accuracy)
         results.append(
@@ -210,7 +213,7 @@ def compute_student_mastery(
     return results
 
 
-def refresh_student_mastery(session: Session, student_id: int, course_id: int) -> None:
+def refresh_student_mastery(session: Session, student_id: int, course_id: int) -> int:
     """按该生全部答题记录 + 课程测试扣分刷新持久化个人掌握度。
 
     答题正确率与考试扣分折算值并存时取平均；
@@ -237,6 +240,14 @@ def refresh_student_mastery(session: Session, student_id: int, course_id: int) -
     point_ids = set(answer_stats.keys()) | {
         point_id for (sid, point_id) in exam_index if sid == student_id
     }
+    existing_rows = session.exec(
+        select(KnowledgeMastery).where(
+            KnowledgeMastery.course_id == course_id,
+            KnowledgeMastery.student_id == student_id,
+        )
+    ).all()
+    existing_by_point = {row.point_id: row for row in existing_rows}
+
     for point_id in point_ids:
         total, correct = answer_stats.get(point_id, (0, 0))
         exam_score = exam_index.get((student_id, point_id))
@@ -248,13 +259,7 @@ def refresh_student_mastery(session: Session, student_id: int, course_id: int) -
             score = exam_score
         else:
             continue
-        mastery = session.exec(
-            select(KnowledgeMastery).where(
-                KnowledgeMastery.course_id == course_id,
-                KnowledgeMastery.student_id == student_id,
-                KnowledgeMastery.point_id == point_id,
-            )
-        ).first()
+        mastery = existing_by_point.get(point_id)
         if not mastery:
             mastery = KnowledgeMastery(
                 course_id=course_id,
@@ -268,6 +273,8 @@ def refresh_student_mastery(session: Session, student_id: int, course_id: int) -
             mastery.mastery_level = _mastery_level(score)
             mastery.update_time = datetime.now()
         session.add(mastery)
+    session.flush()
+    return len(point_ids)
 
 
 def compute_mastery_index_with_fallback(

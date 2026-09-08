@@ -6,6 +6,8 @@
 - 配比从评价配置读取（academic_part 指标），无效配置回退默认
 - 评价配置接口：「其他」指标权重自动补足 = 100 − 其余
 """
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -13,8 +15,14 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app import models  # noqa: F401
+from app.api.v1 import teaching_data
 from app.api.v1.auth import create_token
 from app.api.v1.eval_config import router as eval_config_router
+from app.api.v1.evaluations import (
+    _academic_parts_for_student,
+    _computed_dimensions,
+    list_evaluation_results,
+)
 from app.core.database import get_session
 from app.models import (
     AttendanceRecord,
@@ -27,7 +35,10 @@ from app.models import (
     EvalIndex,
     ExamBatch,
     IndividualScore,
+    ScoreRecord,
     Student,
+    StudentEvaluationResult,
+    StudyWarning,
     SysRole,
     SysUser,
     Teacher,
@@ -36,7 +47,15 @@ from app.services.profile import (
     ACADEMIC_PARTS_DEFAULT,
     _academic_part_score,
     compute_academic_score,
+    compute_profile,
     load_academic_parts,
+)
+from app.services.evaluation import compute_evaluation
+from app.services.analysis_refresh import refresh_student_analysis
+from app.services.assessment_types import (
+    classify_assessment_type,
+    display_assessment_batch_name,
+    display_assessment_type_name,
 )
 
 
@@ -102,6 +121,33 @@ def test_part_score_keyword_matching(engine):
         assert _academic_part_score(s, 1, 1, "other") == 70.0        # 其他 = 实验报告（不再含作业）
 
 
+def test_student_academic_parts_use_clear_synced_names(engine):
+    with Session(engine) as s:
+        parts = _academic_parts_for_student(s, 1, 1)
+
+    assert [item["name"] for item in parts] == [
+        "课堂讨论成绩",
+        "期中考试成绩",
+        "期末考试成绩",
+        "课程考勤成绩",
+        "平时作业成绩",
+        "其他过程性成绩",
+    ]
+    assert sum(item["weight"] for item in parts) == 100
+    assert all(item["score"] is not None for item in parts)
+
+
+def test_database_import_names_do_not_leak_into_assessment_display():
+    midterm_type = classify_assessment_type("score", "多类型数据库期中考试")
+    regular_type = classify_assessment_type("score", "数据库多类型平时成绩")
+
+    assert midterm_type == "midterm"
+    assert display_assessment_batch_name(midterm_type, "多类型数据库期中考试") == "期中考试"
+    assert regular_type == "other"
+    assert display_assessment_batch_name(regular_type, "数据库多类型平时成绩") == "平时成绩"
+    assert display_assessment_type_name(regular_type, "数据库多类型平时成绩") == "平时成绩"
+
+
 def test_compute_academic_score_weighted(engine):
     """学业水平 = Σ(组成分 × 配比)，配比合计 100%。"""
     with Session(engine) as s:
@@ -123,6 +169,265 @@ def test_compute_academic_score_normalizes_missing_parts(engine):
         )
         # 讨论/考勤/作业/其他配比为 0 不参与；期中 75 + 期末 85 → (75+85)/2 = 80
         assert score == 80.0
+
+
+def test_course_without_source_data_has_no_evaluation(engine):
+    """无成绩、考勤、参与或作业数据时不得生成 75/90 分默认评价。"""
+    course_id = 991
+    with Session(engine) as s:
+        course = Course(
+            course_id=course_id,
+            course_code="EMPTY991",
+            course_name="无数据课程",
+            teacher_id=1,
+            semester="2025-2026-1",
+            college="计算机学院",
+        )
+        s.add(course)
+        s.add(CourseStudent(course_id=course_id, student_id=1))
+        academic = EvalDimension(
+            course_id=course_id, dimension_name="学业水平", weight=60, sort_num=1
+        )
+        attitude = EvalDimension(
+            course_id=course_id, dimension_name="学习态度", weight=40, sort_num=2
+        )
+        s.add_all([academic, attitude])
+        s.commit()
+        s.add(EvalIndex(
+            dimension_id=academic.dimension_id,
+            index_name="期中考试",
+            weight=100,
+            score_rule='{"type":"academic_part","part":"midterm"}',
+        ))
+        s.add(EvalIndex(
+            dimension_id=attitude.dimension_id,
+            index_name="出勤率",
+            weight=100,
+            score_rule='{"type":"attendance","full_score":100}',
+        ))
+        s.commit()
+
+        profile = compute_profile(s, student_id=1, course_id=course_id)
+        result = compute_evaluation(s, student_id=1, course_id=course_id, profile=profile)
+
+        assert profile.academic_score == 0
+        assert profile.attitude_score == 0
+        assert profile.data_availability == {
+            "academic": False,
+            "attitude": False,
+            "progress": False,
+        }
+        assert result.has_data is False
+        assert result.total_score == 0
+        assert result.level == "—"
+        api_result = list_evaluation_results(
+            student_id=1,
+            course_id=course_id,
+            dept_id=None,
+            session=s,
+            current_user=s.get(SysUser, 1),
+        )
+        assert api_result[0]["totalScore"] is None
+        assert api_result[0]["grade"] == "—"
+
+        for index in s.exec(select(EvalIndex).where(
+            EvalIndex.dimension_id.in_([academic.dimension_id, attitude.dimension_id])
+        )).all():
+            s.delete(index)
+        s.delete(academic)
+        s.delete(attitude)
+        enrollment = s.exec(select(CourseStudent).where(
+            CourseStudent.course_id == course_id,
+            CourseStudent.student_id == 1,
+        )).one()
+        s.delete(enrollment)
+        s.delete(course)
+        s.commit()
+
+
+def test_source_score_create_and_delete_refreshes_evaluation(engine):
+    """最后一条源成绩删除后，画像和综合评价不得保留旧分数。"""
+    course_id = 992
+    batch_id = 992
+    with Session(engine) as s:
+        s.add(Course(
+            course_id=course_id,
+            course_code="SYNC992",
+            course_name="同步测试课",
+            teacher_id=1,
+            semester="2025-2026-1",
+            college="计算机学院",
+        ))
+        s.add(CourseStudent(course_id=course_id, student_id=1))
+        s.add(ExamBatch(
+            batch_id=batch_id,
+            course_id=course_id,
+            batch_name="期末考试",
+            batch_type=4,
+            full_score=100,
+            create_by=1,
+        ))
+        score = IndividualScore(
+            student_id=1,
+            exam_batch_id=batch_id,
+            score=84,
+            create_by=1,
+        )
+        s.add(score)
+        s.commit()
+
+        refresh_student_analysis(s, student_id=1, course_id=course_id)
+        stored = s.exec(select(StudentEvaluationResult).where(
+            StudentEvaluationResult.student_id == 1,
+            StudentEvaluationResult.course_id == course_id,
+        )).one()
+        assert stored.total_score == 84
+
+        s.delete(score)
+        s.commit()
+        refresh_student_analysis(s, student_id=1, course_id=course_id)
+
+        assert not s.exec(select(StudentEvaluationResult).where(
+            StudentEvaluationResult.student_id == 1,
+            StudentEvaluationResult.course_id == course_id,
+        )).all()
+        result = compute_evaluation(s, student_id=1, course_id=course_id)
+        assert result.has_data is False
+
+        for warning in s.exec(select(StudyWarning).where(
+            StudyWarning.student_id == 1,
+            StudyWarning.course_id == course_id,
+        )).all():
+            s.delete(warning)
+        s.delete(s.exec(select(CourseStudent).where(
+            CourseStudent.course_id == course_id,
+            CourseStudent.student_id == 1,
+        )).one())
+        s.delete(s.get(ExamBatch, batch_id))
+        s.delete(s.get(Course, course_id))
+        s.commit()
+
+
+def test_attitude_without_course_score_does_not_create_total(engine):
+    """只有已发布作业等态度数据时，不得生成课程综合成绩。"""
+    from app.models import AnswerTask
+
+    course_id = 993
+    with Session(engine) as s:
+        s.add(Course(
+            course_id=course_id,
+            course_code="ATT993",
+            course_name="仅态度数据测试课",
+            teacher_id=1,
+            semester="2025-2026-1",
+            college="计算机学院",
+        ))
+        s.add(CourseStudent(course_id=course_id, student_id=1))
+        academic_dim = EvalDimension(
+            course_id=course_id, dimension_name="学业水平", weight=60, sort_num=1,
+        )
+        attitude_dim = EvalDimension(
+            course_id=course_id, dimension_name="学习态度", weight=40, sort_num=2,
+        )
+        s.add_all([academic_dim, attitude_dim])
+        s.commit()
+        s.add_all([
+            EvalIndex(
+                dimension_id=attitude_dim.dimension_id,
+                index_name="出勤率",
+                weight=40,
+                score_rule='{"type":"attendance","full_score":100}',
+            ),
+            EvalIndex(
+                dimension_id=attitude_dim.dimension_id,
+                index_name="课堂参与",
+                weight=30,
+                score_rule='{"type":"interaction","full_score":100}',
+            ),
+            EvalIndex(
+                dimension_id=attitude_dim.dimension_id,
+                index_name="作业提交",
+                weight=30,
+                score_rule='{"type":"homework","full_score":100}',
+            ),
+        ])
+        task = AnswerTask(
+            course_id=course_id,
+            task_name="未提交作业",
+            task_type="assignment",
+            deadline=datetime.now() + timedelta(days=1),
+            status=1,
+            create_by=1,
+        )
+        s.add(task)
+        s.commit()
+
+        profile = compute_profile(s, student_id=1, course_id=course_id)
+        result = compute_evaluation(s, student_id=1, course_id=course_id, profile=profile)
+
+        assert profile.data_availability["academic"] is False
+        assert profile.data_availability["attitude"] is True
+        assert result.has_data is False
+        assert result.level == "—"
+        dimensions = _computed_dimensions(s, course_id, result)
+        assert dimensions == [{
+            "dimensionId": attitude_dim.dimension_id,
+            "name": "学习态度",
+            "score": 0.0,
+            "weight": 40.0,
+        }]
+
+        s.delete(task)
+        for index in s.exec(select(EvalIndex).where(
+            EvalIndex.dimension_id.in_([academic_dim.dimension_id, attitude_dim.dimension_id])
+        )).all():
+            s.delete(index)
+        s.delete(academic_dim)
+        s.delete(attitude_dim)
+        s.delete(s.exec(select(CourseStudent).where(
+            CourseStudent.course_id == course_id,
+            CourseStudent.student_id == 1,
+        )).one())
+        s.delete(s.get(Course, course_id))
+        s.commit()
+
+def test_row_edit_targets_exact_score_table(engine):
+    """不同成绩表主键相同时，编辑不得串改另一张表。"""
+    record_id = 900
+    with Session(engine) as s:
+        legacy = ScoreRecord(
+            score_id=record_id,
+            course_id=1,
+            student_id=1,
+            batch_id=1,
+            score=66,
+            is_pass=1,
+            create_by=1,
+        )
+        individual = IndividualScore(
+            score_id=record_id,
+            student_id=1,
+            exam_batch_id=1,
+            score=77,
+            create_by=1,
+        )
+        s.add_all([legacy, individual])
+        s.commit()
+
+        teaching_data.update_row_data(
+            record_id,
+            {"record_type": "individual_score", "source_data": {"成绩": 0}},
+            background_tasks=None,
+            session=s,
+            current_user=s.get(SysUser, 1),
+        )
+
+        assert s.get(IndividualScore, record_id).score == 0
+        assert s.get(ScoreRecord, record_id).score == 66
+
+        s.delete(s.get(IndividualScore, record_id))
+        s.delete(s.get(ScoreRecord, record_id))
+        s.commit()
 
 
 def test_load_academic_parts_from_config(engine):

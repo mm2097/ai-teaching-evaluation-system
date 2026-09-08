@@ -179,6 +179,12 @@ export interface TeachingDataRecord {
   sourceData?: string
   importLogId?: number
   sourceFileName?: string
+  /** 导入来源：excel / txt / database */
+  sourceType?: 'excel' | 'txt' | 'database' | ''
+  /** 评价引擎使用的课程考核类型 */
+  assessmentType?: 'discussion' | 'midterm' | 'final' | 'attendance' | 'homework' | 'other' | 'participation'
+  assessmentTypeName?: string
+  assessmentBatchName?: string
 }
 
 /** 分析查询参数 */
@@ -207,6 +213,7 @@ export interface StudentProfileData {
   radarValues: number[]
   radarIndicators?: { name: string; max: number }[]
   dimensionScores: { name: string; score: number; desc: string }[]
+  hasEvaluationData?: boolean
   /** 学习态度维度子项明细（出勤/互动/测试） */
   attitudeDetail?: {
     score: number

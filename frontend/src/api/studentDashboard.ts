@@ -40,9 +40,11 @@ export async function fetchStudentDashboardOverview(): Promise<StudentDashboardO
 
 export interface ScoreArchiveRecord {
   id: number
+  courseId: number
   courseName: string
   semester: string
   type: string
+  batchName?: string
   score: number
   total: number
   classAvg: number

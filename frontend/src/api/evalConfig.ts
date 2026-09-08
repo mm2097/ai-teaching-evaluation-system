@@ -77,7 +77,7 @@ export const SCORE_RULE_PRESETS = [
   { value: 'part_other', label: '其他（实验等，占比自动补足）', rule: { type: 'academic_part', part: 'other' } },
   { value: 'attendance', label: '出勤率', rule: { type: 'attendance', full_score: 100 } },
   { value: 'interaction', label: '课堂参与度', rule: { type: 'interaction', full_score: 100 } },
-  { value: 'homework', label: '作业提交率', rule: { type: 'homework', full_score: 100 } },
+  { value: 'homework', label: '测试提交率', rule: { type: 'homework', full_score: 100 } },
   // 旧版直读批次（兼容存量配置展示）
   { value: 'score_daily', label: '平时成绩（旧）', rule: { type: 'direct', source: 'score_record', batch_type: 1 } },
   { value: 'score_mid', label: '期中/测验成绩（旧）', rule: { type: 'direct', source: 'score_record', batch_type: 3 } },
@@ -106,7 +106,7 @@ export const SCORE_RULE_PRESET_GROUPS: ReadonlyArray<{
       { value: 'part_attendance', label: '考勤（到课率）' },
       { value: 'interaction', label: '课堂参与（参与度）' },
       { value: 'attendance', label: '出勤率' },
-      { value: 'homework', label: '作业提交率' },
+      { value: 'homework', label: '测试提交率' },
     ],
   },
   {
@@ -199,7 +199,7 @@ export function formatScoreRule(rule: Record<string, unknown> | null | undefined
   }
   if (type === 'attendance') return '出勤率'
   if (type === 'interaction') return '课堂参与度'
-  if (type === 'homework') return '作业提交率'
+  if (type === 'homework') return '测试提交率'
   if (type === 'academic_part') {
     const part = rule.part as string | undefined
     const partLabels: Record<string, string> = {

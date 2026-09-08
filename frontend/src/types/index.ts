@@ -207,7 +207,7 @@ export interface StudentProfileData {
   radarValues: number[]
   radarIndicators?: { name: string; max: number }[]
   dimensionScores: { name: string; score: number; desc: string }[]
-  /** 学习态度维度子项明细（出勤/互动/作业） */
+  /** 学习态度维度子项明细（出勤/互动/测试） */
   attitudeDetail?: {
     score: number
     attendanceRate: number         // 到课率 0-1
@@ -215,8 +215,8 @@ export interface StudentProfileData {
     participationRate: number      // 课堂参与度 0-1
     interactionCount: number       // 参与次数
     interactionScore: number       // 互动得分 0-100
-    homeworkRate: number           // 作业提交率 0-1
-    homeworkScore: number          // 作业得分 0-100
+    homeworkRate: number           // 测试提交率 0-1（基于答题任务，非教师上传的作业成绩）
+    homeworkScore: number          // 测试得分 0-100
     weights: { attendance: number; interaction: number; homework: number }
   }
   strongPoints: string

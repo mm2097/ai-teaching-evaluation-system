@@ -59,7 +59,7 @@ class ProfileScores:
     attendance_rate: float      # 到课率 0-1（D03 子项，优先新表 AttendanceSheet）
     interaction_count: int      # 课堂参与次数（D03 子项）
     participation_rate: float   # 课堂参与度 0-1（D03 子项，无数据基线 0.9）
-    homework_rate: float        # 作业提交率 0-1（保留字段，暂无作业数据）
+    homework_rate: float        # 测试提交率 0-1（基于答题任务，无任务时基线 0.9）
     # D03 子项得分（0-100）+ 权重，供前端展示态度分构成
     attendance_score: float = 0.0
     interaction_score: float = 0.0
@@ -347,11 +347,12 @@ def _interaction_score(
 
 
 def _homework_rate(session: Session, student_id: int, course_id: int) -> float:
-    """作业提交率：基于教师发布的作业任务（AnswerTask, task_type=assignment）。
+    """测试提交率：基于教师发布的答题任务（AnswerTask, task_type=assignment）。
 
     应交 = 课程内 task_type=assignment 且 status≥1（已发布/进行中/已结束）的任务数；
     已交 = 该学生有 StudentAnswerRecord 的此类任务数。
     提交率 = 已交 / 应交；无应交任务时返回基线 0.9。
+    注意与学业水平的「作业」部分（教师上传的作业单项成绩）无关，故称"测试提交率"。
     """
     tasks = session.exec(
         select(AnswerTask.task_id).where(
@@ -398,7 +399,7 @@ def _attitude_component_weights(
         weight = max(0.0, float(idx.weight or 0.0))
         if "出勤" in name or "考勤" in name:
             raw["attendance"] += weight
-        elif "作业" in name:
+        elif "作业" in name or "测试" in name:  # 兼容旧名"作业提交"与新名"测试提交"
             raw["homework"] += weight
         elif "互动" in name or "参与" in name or "课堂" in name:
             raw["interaction"] += weight
@@ -413,7 +414,7 @@ def compute_attitude_score(
     session: Session, student_id: int, course_id: int,
     w_attendance: float | None = None, w_interaction: float | None = None, w_homework: float | None = None,
 ) -> tuple[float, dict]:
-    """D03 学习态度得分 = w_attendance×到课率 + w_interaction×课堂参与度 + w_homework×作业提交率。
+    """D03 学习态度得分 = w_attendance×到课率 + w_interaction×课堂参与度 + w_homework×测试提交率。
 
     子项权重默认从课程"学习态度"维度的指标配置推导（_attitude_component_weights，
     按指标名归一化）；无配置时回退 0.5/0.5/0.0。这与综合评价引擎

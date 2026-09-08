@@ -28,6 +28,7 @@ def init_db() -> None:
     _migrate_legacy_tables()
     _migrate_academic_parts()
     _migrate_attitude_homework()
+    _rename_homework_index()
     _migrate_evaluation_levels()
     _migrate_student_answers()
     _migrate_split_combined_knowledge_points()
@@ -171,11 +172,11 @@ def _migrate_academic_parts() -> None:
 
 
 def _migrate_attitude_homework() -> None:
-    """学习态度维度补建「作业提交」指标（幂等）。
+    """学习态度维度补建「测试提交」指标（幂等，原「作业提交」）。
 
-    - 已含作业指标（rule type=homework 或名称含"作业"）的维度跳过
+    - 已含作业指标（rule type=homework 或名称含"作业"/"测试提交"）的维度跳过
     - 旧默认配置（出勤率/课堂参与 各 50%）升级为新默认 40/30/30
-    - 教师自定义配置：作业提交固定 30%，其余指标按比例缩放补足 70%
+    - 教师自定义配置：测试提交固定 30%，其余指标按比例缩放补足 70%
     - 迁移后重算受影响课程的画像与评价（失败不阻塞启动）
     """
     import json
@@ -207,7 +208,9 @@ def _migrate_attitude_homework() -> None:
             if not indexes:
                 continue
             if any(
-                _rule_type(idx) == "homework" or "作业" in (idx.index_name or "")
+                _rule_type(idx) == "homework"
+                or "作业" in (idx.index_name or "")
+                or "测试提交" in (idx.index_name or "")
                 for idx in indexes
             ):
                 continue
@@ -235,12 +238,12 @@ def _migrate_attitude_homework() -> None:
 
             session.add(EvalIndex(
                 dimension_id=dim.dimension_id,
-                index_name="作业提交",
+                index_name="测试提交",
                 weight=HOMEWORK_WEIGHT,
                 score_rule=json.dumps({"type": "homework", "full_score": 100}, ensure_ascii=False),
             ))
             if (dim.description or "") == "考勤和课堂参与度":
-                dim.description = "考勤、课堂参与度与作业提交率"
+                dim.description = "考勤、课堂参与度与测试提交率"
                 session.add(dim)
             affected_courses.add(dim.course_id)
 
@@ -261,6 +264,43 @@ def _migrate_attitude_homework() -> None:
             )
 
 
+def _rename_homework_index() -> None:
+    """存量「作业提交」指标更名为「测试提交」（幂等）。
+
+    该指标基于答题任务提交情况（score_rule type=homework），与教师上传的
+    作业单项成绩无关，更名避免歧义：
+    - EvalIndex：rule type=homework 且名称为「作业提交/作业提交率」→「测试提交」
+    - EvalDimension：描述含「作业提交率」→「测试提交率」
+    仅改名称，权重与规则不变，无需重算得分。
+    """
+    import json
+
+    from sqlmodel import select
+
+    from app.models import EvalDimension, EvalIndex
+
+    with Session(engine) as session:
+        renamed = False
+        for idx in session.exec(select(EvalIndex)).all():
+            try:
+                rule = json.loads(idx.score_rule or "{}")
+            except (json.JSONDecodeError, TypeError):
+                rule = {}
+            if rule.get("type") == "homework" and (idx.index_name or "") in ("作业提交", "作业提交率"):
+                idx.index_name = "测试提交"
+                idx.update_time = datetime.now()
+                session.add(idx)
+                renamed = True
+        for dim in session.exec(select(EvalDimension)).all():
+            if "作业提交率" in (dim.description or ""):
+                dim.description = (dim.description or "").replace("作业提交率", "测试提交率")
+                dim.update_time = datetime.now()
+                session.add(dim)
+                renamed = True
+        if renamed:
+            session.commit()
+
+
 def _migrate_dimension_weight() -> None:
     """eval_dimension 增加 weight 列并回填默认维度占比（幂等）。
 
@@ -268,7 +308,7 @@ def _migrate_dimension_weight() -> None:
     - 建列当次回填：学业成绩/学业水平→60、学习态度→40，
       其余（学习进步/知识掌握/自定义维度）保持 0，由教师自行分配
     - 已有维度但缺「学习态度」的课程自动补建该维度与三个标准指标
-      （出勤率 40 / 课堂参与 30 / 作业提交 30，同 _migrate_academic_parts 补建学业水平的模式）
+      （出勤率 40 / 课堂参与 30 / 测试提交 30，同 _migrate_academic_parts 补建学业水平的模式）
     - 回填/补建影响综合评价口径与维度分落库 → 重算受影响课程（失败不阻塞启动）
     """
     import json
@@ -294,7 +334,7 @@ def _migrate_dimension_weight() -> None:
     ATTITUDE_INDEXES = [
         ("出勤率", 40.0, {"type": "attendance", "full_score": 100}),
         ("课堂参与", 30.0, {"type": "interaction", "full_score": 100}),
-        ("作业提交", 30.0, {"type": "homework", "full_score": 100}),
+        ("测试提交", 30.0, {"type": "homework", "full_score": 100}),
     ]
     refreshed: set[int] = set()
 
@@ -322,7 +362,7 @@ def _migrate_dimension_weight() -> None:
             dim = EvalDimension(
                 course_id=course_id,
                 dimension_name="学习态度",
-                description="考勤、课堂参与度与作业提交率",
+                description="考勤、课堂参与度与测试提交率",
                 sort_num=2,
                 weight=40.0,
             )

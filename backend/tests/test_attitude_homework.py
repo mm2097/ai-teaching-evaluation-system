@@ -1,10 +1,11 @@
-"""学习态度维度补建「作业提交」指标迁移测试。
+"""学习态度维度补建「测试提交」指标迁移测试。
 
 覆盖:
 - 旧默认配置（出勤率/课堂参与 各 50%）升级为新默认 40/30/30
-- 教师自定义配置按比例缩放（作业提交固定 30%），合计保持 100%
+- 教师自定义配置按比例缩放（测试提交固定 30%），合计保持 100%
 - 已含作业指标的维度跳过；重复执行幂等
 - 迁移后画像态度分推导出 0.4/0.3/0.3 的子权重
+- 存量「作业提交」指标更名为「测试提交」（_rename_homework_index，幂等）
 """
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -54,6 +55,12 @@ def _run_migration(monkeypatch, eng) -> None:
     db_module._migrate_attitude_homework()
 
 
+def _run_rename(monkeypatch, eng) -> None:
+    import app.core.database as db_module
+    monkeypatch.setattr(db_module, "engine", eng)
+    db_module._rename_homework_index()
+
+
 def _get_indexes(eng, dim_id: int) -> dict[str, EvalIndex]:
     with Session(eng) as s:
         rows = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == dim_id)).all()
@@ -71,10 +78,10 @@ def test_migrate_legacy_default_upgrades_to_40_30_30(monkeypatch, tmp_path):
     _run_migration(monkeypatch, eng)
 
     indexes = _get_indexes(eng, dim_id)
-    assert set(indexes) == {"出勤率", "课堂参与", "作业提交"}
+    assert set(indexes) == {"出勤率", "课堂参与", "测试提交"}
     assert indexes["出勤率"].weight == 40.0
     assert indexes["课堂参与"].weight == 30.0
-    assert indexes["作业提交"].weight == 30.0
+    assert indexes["测试提交"].weight == 30.0
     assert sum(i.weight for i in indexes.values()) == 100.0
 
     # 画像态度分子权重按配置推导：0.4/0.3/0.3
@@ -84,7 +91,7 @@ def test_migrate_legacy_default_upgrades_to_40_30_30(monkeypatch, tmp_path):
 
 
 def test_migrate_custom_config_rescales_proportionally(monkeypatch, tmp_path):
-    """自定义配置（60/40）：作业提交固定 30%，其余按比例缩放为 42/28。"""
+    """自定义配置（60/40）：测试提交固定 30%，其余按比例缩放为 42/28。"""
     eng = _make_engine(tmp_path, "custom.db")
     dim_id = _add_attitude_dim(eng, [
         ("出勤率", 60.0, ATTENDANCE_RULE),
@@ -96,7 +103,7 @@ def test_migrate_custom_config_rescales_proportionally(monkeypatch, tmp_path):
     indexes = _get_indexes(eng, dim_id)
     assert indexes["出勤率"].weight == 42.0
     assert indexes["课堂参与"].weight == 28.0
-    assert indexes["作业提交"].weight == 30.0
+    assert indexes["测试提交"].weight == 30.0
     assert sum(i.weight for i in indexes.values()) == 100.0
 
 
@@ -131,3 +138,53 @@ def test_migrate_is_idempotent(monkeypatch, tmp_path):
     indexes = _get_indexes(eng, dim_id)
     assert len(indexes) == 3
     assert sum(i.weight for i in indexes.values()) == 100.0
+
+
+def test_rename_legacy_homework_index(monkeypatch, tmp_path):
+    """存量「作业提交」指标与维度描述更名为「测试提交/测试提交率」，权重不变，幂等。"""
+    eng = _make_engine(tmp_path, "rename.db")
+    with Session(eng) as s:
+        dim = EvalDimension(course_id=1, dimension_name="学习态度",
+                            description="考勤、课堂参与度与作业提交率", sort_num=2)
+        s.add(dim)
+        s.commit()
+        s.refresh(dim)
+        s.add(EvalIndex(dimension_id=dim.dimension_id, index_name="作业提交",
+                        weight=30.0, score_rule=HOMEWORK_RULE))
+        s.commit()
+        dim_id = dim.dimension_id  # type: ignore[return-value]
+
+    _run_rename(monkeypatch, eng)
+    _run_rename(monkeypatch, eng)  # 幂等
+
+    with Session(eng) as s:
+        idx = s.exec(select(EvalIndex).where(EvalIndex.dimension_id == dim_id)).one()
+        assert idx.index_name == "测试提交"
+        assert idx.weight == 30.0
+        dim = s.get(EvalDimension, dim_id)
+        assert dim is not None and (dim.description or "").endswith("测试提交率")
+
+
+def test_rename_keeps_other_rules_untouched(monkeypatch, tmp_path):
+    """非 homework 规则或同名但规则不同的指标不受更名影响。"""
+    eng = _make_engine(tmp_path, "rename-keep.db")
+    with Session(eng) as s:
+        dim = EvalDimension(course_id=1, dimension_name="学习态度", sort_num=2)
+        s.add(dim)
+        s.commit()
+        s.refresh(dim)
+        s.add(EvalIndex(dimension_id=dim.dimension_id, index_name="作业提交",
+                        weight=30.0, score_rule='{"type":"direct","source":"score_record"}'))
+        s.add(EvalIndex(dimension_id=dim.dimension_id, index_name="出勤率",
+                        weight=70.0, score_rule=ATTENDANCE_RULE))
+        s.commit()
+        dim_id = dim.dimension_id  # type: ignore[return-value]
+
+    _run_rename(monkeypatch, eng)
+
+    with Session(eng) as s:
+        names = {
+            i.index_name: i
+            for i in s.exec(select(EvalIndex).where(EvalIndex.dimension_id == dim_id)).all()
+        }
+        assert set(names) == {"作业提交", "出勤率"}

@@ -1012,9 +1012,9 @@ def seed() -> None:
         # 默认维度只有两个：学业水平 60% + 学习态度 40%，需要时可新增其他维度
         dimensions = [
             EvalDimension(course_id=1, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
-            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
+            EvalDimension(course_id=1, dimension_name="学习态度", description="考勤、课堂参与度与测试提交率", sort_num=2, weight=40),
             EvalDimension(course_id=3, dimension_name="学业水平", description="课程考核构成配比（小班讨论/期中/期末/考勤/作业/其他）", sort_num=1, weight=60),
-            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与作业提交率", sort_num=2, weight=40),
+            EvalDimension(course_id=3, dimension_name="学习态度", description="考勤、课堂参与度与测试提交率", sort_num=2, weight=40),
         ]
         session.add_all(dimensions)
         session.commit()
@@ -1042,14 +1042,14 @@ def seed() -> None:
                       score_rule='{"type":"attendance","full_score":100}'),
             EvalIndex(dimension_id=2, index_name="课堂参与", weight=30,
                       score_rule='{"type":"interaction","full_score":100}'),
-            EvalIndex(dimension_id=2, index_name="作业提交", weight=30,
+            EvalIndex(dimension_id=2, index_name="测试提交", weight=30,
                       score_rule='{"type":"homework","full_score":100}'),
             *_academic_part_indexes(3),
             EvalIndex(dimension_id=4, index_name="出勤率", weight=40,
                       score_rule='{"type":"attendance","full_score":100}'),
             EvalIndex(dimension_id=4, index_name="课堂参与", weight=30,
                       score_rule='{"type":"interaction","full_score":100}'),
-            EvalIndex(dimension_id=4, index_name="作业提交", weight=30,
+            EvalIndex(dimension_id=4, index_name="测试提交", weight=30,
                       score_rule='{"type":"homework","full_score":100}'),
         ]
         session.add_all(indexes)

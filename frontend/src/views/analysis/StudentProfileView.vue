@@ -218,11 +218,11 @@ watch(queryParams, async (val) => {
           <span class="attitude-weight">权重 {{ (attitudeDetail.weights.interaction * 100).toFixed(0) }}%</span>
         </el-descriptions-item>
         <el-descriptions-item label="互动得分">{{ attitudeDetail.interactionScore.toFixed(1) }}</el-descriptions-item>
-        <el-descriptions-item label="作业提交率">
+        <el-descriptions-item label="测试提交率">
           {{ (attitudeDetail.homeworkRate * 100).toFixed(1) }}%
           <span class="attitude-weight">权重 {{ (attitudeDetail.weights.homework * 100).toFixed(0) }}%</span>
         </el-descriptions-item>
-        <el-descriptions-item label="作业得分">{{ attitudeDetail.homeworkScore.toFixed(1) }}</el-descriptions-item>
+        <el-descriptions-item label="测试得分">{{ attitudeDetail.homeworkScore.toFixed(1) }}</el-descriptions-item>
         <el-descriptions-item label="态度总分">
           <strong style="color: #2563eb">{{ attitudeDetail.score.toFixed(1) }}</strong>
         </el-descriptions-item>

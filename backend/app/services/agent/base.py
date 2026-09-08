@@ -17,7 +17,7 @@ from typing import Iterator
 
 from loguru import logger
 
-from app.services.agent.llm_proxy import FCResult, get_llm_proxy
+from app.services.agent.llm_proxy import FCResult, get_llm_proxy, verify_diagnosis
 from app.services.agent.memory import Conversation, get_or_create_session, persist_session
 from app.services.agent.prompts import (
     DIAGNOSIS_SYSTEM_PROMPT,
@@ -460,6 +460,15 @@ def run_agent_stream(
         conversation_db.close()
         yield {"type": "error", "message": str(e)}
         return
+
+    # ===== 大小模型协同:诊断报告做小模型考核点验证 =====
+    # 仅 diagnosis 场景,且只验证 LLM 真实产出(非兜底文案)。
+    # 验证失败不阻断(verify_diagnosis 返回 None 时跳过 verify 事件)。
+    llm_produced = bool(final_answer)  # 兜底文案尚未补,此刻 final_answer 非空即 LLM 产出
+    if agent_type == "diagnosis" and llm_produced:
+        report = verify_diagnosis(final_answer, course_id=course_id or 1)
+        if report is not None:
+            yield {"type": "verify", "step": max_steps, "report": report}
 
     if final_answer:
         conv.add_assistant(content=final_answer)

@@ -17,7 +17,7 @@ import { fetchCourses } from '@/api/dict'
 import { fetchCourseKnowledgePoints } from '@/api/questionBank'
 import { useUserStore } from '@/stores/user'
 import { ALL_EXERCISE_TYPES, difficultyLabels, exerciseTypeLabels, formatJudgeAnswer, getQuestionOptions, judgeOptionAnswerValue } from '@/utils/exerciseJudge'
-import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion } from '@/types'
+import type { DifficultyLevel, ExerciseType, QuizAssignment, QuizQuestion, VerifyReport } from '@/types'
 
 const userStore = useUserStore()
 const route = useRoute()
@@ -63,6 +63,7 @@ const result = ref<{
     manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
+    verifyReport?: VerifyReport | null
   }[]
 } | null>(null)
 
@@ -275,6 +276,7 @@ function applySubmissionResult(submission: {
     manualRequired?: boolean
     aiScore?: number | null
     aiReason?: string
+    verifyReport?: VerifyReport | null
   }[]
 }): void {
   const details = submission.details || []
@@ -382,6 +384,17 @@ const partialCount = computed(
 
 function isDetailPartial(d: { correct: boolean; manualRequired?: boolean; aiScore?: number | null }): boolean {
   return d.correct && !d.manualRequired && d.aiScore !== null && d.aiScore !== undefined && d.aiScore < 10
+}
+
+/** 小模型验证 flag → 中文标签 */
+function verifyFlagLabel(flag: string): string {
+  const map: Record<string, string> = {
+    pass: '通过',
+    warn: '存在超纲',
+    fail: '不通过',
+    skipped: '已跳过',
+  }
+  return map[flag] ?? '已跳过'
 }
 
 const resultSubtitle = computed(() => {
@@ -627,6 +640,22 @@ const resultSubtitle = computed(() => {
                 </span>
               </div>
               <p class="ai-reason">{{ item.aiReason }}</p>
+              <div v-if="item.verifyReport" class="ai-verify">
+                <div class="ai-verify__head">
+                  <el-tag
+                    size="small"
+                    :type="item.verifyReport.flag === 'warn' || item.verifyReport.flag === 'fail' ? 'danger' : item.verifyReport.flag === 'pass' ? 'success' : 'info'"
+                    effect="plain"
+                  >🔬 大纲校验：{{ verifyFlagLabel(item.verifyReport.flag) }}</el-tag>
+                  <span class="ai-verify__conf">置信度 {{ Math.round((item.verifyReport.confidence || 0) * 100) }}%</span>
+                </div>
+                <div v-if="item.verifyReport.hallucinated_kps?.length" class="ai-verify__warn">
+                  ⚠ 疑似超纲：{{ item.verifyReport.hallucinated_kps.join('、') }}
+                </div>
+                <div v-if="item.verifyReport.aligned_kps?.length" class="ai-verify__aligned">
+                  ✓ 对齐考核点：{{ item.verifyReport.aligned_kps.join('、') }}
+                </div>
+              </div>
             </div>
             <p v-if="item.question.explanation" class="explanation">解析：{{ item.question.explanation }}</p>
           </div>
@@ -1204,6 +1233,36 @@ const resultSubtitle = computed(() => {
       color: #78350f;
       line-height: 1.5;
       margin: 0;
+    }
+
+    .ai-verify {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed #fde68a;
+
+      .ai-verify__head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+
+        .ai-verify__conf {
+          font-size: 12px;
+          color: #92400e;
+        }
+      }
+
+      .ai-verify__warn {
+        font-size: 12px;
+        color: #dc2626;
+        line-height: 1.5;
+      }
+
+      .ai-verify__aligned {
+        font-size: 12px;
+        color: #16a34a;
+        line-height: 1.5;
+      }
     }
   }
 }

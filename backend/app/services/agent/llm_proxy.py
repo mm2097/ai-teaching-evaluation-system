@@ -115,3 +115,44 @@ def set_llm_proxy(proxy: LLMProxy) -> None:
     """测试注入用。"""
     global _proxy
     _proxy = proxy
+
+
+def verify_diagnosis(
+    content: str,
+    course_id: int = 1,
+    weak_points: list[str] | None = None,
+    base_url: str = "http://127.0.0.1:8001",
+    timeout: float = 10.0,
+) -> dict | None:
+    """调用 algorithm /verify 做小模型考核点验证(大小模型协同)。
+
+    参数:
+        content: 诊断最终 JSON 文本(LLM 产出)
+        course_id: 课程 ID(本期固定 1=计网)
+        weak_points: 班级薄弱知识点(可选,用于覆盖校验)
+    返回:
+        验证报告 dict;algorithm 不可达/异常时返回 None(不阻断诊断)
+    """
+    import httpx
+    try:
+        resp = httpx.post(
+            f"{base_url}/verify",
+            json={
+                "llm_output": content,
+                "scene": "diagnosis",
+                "course_id": course_id,
+                "weak_points": weak_points or [],
+            },
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"验证服务 HTTP {e.response.status_code}：{e.response.text[:200]}")
+        return None
+    except httpx.RequestError as e:
+        logger.warning(f"验证服务不可达,跳过验证：{e}")
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"诊断验证异常,跳过：{e}")
+        return None

@@ -83,5 +83,6 @@ class StudentAnswerRecord(SQLModel, table=True):
     is_correct: int = Field(default=0)  # 0=错误, 1=正确
     ai_score: Optional[float] = Field(default=None)  # AI 建议分（老师可终判覆盖）
     judge_reason: Optional[str] = Field(default=None, sa_type=Text)  # AI 判分依据
+    verify_report: Optional[str] = Field(default=None, sa_type=Text)  # 小模型考核点验证报告(JSON)
     answer_time: datetime = Field(default_factory=datetime.now)
     submit_time: datetime = Field(default_factory=datetime.now)

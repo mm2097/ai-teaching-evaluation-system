@@ -33,6 +33,7 @@ import type {
   DiagnosisStep,
   DiagnosisToolHint,
   AgentStreamEvent,
+  VerifyReport,
 } from '@/types'
 
 const router = useRouter()
@@ -69,6 +70,7 @@ const processSteps = ref<DiagnosisStep[]>([])
 const processError = ref<string>('')
 const report = ref<DiagnosisReport | null>(null)
 const rawContent = ref<string>('') // 兜底用原始文本
+const verifyReport = ref<VerifyReport | null>(null) // 小模型考核点验证报告
 
 // 追问
 const askVisible = ref(false)
@@ -142,6 +144,25 @@ const currentTargetName = computed(() => {
 const canStart = computed(
   () => !running.value && !!courseId.value && (diagnosisScope.value === 'class' || !!studentId.value),
 )
+
+// 小模型验证报告展示
+const verifyFlagType = computed<'success' | 'warning' | 'info'>(() => {
+  const flag = verifyReport.value?.flag
+  if (flag === 'pass') return 'success'
+  if (flag === 'warn' || flag === 'fail') return 'warning'
+  return 'info'
+})
+
+const verifyFlagText = computed(() => {
+  const flag = verifyReport.value?.flag
+  const map: Record<string, string> = {
+    pass: '通过',
+    warn: '存在超纲/幻觉',
+    fail: '不通过',
+    skipped: '已跳过',
+  }
+  return map[flag ?? 'skipped'] ?? '已跳过'
+})
 
 function normalizeDiagnosis(value: unknown): DiagnosisReport | null {
   if (!value || typeof value !== 'object') return null
@@ -217,6 +238,7 @@ function resetState(): void {
   processError.value = ''
   report.value = null
   rawContent.value = ''
+  verifyReport.value = null
 }
 
 function resetDisplay(): void {
@@ -429,6 +451,10 @@ async function startDiagnosis(): Promise<void> {
           // 非 JSON 但无 error：保留原文展示，不标"诊断失败"
           rawContent.value = evt.content
         }
+
+      } else if (evt.type === 'verify') {
+        // 大小模型协同:小模型考核点验证报告
+        verifyReport.value = evt.report
 
       } else if (evt.type === 'error') {
         // 仅当还没收到 content 时才记 error；content 已到则忽略后续 error
@@ -652,6 +678,47 @@ function onFilterQuery(): void {
       />
     </div>
 
+    <!-- 大小模型协同:小模型考核点验证报告 -->
+    <div v-if="verifyReport" class="content-card verify-card">
+      <div class="content-card__title">
+        🔬 大纲考核点校验
+        <span class="verify-source">小模型验证 · 大小模型协同</span>
+      </div>
+      <div class="verify-summary">
+        <el-tag
+          :type="verifyFlagType"
+          size="small"
+          effect="dark"
+        >{{ verifyFlagText }}</el-tag>
+        <span class="verify-conf">置信度 {{ (verifyReport.confidence * 100).toFixed(0) }}%</span>
+        <span class="verify-cov">覆盖度 {{ (verifyReport.coverage * 100).toFixed(0) }}%</span>
+        <span v-if="verifyReport.matched_chapters.length" class="verify-chap">
+          命中章节 {{ verifyReport.matched_chapters.join('、') }}
+        </span>
+      </div>
+      <div class="verify-notes">{{ verifyReport.notes }}</div>
+      <div v-if="verifyReport.aligned_kps.length" class="verify-kp-block">
+        <span class="kp-label kp-aligned">✓ 对齐考核点</span>
+        <el-tag
+          v-for="kp in verifyReport.aligned_kps"
+          :key="kp"
+          size="small"
+          type="success"
+          class="kp-tag"
+        >{{ kp }}</el-tag>
+      </div>
+      <div v-if="verifyReport.hallucinated_kps.length" class="verify-kp-block">
+        <span class="kp-label kp-hallucin">⚠ 疑似超纲/幻觉</span>
+        <el-tag
+          v-for="kp in verifyReport.hallucinated_kps"
+          :key="kp"
+          size="small"
+          type="danger"
+          class="kp-tag"
+        >{{ kp }}</el-tag>
+      </div>
+    </div>
+
     <!-- 非 JSON 降级展示 -->
     <div v-else-if="rawContent" ref="reportSectionRef" class="content-card report-section">
       <div class="content-card__title">AI 分析结果</div>
@@ -783,6 +850,63 @@ function onFilterQuery(): void {
 
 .report-section {
   scroll-margin-top: 16px;
+}
+
+.verify-card {
+  border-left: 3px solid #6366f1;
+
+  .verify-source {
+    margin-left: 8px;
+    font-size: 12px;
+    color: #94a3b8;
+    font-weight: 400;
+  }
+
+  .verify-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 10px 0 6px;
+
+    .verify-conf,
+    .verify-cov,
+    .verify-chap {
+      font-size: 13px;
+      color: #475569;
+    }
+  }
+
+  .verify-notes {
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.6;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #f8fafc;
+    border-radius: 6px;
+  }
+
+  .verify-kp-block {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+
+    .kp-label {
+      font-size: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .kp-aligned { color: #16a34a; }
+    .kp-hallucin { color: #dc2626; }
+
+    .kp-tag {
+      margin: 0;
+    }
+  }
 }
 
 .history-list {

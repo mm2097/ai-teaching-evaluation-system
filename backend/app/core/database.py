@@ -35,6 +35,7 @@ def init_db() -> None:
     _migrate_evaluation_levels()
     _migrate_student_answers()
     _migrate_split_combined_knowledge_points()
+    _migrate_student_answer_verify()
 
 
 def _migrate_evaluation_levels() -> None:
@@ -693,3 +694,16 @@ def get_session() -> Generator[Session, None, None]:
     """FastAPI dependency: yield a database session."""
     with Session(engine) as session:
         yield session
+
+
+def _migrate_student_answer_verify() -> None:
+    """student_answer_record 补建 verify_report 列(大小模型协同验证报告,幂等)。"""
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "student_answer_record" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("student_answer_record")}
+        if "verify_report" not in columns:
+            connection.execute(text(
+                "ALTER TABLE student_answer_record ADD COLUMN verify_report TEXT"
+            ))

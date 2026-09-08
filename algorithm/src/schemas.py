@@ -128,6 +128,7 @@ class JudgeResponse(BaseModel):
     """AI 判题响应体（AI 服务 → 后端）。
 
     对齐 MVP 验收测试集 TC-B2：total_score 为 None 表示需人工判分。
+    verify_report 为大小模型协同的「小模型验证」报告（可选，None=未验证）。
     """
 
     total_score: float | None = Field(..., description="最终得分（None=需人工判分）")
@@ -139,4 +140,8 @@ class JudgeResponse(BaseModel):
     reason: str = Field(default="", description="判分依据（文字解释）")
     flag: Literal["normal", "manual_required"] = Field(
         default="normal", description="normal=正常 / manual_required=需人工"
+    )
+    verify_report: dict | None = Field(
+        default=None,
+        description="小模型考核点验证报告（大小模型协同）；None=未验证/跳过",
     )

@@ -22,6 +22,7 @@ from .generator import generate_exercises
 from .judge import judge_answer
 from .reporter import enhance_report
 from .schemas import ErrorResponse, GenerateRequest, GenerateResponse, JudgeRequest, JudgeResponse
+from .verifier import verify_against_syllabus
 
 
 @asynccontextmanager
@@ -237,3 +238,60 @@ def agent_chat(req: AgentChatRequest) -> dict:
     except Exception as e:  # noqa: BLE001
         logger.exception(f"Agent FC 未预期异常：{e}")
         raise HTTPException(status_code=500, detail=f"AI 服务内部错误：{e}")
+
+
+# ===== 大小模型协同:小模型考核点验证 =====
+
+class VerifyRequest(BaseModel):
+    """考核点验证请求体。
+
+    scene:
+        - diagnosis: 学情诊断,验证诊断报告是否对齐大纲考核点
+        - judge: 主观题判分,验证判分依据是否对齐考核点
+        - report: 报告增强(预留,本期不接入)
+    """
+
+    llm_output: str = Field(..., description="大模型产出的文本(评语/诊断JSON/判分依据)")
+    scene: str = Field(default="diagnosis", description="场景:diagnosis/judge/report")
+    question_stem: str | None = Field(default=None, description="判题场景的题干")
+    weak_points: list[str] | None = Field(
+        default=None, description="诊断场景的班级薄弱知识点(可选,用于覆盖校验)"
+    )
+    course_id: int = Field(default=1, description="课程 ID(本期固定 1=计网)")
+
+
+@app.post(
+    "/verify",
+    tags=["大纲验证"],
+)
+def verify(req: VerifyRequest) -> dict:
+    """小模型考核点验证接口。
+
+    纯规则验证,不调 LLM,无 API Key 也能正常工作。
+    返回:{aligned_kps, hallucinated_kps, coverage, confidence, flag, notes, matched_chapters}
+    """
+    context: dict = {"scene": req.scene}
+    if req.question_stem:
+        context["question_stem"] = req.question_stem
+    if req.weak_points:
+        context["weak_points"] = req.weak_points
+
+    try:
+        report = verify_against_syllabus(
+            llm_output=req.llm_output,
+            context=context,
+            course_id=req.course_id,
+        )
+        return report.to_dict()
+    except Exception as e:  # noqa: BLE001
+        logger.exception(f"验证接口异常: {e}")
+        # 验证失败不抛 5xx,返回 skipped 报告(稳定性优先)
+        return {
+            "aligned_kps": [],
+            "hallucinated_kps": [],
+            "coverage": 0.0,
+            "confidence": 0.0,
+            "flag": "skipped",
+            "notes": f"验证异常: {e}",
+            "matched_chapters": [],
+        }

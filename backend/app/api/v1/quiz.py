@@ -63,6 +63,16 @@ _JUDGE_OPTIONS = [{"key": "A", "text": "对"}, {"key": "B", "text": "错"}]
 _SELF_PRACTICE_PREFIX = "【自主练习】"
 
 
+def _parse_verify_report(raw: str | None) -> dict | None:
+    """解析存库的 verify_report JSON 字符串;失败/空返回 None。"""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
 def _latest_records_by_question(
     records: list[StudentAnswerRecord],
 ) -> dict[int, StudentAnswerRecord]:
@@ -454,6 +464,7 @@ def get_answer_record_detail(
             "manualRequired": manual_required,
             "aiScore": record.ai_score if record else None,
             "aiReason": record.judge_reason if record else "",
+            "verifyReport": _parse_verify_report(record.verify_report if record else None),
         })
 
     return {
@@ -766,6 +777,8 @@ def _call_ai_judge(
     raw_score = data.get("total_score")
     reason = str(data.get("reason") or "")
     manual_required = data.get("flag") == "manual_required" or raw_score is None
+    # 大小模型协同:小模型考核点验证报告(可选,algorithm 侧判分时附加)
+    verify_report = data.get("verify_report")
 
     if not manual_required:
         try:
@@ -794,9 +807,14 @@ def _call_ai_judge(
         is_correct=1 if total_score is not None and total_score >= 6.0 else 0,
         ai_score=float(total_score) if total_score is not None else None,
         judge_reason=reason,
+        verify_report=json.dumps(verify_report, ensure_ascii=False) if verify_report else None,
     )
     session.add(record)
-    return {"score": total_score, "manual_required": manual_required}
+    return {
+        "score": total_score,
+        "manual_required": manual_required,
+        "verify_report": verify_report,
+    }
 
 
 # ===== 创建/发布/关闭任务 =====

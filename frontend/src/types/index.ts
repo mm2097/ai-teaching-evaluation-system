@@ -460,7 +460,26 @@ export type AgentStreamEvent =
   | { type: 'tool_result'; callId: string; name: string; result: unknown; summary: string }
   | { type: 'content_delta'; delta: string }
   | { type: 'content_done'; content: string; sources?: string[] }
+  | { type: 'verify'; report: VerifyReport }
   | { type: 'error'; message: string }
+
+/** 小模型考核点验证报告(大小模型协同) */
+export interface VerifyReport {
+  /** 落在大纲考核范围内的知识点 */
+  aligned_kps: string[]
+  /** 疑似不在大纲考核范围的知识点(幻觉信号) */
+  hallucinated_kps: string[]
+  /** 覆盖度 0-1 */
+  coverage: number
+  /** 置信度 0-1 */
+  confidence: number
+  /** pass / warn / fail / skipped */
+  flag: 'pass' | 'warn' | 'fail' | 'skipped' | string
+  /** 说明 */
+  notes: string
+  /** 命中的章节 code 列表 */
+  matched_chapters: string[]
+}
 
 /** 练习发布记录 */
 export interface QuizAssignment {

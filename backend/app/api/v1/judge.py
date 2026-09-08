@@ -84,6 +84,7 @@ def judge_short_answer(
     reason = data.get("reason", "")
     confidence = data.get("confidence")
     rubric_points = data.get("rubric_points", [])
+    verify_report = data.get("verify_report")  # 大小模型协同验证报告
 
     # 存判分结果到 StudentAnswerRecord
     if total_score is not None:
@@ -122,6 +123,7 @@ def judge_short_answer(
         "reason": reason,
         "flag": flag,
         "rubric_points": rubric_points,
+        "verify_report": verify_report,
     }
 
 

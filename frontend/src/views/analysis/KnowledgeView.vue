@@ -141,7 +141,7 @@ const heatmapOption = computed<EChartsOption>(() => {
         return `${heatmapData.value.students[y!]} · ${kp}<br/>掌握度: ${val}%`
       },
     },
-    grid: { left: isPersonal ? 90 : 80, right: 40, top: 10, bottom: 80 },
+    grid: { left: isPersonal ? 90 : 80, right: 40, top: 10, bottom: 120 },
     xAxis: {
       type: 'category',
       data: heatmapData.value.knowledgePoints,

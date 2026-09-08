@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 from loguru import logger
 
+from app.core.config import settings
+
 
 @dataclass
 class FCResult:
@@ -39,9 +41,11 @@ class LLMProxy(ABC):
 class HTTPProxyLLMProxy(LLMProxy):
     """走 HTTP 调 algorithm 8001。"""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8001", timeout: float = 30.0) -> None:
+    def __init__(self, base_url: str = "http://127.0.0.1:8001", timeout: float | None = None) -> None:
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
+        # 默认取配置 AI_PROXY_TIMEOUT：单步 LLM 调用（含工具/思考）常需 1~2 分钟，
+        # 必须大于算法侧 LLM_TIMEOUT，否则会在算法服务仍在生成时被这里提前掐断
+        self.timeout = timeout if timeout is not None else settings.AI_PROXY_TIMEOUT
 
     def chat_with_tools(
         self,

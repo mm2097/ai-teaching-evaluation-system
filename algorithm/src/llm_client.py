@@ -45,6 +45,9 @@ class LLMClient:
             api_key=s.llm_api_key or "missing",
             base_url=s.llm_base_url,
             timeout=s.llm_timeout,
+            # SDK 默认 max_retries=2 会在超时后静默重发同一请求（同样等满 timeout 秒再超时），
+            # 把单次超时放大成 3 倍耗时，且绕过 _call 的重试计数与日志；这里关掉，重试统一由 _call 控制
+            max_retries=0,
         )
         self._model = s.llm_model
         self._temperature = s.llm_temperature
@@ -127,6 +130,11 @@ class LLMClient:
                 msg = resp.choices[0].message
                 finish = resp.choices[0].finish_reason or "stop"
                 content = msg.content or ""
+                if finish not in ("stop", "tool_calls"):
+                    # 常见于 max_tokens 被思考/长输出耗尽，内容或工具参数被截断
+                    logger.warning(
+                        f"LLM finish_reason={finish}，输出可能被截断（max_tokens={self._max_tokens}）"
+                    )
                 usage = resp.usage
 
                 tool_calls: list[dict] = []

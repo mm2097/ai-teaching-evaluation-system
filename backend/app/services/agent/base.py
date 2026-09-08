@@ -172,11 +172,22 @@ def run_agent(
             step_start = time.perf_counter()
             step = AgentStep(step=step_idx)
 
+            # 最后一步强制收尾：不再提供工具，要求直接输出最终答案。
+            # 否则模型步步都在调工具时会耗尽步数，永远轮不到"写最终报告"的那一轮
+            if step_idx == max_steps:
+                step_tools: list[dict] = []
+                messages.append({
+                    "role": "user",
+                    "content": "已到达最后一步：不要再调用任何工具。请基于以上已收集的数据直接输出最终回答；数据不完整的部分请在回答中说明。",
+                })
+            else:
+                step_tools = tool_schemas
+
             # 调 LLM
             try:
                 fc: FCResult = proxy.chat_with_tools(
                     messages=messages,
-                    tools=tool_schemas,
+                    tools=step_tools,
                     tool_choice="auto",
                 )
             except Exception as e:  # noqa: BLE001
@@ -363,8 +374,19 @@ def run_agent_stream(
         for step_idx in range(1, max_steps + 1):
             yield {"type": "step_start", "step": step_idx}
 
+            # 最后一步强制收尾：不再提供工具，要求直接输出最终答案（与同步版一致），
+            # 否则诊断类 Agent 步步都在调工具时会耗尽步数，前端收不到任何最终报告
+            if step_idx == max_steps:
+                messages.append({
+                    "role": "user",
+                    "content": "已到达最后一步：不要再调用任何工具。请基于以上已收集的数据直接输出最终回答；数据不完整的部分请在回答中说明。",
+                })
+                step_tools: list[dict] = []
+            else:
+                step_tools = tool_schemas
+
             try:
-                fc = proxy.chat_with_tools(messages, tool_schemas, "auto")
+                fc = proxy.chat_with_tools(messages, step_tools, "auto")
             except Exception as e:  # noqa: BLE001
                 yield {"type": "error", "message": f"LLM 服务暂不可用：{e}"}
                 return
@@ -428,6 +450,12 @@ def run_agent_stream(
 
     if final_answer:
         conv.add_assistant(content=final_answer)
+
+    # 步数耗尽且没有任何最终回答：补一条兜底文案再结束，与同步版行为一致，
+    # 避免前端既收不到 content 也收不到 error 时只能显示笼统的"诊断未完成"
+    if truncated and not final_answer:
+        final_answer = "已达到最大推理步数，基于现有数据给出上述分析。如需更深入的分析，请追问具体问题。"
+        yield {"type": "content", "step": max_steps, "content": final_answer}
 
     yield {
         "type": "done",

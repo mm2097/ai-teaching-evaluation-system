@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     AI_STUDENT_MAX_QUESTIONS: int = Field(default=10, ge=1, le=30)
     AI_STAFF_DAILY_REQUEST_LIMIT: int = Field(default=30, ge=1, le=1000)
     AI_SERVICE_PORT: int = Field(default=8001, ge=1, le=65535)
+    # 调 algorithm /agent/chat 单步 FC 的 HTTP 超时（秒）：必须大于算法侧 LLM_TIMEOUT，
+    # 否则算法服务还在生成时这里会先掐断连接（曾写死 30s 导致 Agent 频繁超时）
+    AI_PROXY_TIMEOUT: float = Field(default=150.0, ge=1)
 
     @model_validator(mode="after")
     def validate_secret_key(self) -> "Settings":

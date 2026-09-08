@@ -247,7 +247,8 @@ export function buildDiagnosisMessage(p: StreamDiagnosisParams): string {
 
 /**
  * 流式 AI 学情诊断（SSE）。
- * 封装 streamAgentChat，固定 agentType='diagnosis' + 预设首条消息 + maxSteps=8。
+ * 封装 streamAgentChat，固定 agentType='diagnosis' + 预设首条消息 + maxSteps=10。
+ * detail 模式提示词要求 6-8 个工具，另需给模型留出最终写报告的一步，故取上限 10。
  * 透传 SSE 事件（thinking/tool_call/tool_result/content_done/error）。
  */
 export async function* streamDiagnosis(
@@ -259,7 +260,7 @@ export async function* streamDiagnosis(
     message,
     courseId: params.courseId,
     sessionId: params.sessionId ?? `diagnosis_c${params.courseId}`,
-    maxSteps: 8,
+    maxSteps: 10,
   })
   for await (const evt of stream) {
     yield evt

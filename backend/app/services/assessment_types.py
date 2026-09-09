@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 
 ASSESSMENT_TYPE_LABELS = {
@@ -23,6 +24,15 @@ ACADEMIC_ASSESSMENT_TYPES = (
     "other",
 )
 
+ASSESSMENT_STAGE_ORDER = {
+    "discussion": 10,
+    "attendance": 20,
+    "homework": 30,
+    "other": 40,
+    "midterm": 50,
+    "final": 100,
+}
+
 
 def classify_assessment_type(data_type: str, batch_name: str | None = None) -> str:
     """按评价引擎现有关键字口径识别教学数据所属考核类型。"""
@@ -43,19 +53,22 @@ def classify_assessment_type(data_type: str, batch_name: str | None = None) -> s
     return "other"
 
 
+def assessment_sort_key(
+    batch_name: str | None,
+    event_time: datetime | None = None,
+    batch_id: int | None = None,
+) -> tuple[int, datetime, int]:
+    """按课程考核阶段排序，同阶段再按实际考核时间排列。"""
+    assessment_type = classify_assessment_type("score", batch_name)
+    return (
+        ASSESSMENT_STAGE_ORDER.get(assessment_type, ASSESSMENT_STAGE_ORDER["other"]),
+        event_time or datetime.min,
+        batch_id or 0,
+    )
+
+
 def display_assessment_batch_name(assessment_type: str, batch_name: str | None) -> str:
     """生成面向学生的考核批次名，隐藏数据库、Excel 等导入方式。"""
-    canonical = {
-        "discussion": "课堂讨论",
-        "midterm": "期中考试",
-        "final": "期末考试",
-        "attendance": "课程考勤",
-        "homework": "平时作业",
-        "participation": "课堂参与",
-    }
-    if assessment_type in canonical:
-        return canonical[assessment_type]
-
     name = (batch_name or "").strip()
     name = re.sub(
         r"^(?:SQLite)?(?:多类型数据库|数据库多类型|数据库导入|数据库)[-_—\s]*",
@@ -63,14 +76,17 @@ def display_assessment_batch_name(assessment_type: str, batch_name: str | None) 
         name,
         flags=re.IGNORECASE,
     ).strip()
-    if "平时" in name:
-        return "平时成绩"
-    if "实验" in name:
-        return "实验成绩"
-    if "项目" in name or "课程设计" in name:
-        return "课程项目成绩"
-    if "测验" in name:
-        return "课程测验"
+    canonical = {
+        "discussion": "课堂讨论",
+        "midterm": "期中考试",
+        "final": "期末考试",
+        "attendance": "课程考勤",
+        "participation": "课堂参与",
+    }
+    if assessment_type in canonical:
+        return canonical[assessment_type]
+    if assessment_type == "homework":
+        return name or "平时作业"
     return name or "其他考核"
 
 
@@ -79,6 +95,14 @@ def display_assessment_type_name(assessment_type: str, batch_name: str | None) -
     if assessment_type != "other":
         return ASSESSMENT_TYPE_LABELS[assessment_type]
     batch_display = display_assessment_batch_name(assessment_type, batch_name)
+    if "平时" in batch_display:
+        return "平时成绩"
+    if "实验" in batch_display:
+        return "实验成绩"
+    if "项目" in batch_display or "课程设计" in batch_display:
+        return "课程项目成绩"
+    if "测验" in batch_display:
+        return "课程测验成绩"
     if batch_display.endswith("成绩"):
         return batch_display
     return ASSESSMENT_TYPE_LABELS[assessment_type]

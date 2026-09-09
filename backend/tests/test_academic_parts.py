@@ -148,6 +148,12 @@ def test_database_import_names_do_not_leak_into_assessment_display():
     assert display_assessment_type_name(regular_type, "数据库多类型平时成绩") == "平时成绩"
 
 
+def test_batch_display_keeps_specific_assessment_names():
+    assert display_assessment_batch_name("homework", "作业1") == "作业1"
+    assert display_assessment_batch_name("other", "实验报告") == "实验报告"
+    assert display_assessment_type_name("other", "实验报告") == "实验成绩"
+
+
 def test_compute_academic_score_weighted(engine):
     """学业水平 = Σ(组成分 × 配比)，配比合计 100%。"""
     with Session(engine) as s:

@@ -215,7 +215,7 @@ const router = createRouter({
 
 /** 路由前置守卫：登录校验与权限控制 */
 router.beforeEach((to) => {
-  document.title = `${to.meta.title || '首页'} - 计算机学院学情分析系统`
+  document.title = `${to.meta.title || '首页'} - 计算机学院数智化教学分析系统`
 
   if (to.meta.public) {
     return true

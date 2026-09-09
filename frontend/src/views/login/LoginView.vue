@@ -84,7 +84,7 @@ async function handleLogin(): Promise<void> {
         <div class="banner-icon">
           <el-icon :size="48"><DataAnalysis /></el-icon>
         </div>
-        <h1>计算机学院学情分析系统</h1>
+        <h1>计算机学院数智化教学分析系统</h1>
         <p>数据驱动 · 智能分析 · 学情评价 · 精准教学</p>
         <ul class="feature-list">
           <li>标准模板下载与格式校验上传</li>

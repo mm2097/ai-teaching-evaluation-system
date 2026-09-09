@@ -346,15 +346,27 @@ def scan_course_warnings(
     return out
 
 
-def persist_warnings(session: Session, results: list[WarningResult], course_id: int) -> int:
-    """把扫描结果落库（去重：同一学生同一规则只保留最新一条）。返回写入条数。"""
-    # 先清掉本课程未处理的旧预警（避免重复堆积）
-    old = session.exec(
-        select(StudyWarning).where(
-            StudyWarning.course_id == course_id,
-            StudyWarning.handle_status == 0,
-        )
-    ).all()
+def persist_warnings(
+    session: Session,
+    results: list[WarningResult],
+    course_id: int,
+    class_id: int | None = None,
+) -> int:
+    """保存课程或指定班级的预警，不影响同课程其他班级的数据。"""
+    stmt = select(StudyWarning).where(
+        StudyWarning.course_id == course_id,
+        StudyWarning.handle_status == 0,
+    )
+    if class_id:
+        class_student_ids = session.exec(
+            select(Student.student_id).where(Student.class_id == class_id)
+        ).all()
+        if class_student_ids:
+            stmt = stmt.where(StudyWarning.student_id.in_(class_student_ids))  # type: ignore[arg-type]
+        else:
+            return 0
+
+    old = session.exec(stmt).all()
     for o in old:
         session.delete(o)
 

@@ -110,6 +110,29 @@ def test_report_history_persists_and_downloads(report_session):
         app.dependency_overrides.clear()
 
 
+def test_student_report_can_be_generated_on_first_request(report_session):
+    session = report_session
+    try:
+        response = _client(session, 1).post(
+            "/api/v1/report/history",
+            json={
+                "course_id": 1,
+                "report_type": 2,
+                "class_id": 1,
+                "student_id": 1,
+                "semester": "2024-2025-1",
+                "export_format": "pdf",
+                "use_llm": False,
+                "dashboard_stats": {},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["report_type"] == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_report_history_is_private_to_creator(report_session):
     session = report_session
     try:

@@ -161,6 +161,33 @@ class TestWarning:
         rules = [h.rule for h in result.hits]
         assert "W1" not in rules
 
+    def test_class_refresh_preserves_other_class_warnings(self, session):
+        """刷新指定班级时，不应清理同课程其他班级的未处理预警。"""
+        from app.models import ClassInfo, CourseStudent, Student, StudyWarning, SysUser
+        from app.services.warning import persist_warnings
+
+        session.add(ClassInfo(class_id=99, class_name="测试班", college="计算机学院"))
+        session.add(SysUser(
+            user_id=99, username="warning-student-99", password="x",
+            real_name="测试学生", role_id=3, status=1,
+        ))
+        session.add(Student(
+            student_id=99, student_no="WARNING99", real_name="测试学生",
+            class_id=99, user_id=99,
+        ))
+        session.add(CourseStudent(course_id=1, student_id=99))
+        other_class_warning = StudyWarning(
+            warning_id=99, course_id=1, student_id=99,
+            warning_type="W1:测试预警", warning_level=1,
+            warning_reason="测试预警", handle_status=0,
+        )
+        session.add(other_class_warning)
+        session.commit()
+
+        persist_warnings(session, [], course_id=1, class_id=1)
+
+        assert session.get(StudyWarning, 99) is not None
+
 
 # ===== D09 标签 =====
 

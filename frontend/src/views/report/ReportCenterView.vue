@@ -62,10 +62,11 @@ const students = ref<Student[]>([])
 onMounted(async () => {
   await loadHistoryReports()
   try {
+    // 学生固定属于本人班级，不加载班级列表
     const [semRes, courseRes, classRes] = await Promise.all([
       fetchSemesters(),
       fetchCourses({ deptId: 1 }),
-      fetchClasses({ deptId: 1 }),
+      isStudent.value ? Promise.resolve([]) : fetchClasses({ deptId: 1 }),
     ])
     semesterOptions.value = semRes.map((s) => ({ label: s.semesterName, value: s.semesterCode }))
     courses.value = courseRes
@@ -437,7 +438,7 @@ watch(
 watch(
   [() => genParams.value.reportType, () => genParams.value.classId],
   async ([type, classId]) => {
-    if ((type === 2 || type === 4) && classId) {
+    if (!isStudent.value && (type === 2 || type === 4) && classId) {
       try {
         students.value = await fetchStudents({ classId: classId as number })
       } catch { students.value = [] }
@@ -587,7 +588,8 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
                 <el-option v-for="c in csCourses" :key="c.id" :label="c.courseName" :value="c.id" />
               </el-select>
             </el-form-item>
-            <el-form-item label="班级">
+            <!-- 学生固定属于本人班级，无需筛选 -->
+            <el-form-item v-if="!isStudent" label="班级">
               <el-select v-model="genParams.classId" style="width: 100%">
                 <el-option v-for="c in csClasses" :key="c.id" :label="c.className" :value="c.id" />
               </el-select>

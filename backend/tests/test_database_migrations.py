@@ -42,6 +42,10 @@ def test_migrate_legacy_tables_adds_missing_columns(monkeypatch):
     assert "semester" in {
         column["name"] for column in inspector.get_columns("exam_batch")
     }
+    # 旧库缺 exam_time 曾导致评价实时重算 500（no such column: exam_batch.exam_time）
+    assert "exam_time" in {
+        column["name"] for column in inspector.get_columns("exam_batch")
+    }
     assert "source_data" in {
         column["name"] for column in inspector.get_columns("score_record")
     }

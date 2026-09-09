@@ -54,11 +54,15 @@ def _check_eval_self_or_course(
     current_user: SysUser,
     course_id: int | None,
     student_id: int | None,
-) -> None:
+) -> int | None:
     """评价查看权限（Eval.Student.UserValid）。
 
-    - teacher：course_id 有值时校验是否为授课教师
-    - student：student_id 有值时校验是否为本人；否则拒绝
+    返回学生角色按登录账号解析出的 student_id（其他角色返回 None），调用方
+    应将其作为生效的 student_id 过滤条件：
+
+    - teacher：course_id 有值时校验是否为授课教师；仅传 student_id 时要求该
+      学生至少选修了自己的一门课程，防止跨教师越权查询
+    - student：student_id 有值时必须为本人；缺省时按登录账号自动解析
     - admin：不参与教学评价
     """
     role = session.get(SysRole, current_user.role_id)
@@ -67,18 +71,36 @@ def _check_eval_self_or_course(
     if role_code == "teacher":
         if course_id is not None:
             _check_course_access(session, current_user, course_id)
-        return
+        elif student_id is not None:
+            teacher = session.exec(
+                select(Teacher).where(Teacher.user_id == current_user.user_id)
+            ).first()
+            if not teacher:
+                raise HTTPException(status_code=403, detail="当前账号未关联教师信息")
+            shared = session.exec(
+                select(CourseStudent.course_id)
+                .join(Course, Course.course_id == CourseStudent.course_id)
+                .where(
+                    CourseStudent.student_id == student_id,
+                    Course.teacher_id == teacher.teacher_id,
+                )
+            ).first()
+            if not shared:
+                raise HTTPException(
+                    status_code=403,
+                    detail="仅可查看自己授课班级学生的评价结果",
+                )
+        return None
 
     if role_code == "student":
-        if student_id is not None:
-            student = session.exec(
-                select(Student).where(Student.user_id == current_user.user_id)
-            ).first()
-            if not student or student.student_id != student_id:
-                raise HTTPException(status_code=403, detail="学生仅可查看自己的评价结果")
-            return
-        # 学生未指定 student_id：在 /results 兜底路径自动补充
-        return
+        student = session.exec(
+            select(Student).where(Student.user_id == current_user.user_id)
+        ).first()
+        if not student or student.student_id is None:
+            raise HTTPException(status_code=403, detail="当前账号未关联学生信息")
+        if student_id is not None and student.student_id != student_id:
+            raise HTTPException(status_code=403, detail="学生仅可查看自己的评价结果")
+        return student.student_id
 
     raise HTTPException(status_code=403, detail="无权查看评价数据")
 
@@ -271,17 +293,29 @@ def list_evaluations(
 ) -> list[dict]:
     """列出学生评价结果（Eval.Student）。
 
+    必须指定 course_id 或 student_id，否则 422：无参路径会对全库评价逐行
+    实时重算（每行跑一次画像+评价引擎），等同于自我 DoS。
+
     权限（Eval.Student.UserValid）：
     - 任课教师：自己授课课程的学生
     - 学生：仅可查自己的评价
     """
-    _check_eval_self_or_course(session, current_user, course_id, student_id)
-
     # Unwrap Query params（直接 Python 调用兼容）
     _student_id = student_id if not isinstance(student_id, QueryParam) else None
     _eval_level = eval_level if not isinstance(eval_level, QueryParam) else None
 
     _course_id = course_id if not isinstance(course_id, QueryParam) else None
+
+    resolved_student_id = _check_eval_self_or_course(session, current_user, _course_id, _student_id)
+    if resolved_student_id is not None:
+        _student_id = resolved_student_id
+
+    if not _course_id and not _student_id:
+        raise HTTPException(
+            status_code=422,
+            detail="必须指定 course_id 或 student_id，不允许全量查询评价结果",
+        )
+
     if _course_id:
         course = session.get(Course, _course_id)
         if not course:
@@ -350,22 +384,8 @@ def list_evaluations(
             data.append(item)
         return data
 
-    stmt = select(StudentEvaluationResult)
-    results = session.exec(stmt).all()
-
-    data = []
-    for r in results:
-        if _eval_level and r.eval_level != _eval_level:
-            continue
-
-        student = session.get(Student, r.student_id)
-        course = session.get(Course, r.course_id)
-        if not student or not course:
-            continue
-
-        data.append(_evaluation_item_from_algorithm(session, student, course))
-
-    return data
+    # 不可达：course_id / student_id 至少其一有值（入口处已校验）。
+    return []
 
 
 # ============================================================================
@@ -386,11 +406,19 @@ def list_evaluation_results(
 
     权限（Eval.Student.UserValid）：登录用户，学生仅可查自己。
     """
-    _check_eval_self_or_course(session, current_user, course_id, student_id)
-
     # Unwrap Query params
     _student_id = student_id if not isinstance(student_id, QueryParam) else None
     _course_id = course_id if not isinstance(course_id, QueryParam) else None
+
+    resolved_student_id = _check_eval_self_or_course(session, current_user, _course_id, _student_id)
+    if resolved_student_id is not None:
+        _student_id = resolved_student_id
+
+    if not _course_id and not _student_id:
+        raise HTTPException(
+            status_code=422,
+            detail="必须指定 course_id 或 student_id，不允许全量查询评价结果",
+        )
 
     # 个人页必须根据当前成绩/考勤/课堂参与实时计算。持久化评价仅用于
     # 教师班级批量统计，不能在源数据增删改后继续作为学生个人结果返回。

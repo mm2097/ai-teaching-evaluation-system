@@ -640,6 +640,9 @@ def _migrate_legacy_tables() -> None:
         },
         "exam_batch": {
             "semester": "ALTER TABLE exam_batch ADD COLUMN semester VARCHAR(32) NOT NULL DEFAULT ''",
+            # SQLite 的 ADD COLUMN 不允许非常量默认值，默认串仅存在于
+            # 补列瞬间，随后立即被下方回填覆盖为 create_time
+            "exam_time": "ALTER TABLE exam_batch ADD COLUMN exam_time DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'",
         },
         "score_record": {
             "source_data": "ALTER TABLE score_record ADD COLUMN source_data TEXT",
@@ -652,15 +655,31 @@ def _migrate_legacy_tables() -> None:
     with engine.begin() as connection:
         inspector = inspect(connection)
         table_names = set(inspector.get_table_names())
+        added_columns: set[tuple[str, str]] = set()
+        exam_batch_had_create_time = False
         for table_name, columns in migrations.items():
             if table_name not in table_names:
                 continue
             existing_columns = {
                 column["name"] for column in inspector.get_columns(table_name)
             }
+            if table_name == "exam_batch":
+                exam_batch_had_create_time = "create_time" in existing_columns
             for column_name, statement in columns.items():
                 if column_name not in existing_columns:
                     connection.execute(text(statement))
+                    added_columns.add((table_name, column_name))
+        if ("exam_batch", "exam_time") in added_columns:
+            # 补列时存量批次回填考核时间以保持考核时间序（仅补列当次执行）：
+            # 优先用批次创建时间；极早期 schema 无 create_time 列时退化为迁移时刻
+            backfill = (
+                "COALESCE(create_time, CURRENT_TIMESTAMP)"
+                if exam_batch_had_create_time
+                else "CURRENT_TIMESTAMP"
+            )
+            connection.execute(text(
+                f"UPDATE exam_batch SET exam_time = {backfill}"
+            ))
         if "class_info" in table_names:
             _backfill_class_dimensions(connection)
 

@@ -110,6 +110,29 @@ def test_report_history_persists_and_downloads(report_session):
         app.dependency_overrides.clear()
 
 
+def test_student_report_can_be_generated_on_first_request(report_session):
+    session = report_session
+    try:
+        response = _client(session, 1).post(
+            "/api/v1/report/history",
+            json={
+                "course_id": 1,
+                "report_type": 2,
+                "class_id": 1,
+                "student_id": 1,
+                "semester": "2024-2025-1",
+                "export_format": "pdf",
+                "use_llm": False,
+                "dashboard_stats": {},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["report_type"] == 2
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_report_history_is_private_to_creator(report_session):
     session = report_session
     try:
@@ -148,3 +171,31 @@ def test_snapshot_workbook_uses_saved_content():
     pdf_content = _snapshot_pdf(history)
     assert pdf_content.startswith(b"%PDF")
     assert len(pdf_content) > 2000
+
+
+def test_snapshot_pdf_embeds_chart_images():
+    history = ReportHistory(
+        creator_user_id=1,
+        course_id=1,
+        report_type=1,
+        scope="class",
+        class_id=1,
+        export_format="pdf",
+        report_name="图表报告",
+        course_name="数据结构",
+        parameter_snapshot="{}",
+        report_snapshot=(
+            '{"summary":"摘要","conclusion":"结论","suggestion":"建议",'
+            '"charts":{"focus":"class","rates":{"passRate":80,'
+            '"excellentRate":60,"attendanceRate":90},'
+            '"scoreBuckets":[{"label":"良好","count":3}],'
+            '"scoreHistory":[{"name":"期中考试","score":80},'
+            '{"name":"期末考试","score":90}]}}'
+        ),
+        stats_snapshot="{}",
+    )
+
+    pdf_content = _snapshot_pdf(history)
+
+    assert pdf_content.startswith(b"%PDF")
+    assert b"/Subtype /Image" in pdf_content

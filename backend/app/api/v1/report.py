@@ -48,6 +48,7 @@ from app.services.report_template import (
     build_student_context,
     render_report,
 )
+# PDF charts are rendered from the same persisted snapshot used by preview/download.
 from app.services.pdf_charts import (
     render_index_bar,
     render_knowledge_bar,

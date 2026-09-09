@@ -26,14 +26,14 @@ const selectedCourseName = computed(() =>
 )
 
 const trendOption = computed<EChartsOption>(() => {
-  const data = [...filteredRecords.value].reverse()
+  const data = filteredRecords.value
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['我的成绩'], top: 0, textStyle: { color: '#64748b' } },
     grid: { left: 50, right: 20, top: 40, bottom: 30 },
     xAxis: {
       type: 'category',
-      data: data.map((r) => r.type),
+      data: data.map((r) => r.batchName || r.type),
       axisLabel: { color: '#64748b', fontSize: 11 },
     },
     yAxis: { type: 'value', max: 100, name: '分数', axisLabel: { color: '#64748b' } },

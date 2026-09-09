@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.models.question import TASK_TYPE_SELF_PRACTICE
 from app.services.assessment_types import (
+    assessment_sort_key,
     classify_assessment_type,
     display_assessment_batch_name,
     display_assessment_type_name,
@@ -610,7 +611,11 @@ def get_grade_trend(
     if course_id:
         stmt = stmt.where(ExamBatch.course_id == course_id)
     batches = session.exec(stmt).all()
-    batches.sort(key=lambda batch: batch.create_time)
+    batches.sort(key=lambda batch: (
+        batch.course_id,
+        batch.semester,
+        assessment_sort_key(batch.batch_name, batch.exam_time, batch.batch_id),
+    ))
 
     class_stu_ids = _class_student_ids(session, class_id) if class_id and not student_id else set()
     months: list[str] = []
@@ -656,7 +661,8 @@ def get_grade_trend(
         if not scores:
             continue
 
-        months.append(batch.batch_name)
+        assessment_type = classify_assessment_type("score", batch.batch_name)
+        months.append(display_assessment_batch_name(assessment_type, batch.batch_name))
         avg_scores.append(round(sum(scores) / len(scores)))
         pass_rates.append(round(sum(1 for score in scores if score >= 60) / len(scores) * 100))
         excellent_rates.append(round(sum(1 for score in scores if score >= 90) / len(scores) * 100))
@@ -711,7 +717,11 @@ def get_student_score_archive(
     batches = session.exec(
         select(ExamBatch).where(ExamBatch.course_id.in_(course_ids))  # type: ignore[arg-type]
     ).all()
-    batches.sort(key=lambda b: (b.course_id, b.create_time))
+    batches.sort(key=lambda batch: (
+        batch.course_id,
+        batch.semester,
+        assessment_sort_key(batch.batch_name, batch.exam_time, batch.batch_id),
+    ))
     batch_ids = [b.batch_id for b in batches if b.batch_id is not None]
 
     # 同班同学（用于计算班级均分与排名）
@@ -788,7 +798,7 @@ def get_student_score_archive(
             "total": batch.full_score,
             "classAvg": class_avg,
             "rank": rank,
-            "date": batch.create_time.strftime("%Y-%m-%d") if batch.create_time else "",
+            "date": batch.exam_time.strftime("%Y-%m-%d") if batch.exam_time else "",
         })
 
     return {"records": records}

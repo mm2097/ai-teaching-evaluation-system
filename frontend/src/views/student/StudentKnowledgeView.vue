@@ -57,7 +57,7 @@ const heatmapOption = computed<EChartsOption>(() => ({
       return `${heatmapData.value.knowledgePoints[p.value[0]!]}<br/>掌握度: ${p.value[2]!}%`
     },
   },
-  grid: { left: 20, right: 40, top: 10, bottom: 60 },
+  grid: { left: 20, right: 40, top: 10, bottom: 100 },
   xAxis: {
     type: 'category',
     data: heatmapData.value.knowledgePoints,

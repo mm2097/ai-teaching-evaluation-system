@@ -9,6 +9,7 @@ from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.evaluations import list_evaluations
 from app.core.database import get_session
 from app.models import Course, CourseStudent, SysUser
+from app.services.assessment_types import assessment_sort_key
 
 
 def _build_client(test_session: Session) -> TestClient:
@@ -102,6 +103,36 @@ def test_student_score_archive_uses_standard_assessment_names(session: Session):
     assert all(record["courseId"] for record in records)
     assert all(record["type"].endswith("成绩") for record in records)
     assert all(record["batchName"] for record in records)
+
+
+def test_assessment_sequence_places_process_scores_before_exams():
+    names = ["期末考试", "期中考试", "章节测验", "平时作业"]
+
+    ordered = sorted(names, key=assessment_sort_key)
+
+    assert ordered == ["平时作业", "章节测验", "期中考试", "期末考试"]
+
+
+def test_student_grade_trend_and_archive_use_the_same_sequence(session: Session):
+    student_user = session.get(SysUser, 2)
+    assert student_user is not None
+    client = _build_client(session)
+    headers = _auth_header(student_user)
+
+    trend_response = client.get(
+        "/api/v1/dashboard/grade-trend",
+        params={"course_id": 1, "student_id": 1},
+        headers=headers,
+    )
+    archive_response = client.get(
+        "/api/v1/dashboard/student-score-archive",
+        headers=headers,
+    )
+
+    assert trend_response.status_code == 200
+    assert archive_response.status_code == 200
+    assert trend_response.json()["months"] == ["作业1", "作业2", "期中考试"]
+    assert [record["id"] for record in archive_response.json()["records"]] == [1, 2, 3]
 
 
 def test_student_my_courses_uses_all_active_enrollments(session: Session):

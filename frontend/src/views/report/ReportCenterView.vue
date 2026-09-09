@@ -115,6 +115,7 @@ const genParams = ref<{
 const generating = ref(false)
 const previewVisible = ref(false)
 const chartsReady = ref(false)
+const pdfPreviewUrl = ref('')
 const reportData = ref<ReportResponse | null>(null)
 const dashboardStats = ref<DashboardStats>({})
 
@@ -495,12 +496,37 @@ async function generateReport(): Promise<void> {
   }
 }
 
-function previewReport(): void {
+async function openPdfPreview(reportId: number): Promise<void> {
+  const blob = await downloadReportFile(reportId, 'pdf')
+  if (pdfPreviewUrl.value) {
+    URL.revokeObjectURL(pdfPreviewUrl.value)
+  }
+  pdfPreviewUrl.value = URL.createObjectURL(blob)
+  previewVisible.value = true
+}
+
+function closePdfPreview(): void {
+  chartsReady.value = false
+  if (pdfPreviewUrl.value) {
+    URL.revokeObjectURL(pdfPreviewUrl.value)
+    pdfPreviewUrl.value = ''
+  }
+}
+
+async function previewReport(): Promise<void> {
   if (!reportData.value) {
     ElMessage.info('请先生成报告')
     return
   }
-  previewVisible.value = true
+  if (!activeHistory.value) {
+    ElMessage.info('报告快照尚未保存，请重新生成报告')
+    return
+  }
+  try {
+    await openPdfPreview(activeHistory.value.id)
+  } catch {
+    ElMessage.error('PDF 预览生成失败，请确认报告图表依赖已安装')
+  }
 }
 
 async function exportReport(): Promise<void> {
@@ -534,9 +560,9 @@ async function previewHistoryReport(row: ReportHistoryItem): Promise<void> {
     activeHistory.value = history
     reportData.value = history.data
     dashboardStats.value = history.stats
-    previewVisible.value = true
+    await openPdfPreview(history.id)
   } catch {
-    ElMessage.error('历史报告读取失败')
+    ElMessage.error('历史报告预览失败')
   }
 }
 
@@ -708,9 +734,17 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
       width="920px"
       top="4vh"
       @opened="chartsReady = true"
-      @closed="chartsReady = false"
+      @closed="closePdfPreview"
     >
-      <div v-if="reportData" class="report-preview">
+      <div v-if="pdfPreviewUrl" class="pdf-preview">
+        <iframe
+          :src="pdfPreviewUrl"
+          title="报告 PDF 预览"
+          class="pdf-preview__frame"
+        />
+      </div>
+
+      <div v-else-if="reportData" class="report-preview">
         <h2 style="text-align: center; margin-bottom: 20px">{{ previewTitle }}</h2>
 
         <template v-if="!isStudent && chartFocus !== 'knowledge'">
@@ -906,6 +940,23 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
   }
 }
 
+.pdf-preview {
+  height: 72vh;
+  min-height: 560px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.pdf-preview__frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
 .findings-list {
   margin: 8px 0 12px;
   padding-left: 22px;
@@ -951,7 +1002,5 @@ async function downloadHistoryReport(row: ReportHistoryItem): Promise<void> {
   }
 }
 </style>
-
-
 
 

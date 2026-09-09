@@ -18,6 +18,8 @@ from typing import Any
 import httpx
 from sqlmodel import select
 
+from app.core.ai_client import ai_base_url
+from app.core.config import settings
 from app.models import AiQuestion, KnowledgePoint
 from app.services.agent.registry import Tool, ToolContext, ToolRegistry
 
@@ -69,7 +71,7 @@ def _t_generate_exercises_wrapper(
 
     try:
         resp = httpx.post(
-            "http://127.0.0.1:8001/generate_exercises",
+            f"{ai_base_url()}/generate_exercises",
             json={
                 "course_name": course_name,
                 "course_id": cid,
@@ -78,7 +80,7 @@ def _t_generate_exercises_wrapper(
                 "difficulty": difficulty,
                 "question_types": [],
             },
-            timeout=60.0,
+            timeout=settings.AI_EXAM_TOOL_TIMEOUT,
         )
         resp.raise_for_status()
         data = resp.json()

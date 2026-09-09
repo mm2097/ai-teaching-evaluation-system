@@ -34,11 +34,17 @@ def judge_answer(req: JudgeRequest) -> JudgeResponse:
     )
 
     # ---------- 调 LLM ----------
+    # 判分是短输出（小 JSON）+ 用户在线等待场景：低温度稳定判分、限制输出
+    # token、不重试（失败走 manual_required 兜底），保证最坏耗时 ≈ 单次超时
+    # （LLM_TIMEOUT），不超过后端网关 AI_JUDGE_TIMEOUT。
     client = get_llm_client()
     llm_result = client.chat_completion(
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
         json_mode=True,
+        max_attempts=1,
+        temperature=0.2,
+        max_tokens=1000,
     )
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)

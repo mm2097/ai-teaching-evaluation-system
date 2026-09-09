@@ -59,13 +59,31 @@ class LLMClient:
         system_prompt: str,
         user_prompt: str,
         json_mode: bool = True,
+        max_attempts: int | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
     ) -> LLMResult:
-        """调用 LLM 完成一次对话（无工具调用版，出题等场景使用）。"""
+        """调用 LLM 完成一次对话（无工具调用版，出题等场景使用）。
+
+        参数：
+            max_attempts: 本次调用总尝试次数（None = 配置默认 LLM_MAX_RETRY+1）。
+                在线等待型端点（判分/报告）应传 1，保证最坏耗时 ≈ 单次超时，
+                不超过后端网关的 HTTP 超时（见 backend AI_JUDGE_TIMEOUT 等）。
+            temperature / max_tokens / timeout: 覆盖全局配置的本次调用参数。
+        """
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        return self._call(messages, json_mode=json_mode)
+        return self._call(
+            messages,
+            json_mode=json_mode,
+            max_attempts=max_attempts,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
 
     def chat_with_tools(
         self,
@@ -73,6 +91,8 @@ class LLMClient:
         tools: list[dict],
         json_mode: bool = False,
         tool_choice: str = "auto",
+        max_attempts: int | None = None,
+        timeout: float | None = None,
     ) -> LLMResult:
         """Function Calling 主入口（Agent 用）。
 
@@ -82,6 +102,7 @@ class LLMClient:
                     [{type:"function", function:{name, description, parameters}}]
             json_mode: 是否同时强制 JSON 输出（默认 False，Agent 场景通常不强制）
             tool_choice: "auto" / "none" / {"type":"function","function":{"name":...}}
+            max_attempts: 本次调用总尝试次数（None = 配置默认）。
 
         返回：``LLMResult``。若模型决定调用工具，``tool_calls`` 非空，
               ``content`` 可能为空；否则 ``content`` 为最终回答。
@@ -93,6 +114,8 @@ class LLMClient:
             json_mode=json_mode,
             tools=tools,
             tool_choice=tool_choice if tools else None,
+            max_attempts=max_attempts,
+            timeout=timeout,
         )
 
     def _call(
@@ -101,22 +124,27 @@ class LLMClient:
         json_mode: bool = False,
         tools: list[dict] | None = None,
         tool_choice: str | dict | None = None,
+        max_attempts: int | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
     ) -> LLMResult:
         """统一调用内核（chat_completion 与 chat_with_tools 共用）。"""
         response_format = {"type": "json_object"} if json_mode else None
+        attempts = max_attempts if max_attempts is not None else self._max_retry + 1
 
         last_error: Exception | None = None
-        for attempt in range(self._max_retry + 1):
+        for attempt in range(attempts):
             try:
                 logger.info(
-                    f"LLM 调用 第 {attempt + 1}/{self._max_retry + 1} 次 "
+                    f"LLM 调用 第 {attempt + 1}/{attempts} 次 "
                     f"model={self._model} tools={'on' if tools else 'off'}"
                 )
                 kwargs: dict = dict(
                     model=self._model,
                     messages=messages,
-                    temperature=self._temperature,
-                    max_tokens=self._max_tokens,
+                    temperature=self._temperature if temperature is None else temperature,
+                    max_tokens=self._max_tokens if max_tokens is None else max_tokens,
                 )
                 if response_format and not tools:
                     # 工具调用时不强制 JSON（部分厂商互斥）
@@ -126,7 +154,7 @@ class LLMClient:
                     if tool_choice:
                         kwargs["tool_choice"] = tool_choice
 
-                resp = self._client.chat.completions.create(**kwargs)
+                resp = self._client.chat.completions.create(**kwargs, timeout=timeout)
                 msg = resp.choices[0].message
                 finish = resp.choices[0].finish_reason or "stop"
                 content = msg.content or ""
@@ -172,7 +200,7 @@ class LLMClient:
                 logger.warning(f"LLM API 错误（第 {attempt + 1} 次）: {e}")
 
         raise RuntimeError(
-            f"LLM 调用失败，已重试 {self._max_retry} 次：{last_error}"
+            f"LLM 调用失败，已重试 {attempts - 1} 次：{last_error}"
         )
 
 

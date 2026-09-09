@@ -219,10 +219,13 @@ def agent_chat(req: AgentChatRequest) -> dict:
     from .llm_client import get_llm_client
     try:
         client = get_llm_client()
+        # 单步不重试：步级循环在后端（有 max_steps 兜底），保证单步最坏耗时
+        # ≈ LLM_TIMEOUT，不超过后端 AI_PROXY_TIMEOUT
         result = client.chat_with_tools(
             messages=req.messages,
             tools=req.tools,
             tool_choice=req.tool_choice,
+            max_attempts=1,
         )
         return {
             "content": result.content,

@@ -39,6 +39,8 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlmodel import Session, select
 
+from app.core.ai_client import ai_base_url
+from app.core.config import settings
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser, SysOperationLog
@@ -60,8 +62,6 @@ from app.services.pdf_charts import (
 )
 
 router = APIRouter()
-
-ALGO_BASE = "http://127.0.0.1:8001"
 
 _REPORT_TYPE_SCOPE: dict[int, str] = {
     1: "class",
@@ -181,7 +181,7 @@ def _enhance_with_llm(scope: str, report_type: int, ctx_dict: dict, template: di
     type_name = _REPORT_TYPE_NAMES.get(report_type, "报告")
     try:
         resp = httpx.post(
-            f"{ALGO_BASE}/generate_report",
+            f"{ai_base_url()}/generate_report",
             json={
                 "scope": scope,
                 "report_type": report_type,
@@ -189,7 +189,7 @@ def _enhance_with_llm(scope: str, report_type: int, ctx_dict: dict, template: di
                 "template": template,
                 "context": ctx_dict,
             },
-            timeout=30.0,
+            timeout=settings.AI_REPORT_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json()

@@ -47,6 +47,7 @@ from app.models import (
 )
 from app.models.question import TASK_TYPE_ASSIGNMENT, TASK_TYPE_SELF_PRACTICE
 from app.services.analysis_refresh import refresh_student_analysis
+from app.services.chapter_catalog import canonical_chapter
 from app.services.question_answers import (
     answer_for_response,
     encode_correct_answer,
@@ -1711,7 +1712,7 @@ def _generate_exercises(
     questions = []
     total = max(len(raw_questions), 1)
     for idx, (target_difficulty, q) in enumerate(raw_questions):
-        item = _raw_to_question(q, idx, req.courseId, target_difficulty, total)
+        item = _raw_to_question(q, idx, req.courseId, target_difficulty, total, session)
         item["difficulty"] = target_difficulty
         questions.append(item)
 
@@ -1731,7 +1732,14 @@ def _generate_exercises(
     }
 
 
-def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str, total: int) -> dict:
+def _raw_to_question(
+    q: dict,
+    idx: int,
+    course_id: int,
+    difficulty_fallback: str,
+    total: int,
+    session: Session,
+) -> dict:
     """将算法服务返回的 raw question 转为前端格式。"""
     question_type = q.get("type", "single_choice")
     options = q.get("options")
@@ -1748,7 +1756,12 @@ def _raw_to_question(q: dict, idx: int, course_id: int, difficulty_fallback: str
         "explanation": q.get("explanation", ""),
         "difficulty": q.get("difficulty", difficulty_fallback),
         "knowledgePoint": q.get("knowledge_point", ""),
-        "chapter": q.get("chapter", ""),
+        "chapter": canonical_chapter(
+            session,
+            course_id,
+            q.get("knowledge_point", ""),
+            q.get("chapter", ""),
+        ),
         "score": round(100.0 / max(total, 1), 1),
         "status": "draft",
         "source": "ai",
@@ -1839,7 +1852,9 @@ def generate_exercises_stream(
 
                 # 逐题推送
                 for q in batch:
-                    question = _raw_to_question(q, qidx, req.courseId, difficulty, total_planned)
+                    question = _raw_to_question(
+                        q, qidx, req.courseId, difficulty, total_planned, session
+                    )
                     all_questions.append(question)
                     qidx += 1
                     yield _sse({"type": "question", "question": question})

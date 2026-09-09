@@ -8,4 +8,5 @@ httpx
 chromadb
 openpyxl
 reportlab
+matplotlib
 python-multipart

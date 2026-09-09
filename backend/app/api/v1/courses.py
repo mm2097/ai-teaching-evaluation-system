@@ -5,12 +5,14 @@ from sqlalchemy import or_
 
 from app.core.database import get_session
 from app.core.operation_log import get_client_ip, get_current_user, save_operation_log
+from app.core.permissions import require_admin
 from app.models import (
     Course, CourseAssistant, CourseStudent, Student, SysRole, SysUser, Teacher, TeachingAssistant,
     ExamBatch, KnowledgeModule, KnowledgePoint,
 )
 
-router = APIRouter()
+# 全路由要求登录：课程名录此前匿名可查（攻击链侦察跳板）
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/courses/my", tags=["课程管理"])
@@ -190,9 +192,9 @@ def create_course(
     college: str = Query(...),
     credit: float | None = Query(default=None),
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_admin),
 ) -> dict:
-    """创建课程。"""
+    """创建课程（管理员）。"""
     if session.exec(select(Course).where(Course.course_code == course_code)).first():
         raise HTTPException(status_code=400, detail="课程编号已存在")
     course = Course(
@@ -224,9 +226,9 @@ def update_course(
     credit: float | None = Query(default=None),
     status: int | None = Query(default=None),
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_admin),
 ) -> dict:
-    """更新课程(只改传入字段)。"""
+    """更新课程(只改传入字段，管理员)。"""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")
@@ -259,9 +261,9 @@ def delete_course(
     request: Request,
     course_id: int,
     session: Session = Depends(get_session),
-    current_user: SysUser = Depends(get_current_user),
+    current_user: SysUser = Depends(require_admin),
 ) -> None:
-    """删除课程。"""
+    """删除课程（管理员）。"""
     course = session.get(Course, course_id)
     if not course:
         raise HTTPException(status_code=404, detail="课程不存在")

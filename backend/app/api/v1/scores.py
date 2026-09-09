@@ -3,12 +3,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.core.permissions import require_teaching_user
+from app.core.operation_log import get_current_user
+from app.core.permissions import require_teaching_user, resolve_student_scope
 from app.models import (
-    ScoreRecord, ExamBatch, Student, Course,
+    ScoreRecord, ExamBatch, Student, Course, SysUser,
     IndividualScore, CourseTestDetail,
 )
 
+# require_teaching_user 含学生角色：学生只能读本人数据（此前无归属校验，
+# 传任意 student_id 可读全校成绩），教师/管理员不限制
 router = APIRouter(dependencies=[Depends(require_teaching_user)])
 
 
@@ -18,8 +21,10 @@ def list_scores(
     student_id: int | None = Query(default=None),
     batch_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> list[dict]:
-    """列出成绩记录（含新旧表）。"""
+    """列出成绩记录（含新旧表）。学生角色强制只返回本人成绩。"""
+    student_id = resolve_student_scope(session, current_user, student_id)
     results: list[dict] = []
 
     # 旧表 ScoreRecord
@@ -103,8 +108,10 @@ def get_student_scores(
     student_id: int,
     course_id: int | None = Query(default=None),
     session: Session = Depends(get_session),
+    current_user: SysUser = Depends(get_current_user),
 ) -> dict:
-    """获取学生成绩汇总：按课程列出各批次成绩 + 总评。"""
+    """获取学生成绩汇总：按课程列出各批次成绩 + 总评。学生仅可查本人。"""
+    student_id = resolve_student_scope(session, current_user, student_id)
     # 收集所有成绩（新旧表）
     all_records: list[dict] = []
 

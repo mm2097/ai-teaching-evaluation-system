@@ -97,5 +97,8 @@ def test_delete_student_profile(client):
     student_id = created.json()["student_id"]
     resp = client.delete(f"/api/v1/students/{student_id}", headers=_auth())
     assert resp.status_code == 204
-    missing = client.get(f"/api/v1/students/{student_id}")
+    # 读接口已要求登录：未认证 401，认证后才是 404
+    missing_unauth = client.get(f"/api/v1/students/{student_id}")
+    assert missing_unauth.status_code == 401
+    missing = client.get(f"/api/v1/students/{student_id}", headers=_auth())
     assert missing.status_code == 404

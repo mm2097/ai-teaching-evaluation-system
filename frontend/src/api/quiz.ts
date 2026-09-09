@@ -17,6 +17,7 @@ import type {
   QuizQuestion,
   QuizSubmission,
   RagReference,
+  VerifyReport,
 } from '@/types'
 
 export type QuizAssignmentRecord = QuizAssignment
@@ -29,6 +30,7 @@ interface QuizQuestionResult {
   manualRequired?: boolean
   aiScore?: number | null
   aiReason?: string
+  verifyReport?: VerifyReport | null
 }
 
 /** 答题任务查询参数 */
@@ -428,6 +430,7 @@ export function buildSubmitDetails(
       manualRequired: result.manualRequired,
       aiScore: result.aiScore,
       aiReason: result.aiReason,
+      verifyReport: result.verifyReport,
     }))
   }
 

@@ -4,7 +4,7 @@
  */
 import request, { USE_MOCK } from '@/utils/request'
 import { getToken } from '@/utils/auth'
-import type { AgentType, AgentStreamEvent } from '@/types'
+import type { AgentType, AgentStreamEvent, VerifyReport } from '@/types'
 import { mockStreamAgentChat } from '@/mock/agentMock'
 
 export interface ChatMessage {
@@ -135,6 +135,13 @@ export async function* streamAgentChat(
             type: 'content_done',
             content: (evt.content as string) || '',
             sources: [],
+          }
+
+        } else if (type === 'verify') {
+          // 大小模型协同:小模型考核点验证报告
+          yield {
+            type: 'verify',
+            report: evt.report as VerifyReport,
           }
 
         } else if (type === 'error') {

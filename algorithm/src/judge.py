@@ -60,6 +60,24 @@ def judge_answer(req: JudgeRequest) -> JudgeResponse:
         f"判题完成 得分={result.total_score}/{req.max_score} "
         f"耗时={elapsed_ms}ms"
     )
+
+    # ---------- 大小模型协同:小模型考核点验证 ----------
+    # 对判分依据(reason + rubric_points)做大纲考核点对齐校验。
+    # 失败不阻断判分(verify 是增强,非必需),只 log。
+    try:
+        from .verifier import verify_against_syllabus
+        verify_text = result.reason + " " + " ".join(
+            str(p.get("point", "")) for p in result.rubric_points
+        )
+        report = verify_against_syllabus(
+            llm_output=verify_text,
+            context={"scene": "judge", "question_stem": req.question_stem},
+        )
+        result.verify_report = report.to_dict()
+        logger.info(f"判题验证 flag={report.flag} confidence={report.confidence:.2f}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"判题验证失败,跳过: {e}")
+
     return result
 
 

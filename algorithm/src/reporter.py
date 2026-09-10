@@ -58,10 +58,13 @@ def enhance_report(scope: str, template: dict, context: dict) -> dict:
     client = get_llm_client()
 
     try:
+        # 报告增强失败直接回退模板（调用方有兜底），不重试——
+        # 重试链最坏 3×LLM_TIMEOUT 会超过后端 AI_REPORT_TIMEOUT，token 照烧且必超时
         result = client.chat_completion(
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
             json_mode=True,
+            max_attempts=1,
         )
         parsed = _parse_json(result.content)
         if not parsed or not _validate(parsed):

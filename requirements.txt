@@ -1,0 +1,30 @@
+# ===== 项目统一依赖 (所有子模块共用同一 .venv) =====
+
+# ---------- 后端 FastAPI (backend/) ----------
+fastapi
+uvicorn[standard]
+loguru
+sqlmodel
+pydantic-settings
+pyjwt
+httpx
+chromadb
+openpyxl
+reportlab
+matplotlib
+python-multipart
+
+# ---------- AI 出题算法服务 (algorithm/) ----------
+fastapi>=0.110
+uvicorn[standard]>=0.27
+openai>=1.30
+pydantic>=2.6
+pydantic-settings>=2.2
+loguru>=0.7
+python-dotenv>=1.0
+
+# ---------- 脚本/文档解析 (scripts/) ----------
+pdfplumber>=0.10.0
+python-docx>=1.0.0
+pywin32>=306
+httpx>=0.25.0

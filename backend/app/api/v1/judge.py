@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from app.core.ai_client import ai_base_url
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.permissions import require_teaching_user
@@ -66,9 +67,9 @@ def judge_short_answer(
     # 调算法服务
     try:
         resp = httpx.post(
-            f"{settings.AI_SERVICE_URL}/judge_answer",
+            f"{ai_base_url()}/judge_answer",
             json=payload,
-            timeout=30.0,
+            timeout=settings.AI_JUDGE_TIMEOUT,
         )
         resp.raise_for_status()
         data: dict = resp.json()

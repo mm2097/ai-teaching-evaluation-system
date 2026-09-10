@@ -3,9 +3,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlmodel import Session, select
 
 from app.core.database import get_session
-from app.models import ClassInfo, Teacher, Course, Student, ExamBatch, CourseStudent
+from app.core.operation_log import get_current_user
+from app.core.permissions import require_roles
+from app.models import ClassInfo, Teacher, Course, Student, ExamBatch, CourseStudent, SysUser
 
-router = APIRouter()
+# 全路由要求登录：字典数据（班级/教师名录/学院学期等）此前完全裸奔，
+# 是「匿名枚举学号 → 弱口令登录」攻击链的侦察跳板
+router = APIRouter(dependencies=[Depends(get_current_user)])
+
+# 班级学生名单（学号+姓名）仅限教学管理角色
+_require_teacher_or_admin = require_roles("teacher", "admin")
 
 
 @router.get("/classes", tags=["字典"])
@@ -45,8 +52,12 @@ def list_classes(
 
 
 @router.get("/classes/{class_id}/students", tags=["字典"])
-def get_class_students(class_id: int, session: Session = Depends(get_session)) -> list[dict]:
-    """获取班级内学生列表。"""
+def get_class_students(
+    class_id: int,
+    session: Session = Depends(get_session),
+    current_user: SysUser = Depends(_require_teacher_or_admin),
+) -> list[dict]:
+    """获取班级内学生列表（学号+姓名，仅教师/管理员）。"""
     students = session.exec(select(Student).where(Student.class_id == class_id)).all()
     return [
         {"student_id": s.student_id, "student_no": s.student_no, "real_name": s.real_name}

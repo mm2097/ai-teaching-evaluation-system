@@ -30,9 +30,26 @@ class Settings(BaseSettings):
     AI_STUDENT_DAILY_REQUEST_LIMIT: int = Field(default=5, ge=1, le=100)
     AI_STUDENT_MAX_QUESTIONS: int = Field(default=10, ge=1, le=30)
     AI_STAFF_DAILY_REQUEST_LIMIT: int = Field(default=30, ge=1, le=1000)
+    AI_SERVICE_HOST: str = Field(default="127.0.0.1")
     AI_SERVICE_PORT: int = Field(default=8001, ge=1, le=65535)
-    # 算法服务地址：本地开发默认 127.0.0.1:8001，Docker 部署设为 http://algorithm:8001
-    AI_SERVICE_URL: str = "http://127.0.0.1:8001"
+    # 算法服务完整地址：留空时由 ai_base_url() 用 HOST:PORT 拼接（本地开发
+    # 默认 http://127.0.0.1:8001）；Docker 部署设为 http://algorithm:8001
+    AI_SERVICE_URL: str = ""
+
+    # ---------- 算法服务（8001）各端点超时（秒） ----------
+    # 不变量：后端超时 >= 算法侧该端点的最坏 LLM 耗时 + 余量，否则算法服务仍在
+    # 生成时连接先被这里掐断（token 照烧、业务侧降级）。算法侧单次调用上界见
+    # algorithm/.env 的 LLM_TIMEOUT（默认 120s）；判分/报告/Agent 单步在算法侧
+    # 已改为单次调用不重试（最坏 ≈ LLM_TIMEOUT），仅生成类允许完整重试链
+    # （LLM_TIMEOUT × (1 + LLM_MAX_RETRY) ≈ 360s）。调整算法侧超时后需同步这里。
+    # 简答题 AI 判分（教师批阅与学生交卷共用）：单次调用 + 余量
+    AI_JUDGE_TIMEOUT: float = Field(default=150.0, ge=1)
+    # 报告 LLM 增强：单次调用 + 余量（失败回退模板）
+    AI_REPORT_TIMEOUT: float = Field(default=150.0, ge=1)
+    # 出题（学生自主练习等同步生成）：允许完整重试链 + 补题余量
+    AI_GENERATE_TIMEOUT: float = Field(default=420.0, ge=1)
+    # Agent 组卷工具：兼顾聊天体验，覆盖重试一次的量级而非完整重试链
+    AI_EXAM_TOOL_TIMEOUT: float = Field(default=300.0, ge=1)
     # 调 algorithm /agent/chat 单步 FC 的 HTTP 超时（秒）：必须大于算法侧 LLM_TIMEOUT，
     # 否则算法服务还在生成时这里会先掐断连接（曾写死 30s 导致 Agent 频繁超时）
     AI_PROXY_TIMEOUT: float = Field(default=150.0, ge=1)

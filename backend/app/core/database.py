@@ -644,9 +644,9 @@ def _migrate_legacy_tables() -> None:
         "exam_batch": {
             "semester": "ALTER TABLE exam_batch ADD COLUMN semester VARCHAR(32) NOT NULL DEFAULT ''",
             # exam_time 是非空字段，旧库缺该列会导致查询 ExamBatch 报 OperationalError。
-            # SQLite 不允许 ADD COLUMN 用 CURRENT_TIMESTAMP 等非常量默认值，
-            # 先用固定时间戳建列，再在 _backfill_exam_time 里 UPDATE 为当前时间。
-            "exam_time": "ALTER TABLE exam_batch ADD COLUMN exam_time DATETIME NOT NULL DEFAULT '2024-01-01 00:00:00'",
+            # SQLite 的 ADD COLUMN 不允许非常量默认值，占位串仅存在于补列瞬间，
+            # 随后由下方内联回填（优先 create_time）与 _backfill_exam_time 覆盖。
+            "exam_time": "ALTER TABLE exam_batch ADD COLUMN exam_time DATETIME NOT NULL DEFAULT '1970-01-01 00:00:00'",
         },
         "score_record": {
             "source_data": "ALTER TABLE score_record ADD COLUMN source_data TEXT",
@@ -659,15 +659,31 @@ def _migrate_legacy_tables() -> None:
     with engine.begin() as connection:
         inspector = inspect(connection)
         table_names = set(inspector.get_table_names())
+        added_columns: set[tuple[str, str]] = set()
+        exam_batch_had_create_time = False
         for table_name, columns in migrations.items():
             if table_name not in table_names:
                 continue
             existing_columns = {
                 column["name"] for column in inspector.get_columns(table_name)
             }
+            if table_name == "exam_batch":
+                exam_batch_had_create_time = "create_time" in existing_columns
             for column_name, statement in columns.items():
                 if column_name not in existing_columns:
                     connection.execute(text(statement))
+                    added_columns.add((table_name, column_name))
+        if ("exam_batch", "exam_time") in added_columns:
+            # 补列时存量批次回填考核时间以保持考核时间序（仅补列当次执行）：
+            # 优先用批次创建时间；极早期 schema 无 create_time 列时退化为迁移时刻
+            backfill = (
+                "COALESCE(create_time, CURRENT_TIMESTAMP)"
+                if exam_batch_had_create_time
+                else "CURRENT_TIMESTAMP"
+            )
+            connection.execute(text(
+                f"UPDATE exam_batch SET exam_time = {backfill}"
+            ))
         if "class_info" in table_names:
             _backfill_class_dimensions(connection)
         if "exam_batch" in table_names:
@@ -701,13 +717,14 @@ def _backfill_class_dimensions(connection) -> None:
 def _backfill_exam_time(connection) -> None:
     """回填 exam_batch.exam_time：将占位默认值更新为当前时间（旧行无单独考核时间）。
 
-    建列时用了固定 '2024-01-01 00:00:00' 占位（SQLite 不允许非常量默认），
-    这里统一刷成迁移执行时刻，与模型 default_factory=datetime.now 语义一致。
+    建列时用了固定 '1970-01-01 00:00:00' 占位（SQLite 不允许非常量默认），
+    历史版本曾用 '2024-01-01 00:00:00'，这里统一刷成迁移执行时刻，与模型
+    default_factory=datetime.now 语义一致。
     幂等：只更新仍是占位值的行，避免覆盖已有真实考核时间。
     """
     connection.execute(text(
         "UPDATE exam_batch SET exam_time = CURRENT_TIMESTAMP "
-        "WHERE exam_time = '2024-01-01 00:00:00'"
+        "WHERE exam_time IN ('1970-01-01 00:00:00', '2024-01-01 00:00:00')"
     ))
 
 

@@ -5,6 +5,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
+from app.core.ai_client import ai_base_url
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.permissions import require_admin
@@ -17,7 +18,7 @@ def _ai_service_status() -> str:
     """Probe the algorithm service without blocking the admin page for long."""
     try:
         response = httpx.get(
-            f"{settings.AI_SERVICE_URL}/health",
+            f"{ai_base_url()}/health",
             timeout=0.6,
         )
         return "online" if response.is_success else "degraded"

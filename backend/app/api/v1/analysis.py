@@ -938,7 +938,7 @@ def refresh_warnings(
     _check_course_access(session, current_user, course_id)
 
     results = scan_course_warnings(session, course_id, class_id)
-    count = persist_warnings(session, results, course_id)
+    count = persist_warnings(session, results, course_id, class_id)
 
     course = session.get(Course, course_id)
     return {

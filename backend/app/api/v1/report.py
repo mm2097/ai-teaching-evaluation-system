@@ -30,7 +30,7 @@ from fastapi.responses import HTMLResponse, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -39,6 +39,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlmodel import Session, select
 
+from app.core.ai_client import ai_base_url
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
@@ -49,10 +50,18 @@ from app.services.report_template import (
     build_student_context,
     render_report,
 )
+# PDF charts are rendered from the same persisted snapshot used by preview/download.
+from app.services.pdf_charts import (
+    render_index_bar,
+    render_knowledge_bar,
+    render_parts_bar,
+    render_radar,
+    render_rate_bar,
+    render_score_pie,
+    render_trend_line,
+)
 
 router = APIRouter()
-
-ALGO_BASE = settings.AI_SERVICE_URL
 
 _REPORT_TYPE_SCOPE: dict[int, str] = {
     1: "class",
@@ -172,7 +181,7 @@ def _enhance_with_llm(scope: str, report_type: int, ctx_dict: dict, template: di
     type_name = _REPORT_TYPE_NAMES.get(report_type, "报告")
     try:
         resp = httpx.post(
-            f"{ALGO_BASE}/generate_report",
+            f"{ai_base_url()}/generate_report",
             json={
                 "scope": scope,
                 "report_type": report_type,
@@ -180,7 +189,7 @@ def _enhance_with_llm(scope: str, report_type: int, ctx_dict: dict, template: di
                 "template": template,
                 "context": ctx_dict,
             },
-            timeout=30.0,
+            timeout=settings.AI_REPORT_TIMEOUT,
         )
         resp.raise_for_status()
         return resp.json()
@@ -567,6 +576,84 @@ def _snapshot_workbook(history: ReportHistory) -> bytes:
     return output.getvalue()
 
 
+def _chart_image(png_bytes: bytes, max_w_mm: float = 170.0, max_h_mm: float = 80.0):
+    """把 matplotlib 渲染的 PNG 转为 reportlab Image，按比例约束显示尺寸。"""
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image
+
+    iw, ih = ImageReader(_io.BytesIO(png_bytes)).getSize()
+    ratio = ih / iw
+    width = max_w_mm * mm
+    height = width * ratio
+    if height > max_h_mm * mm:
+        height = max_h_mm * mm
+        width = height / ratio
+    return Image(_io.BytesIO(png_bytes), width=width, height=height)
+
+
+def _chart_images(charts: dict, focus: str) -> list[tuple[str, bytes]]:
+    """按报告主题收集可渲染的图表 (标题, PNG字节流)。
+
+    与前端 ReportCenterView 的 has*Chart 条件保持一致，只渲染当前主题相关的图。
+    """
+    images: list[tuple[str, bytes]] = []
+    rates = charts.get("rates") or {}
+    score_buckets = [b for b in (charts.get("scoreBuckets") or []) if b.get("count")]
+    knowledge = charts.get("knowledge") or []
+    radar = charts.get("radar") or {}
+    score_history = [h for h in (charts.get("scoreHistory") or []) if h.get("score") is not None]
+    eval_indexes = [it for it in (charts.get("evalIndexes") or []) if it.get("score") is not None]
+    academic_parts = [it for it in (charts.get("academicParts") or []) if it.get("score") is not None]
+
+    has_rate = any(isinstance(rates.get(k), (int, float)) for k in ("passRate", "excellentRate", "attendanceRate"))
+
+    if focus == "class":
+        if has_rate:
+            png = render_rate_bar(rates)
+            if png:
+                images.append(("核心比率", png))
+        if score_buckets:
+            png = render_score_pie(score_buckets)
+            if png:
+                images.append(("成绩分布", png))
+        if len(score_history) >= 2:
+            png = render_trend_line(score_history)
+            if png:
+                images.append(("成绩走势", png))
+    elif focus == "knowledge":
+        if knowledge:
+            png = render_knowledge_bar(knowledge)
+            if png:
+                images.append(("知识点掌握度", png))
+    elif focus == "student":
+        if knowledge:
+            png = render_knowledge_bar(knowledge)
+            if png:
+                images.append(("知识点掌握度", png))
+        if radar:
+            png = render_radar(radar)
+            if png:
+                images.append(("能力雷达", png))
+        if len(score_history) >= 2:
+            png = render_trend_line(score_history)
+            if png:
+                images.append(("成绩走势", png))
+    elif focus == "quality":
+        if radar:
+            png = render_radar(radar)
+            if png:
+                images.append(("能力雷达", png))
+        if eval_indexes:
+            png = render_index_bar(eval_indexes)
+            if png:
+                images.append(("教师配置指标得分", png))
+        if academic_parts:
+            png = render_parts_bar(academic_parts)
+            if png:
+                images.append(("学业构成（教师配比）", png))
+    return images
+
+
 def _snapshot_pdf(history: ReportHistory) -> bytes:
     """Build a paginated, Chinese-readable PDF from an immutable snapshot."""
     report = json.loads(history.report_snapshot)
@@ -598,6 +685,15 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
         fontSize=11, leading=20, textColor=colors.HexColor("#1f2937"),
         wordWrap="CJK", spaceAfter=3 * mm,
     )
+    table_header_style = ParagraphStyle(
+        "TableHeader", parent=styles["Normal"], fontName=font_name,
+        fontSize=11, leading=16, textColor=colors.white, alignment=TA_LEFT,
+    )
+    table_cell_style = ParagraphStyle(
+        "TableCell", parent=styles["Normal"], fontName=font_name,
+        fontSize=10, leading=15, textColor=colors.HexColor("#1f2937"),
+        wordWrap="CJK", alignment=TA_LEFT,
+    )
 
     def _paragraph(value: object, style: ParagraphStyle) -> Paragraph:
         text = escape(str(value or "-")).replace("\n", "<br/>")
@@ -621,27 +717,95 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
     has_core_stats = bool(stats) and any(key in stats for key in stat_labels)
     charts = report.get("charts") or (stats.get("charts") if isinstance(stats, dict) else {}) or {}
     focus = charts.get("focus") or {1: "class", 2: "student", 3: "knowledge", 4: "quality"}.get(history.report_type, "class")
-    score_buckets = [item for item in (charts.get("scoreBuckets") or []) if item.get("count")] if focus == "class" else []
-    knowledge = charts.get("knowledge") or [] if focus in ("knowledge", "student") else []
-    radar = charts.get("radar") or {} if focus in ("student", "quality") else {}
-    has_charts = bool(score_buckets or knowledge or radar or (charts.get("evalIndexes") if focus == "quality" else None))
+    _chart_pngs = _chart_images(charts, focus)
+    has_charts = bool(_chart_pngs)
     if focus == "knowledge":
         has_core_stats = False
 
-    def _styled_table(table_data: list[list[str]]) -> Table:
-        table = Table(table_data, colWidths=[55 * mm, 90 * mm], repeatRows=1)
+    def _styled_table(table_data: list[list[str]], col_widths: list[float] | None = None) -> Table:
+        """通用表格渲染。
+
+        - 默认两列：左标题 35mm / 右内容 120mm
+        - 单元格自动使用 Paragraph 包裹（支持换行）
+        - 表头深蓝底白字，内容行交替浅灰底
+        """
+        from reportlab.platypus import Paragraph
+
+        if col_widths is None:
+            col_widths = [35 * mm, 120 * mm]
+        # 将每个单元格用 Paragraph 包裹以支持换行
+        wrapped: list[list] = []
+        for r_idx, row in enumerate(table_data):
+            new_row = []
+            for cell in row:
+                text = "" if cell is None else str(cell)
+                style_obj = table_header_style if r_idx == 0 else table_cell_style
+                new_row.append(Paragraph(text, style_obj))
+            wrapped.append(new_row)
+        table = Table(wrapped, colWidths=col_widths, repeatRows=1)
         table.setStyle(TableStyle([
             ("FONTNAME", (0, 0), (-1, -1), font_name),
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563eb")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#f8fafc")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
         ]))
+        return table
+
+    def _warning_table(rows: list[dict]) -> Table:
+        """预警学生表：学生 / 等级 / 原因，等级着色。"""
+        from reportlab.platypus import Paragraph
+
+        level_color = {
+            "高": colors.HexColor("#ef4444"),
+            "中": colors.HexColor("#f59e0b"),
+            "低": colors.HexColor("#2563eb"),
+        }
+        data = []
+        header = [
+            Paragraph("学生", table_header_style),
+            Paragraph("等级", table_header_style),
+            Paragraph("原因", table_header_style),
+        ]
+        data.append(header)
+        for item in rows:
+            level = str(item.get("level", ""))
+            reasons = "；".join(item.get("reasons") or [])
+            data.append([
+                Paragraph(str(item.get("name", "")), table_cell_style),
+                Paragraph(level, table_cell_style),
+                Paragraph(reasons, table_cell_style),
+            ])
+        table = Table(
+            data,
+            colWidths=[22 * mm, 16 * mm, 117 * mm],
+            repeatRows=1,
+        )
+        style = [
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2563eb")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (1, 0), (1, -1), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.HexColor("#f8fafc"), colors.white]),
+        ]
+        # 给等级单元格染色
+        for r_idx, item in enumerate(rows, start=1):
+            level = str(item.get("level", ""))
+            if level in level_color:
+                style.append(("BACKGROUND", (1, r_idx), (1, r_idx), level_color[level]))
+                style.append(("TEXTCOLOR", (1, r_idx), (1, r_idx), colors.white))
+        table.setStyle(TableStyle(style))
         return table
 
     section_index = 0
@@ -655,29 +819,15 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
             if key in stats:
                 suffix = "%" if key in {"passRate", "excellentRate", "attendanceRate"} else ""
                 table_data.append([label, f"{stats[key]}{suffix}"])
-        story.extend([_styled_table(table_data), Spacer(1, 3 * mm)])
+        story.extend([_styled_table(table_data, col_widths=[55 * mm, 100 * mm]), Spacer(1, 4 * mm)])
 
     if has_charts:
         story.append(_paragraph(f"{cn_nums[section_index]}、图形化数据", heading_style))
         section_index += 1
-        if score_buckets:
-            story.append(_paragraph("成绩分布", body_style))
-            dist_rows = [["成绩段", "人数"]]
-            dist_rows.extend([[item.get("label", ""), str(item.get("count", 0))] for item in score_buckets])
-            story.extend([_styled_table(dist_rows), Spacer(1, 2 * mm)])
-        if knowledge:
-            story.append(_paragraph("知识点掌握度", body_style))
-            kp_rows = [["知识点", "掌握度"]]
-            kp_rows.extend([
-                [item.get("name", ""), f"{item.get('accuracy', 0)}%"]
-                for item in knowledge
-            ])
-            story.extend([_styled_table(kp_rows), Spacer(1, 2 * mm)])
-        if radar:
-            story.append(_paragraph("能力维度", body_style))
-            radar_rows = [["维度", "得分"]]
-            radar_rows.extend([[str(name), str(value)] for name, value in radar.items()])
-            story.extend([_styled_table(radar_rows), Spacer(1, 2 * mm)])
+        for _title, _png_bytes in _chart_pngs:
+            story.append(_paragraph(_title, body_style))
+            story.append(_chart_image(_png_bytes))
+            story.append(Spacer(1, 3 * mm))
 
     scheme_rows = report.get("evalScheme") or []
     if scheme_rows:
@@ -694,7 +844,7 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
             dim_score = dim.get("score")
             dim_label = f"{dim.get('name', '')}" + (f"（{dim_score}分）" if dim_score is not None else "")
             scheme_table.append([dim_label, index_text])
-        story.extend([_styled_table(scheme_table), Spacer(1, 2 * mm)])
+        story.extend([_styled_table(scheme_table, col_widths=[40 * mm, 115 * mm]), Spacer(1, 4 * mm)])
 
     findings = [str(item) for item in (report.get("findings") or []) if item]
     if findings:
@@ -707,18 +857,13 @@ def _snapshot_pdf(history: ReportHistory) -> bytes:
     if warning_rows:
         story.append(_paragraph(f"{cn_nums[section_index]}、预警学生", heading_style))
         section_index += 1
-        warn_table = [["学生", "等级 / 原因"]]
-        for item in warning_rows:
-            warn_table.append([
-                item.get("name", ""),
-                f"{item.get('level', '')}：{'；'.join(item.get('reasons') or [])}",
-            ])
-        story.extend([_styled_table(warn_table), Spacer(1, 2 * mm)])
+        story.extend([_warning_table(warning_rows), Spacer(1, 4 * mm)])
 
     for label, key in (("总体概述", "summary"), ("关键结论", "conclusion"), ("建议措施", "suggestion")):
         story.append(_paragraph(f"{cn_nums[section_index]}、{label}", heading_style))
         section_index += 1
         story.append(_paragraph(report.get(key, ""), body_style))
+        story.append(Spacer(1, 2 * mm))
 
     def _draw_footer(canvas, doc):
         canvas.saveState()

@@ -1,0 +1,21 @@
+# 本地验证用 override:放宽 .env 依赖、调整端口避免冲突
+# 云服务器部署不用这个文件(用 Windows 原生脚本)
+
+services:
+  algorithm:
+    # .env 可选:文件不存在不报错
+    env_file: []
+
+  backend:
+    # 本地验证用 development 环境,无需手动配 SECRET_KEY
+    env_file: []
+    environment:
+      - AI_SERVICE_URL=http://algorithm:8001
+      - ENVIRONMENT=development
+      - CORS_ORIGINS=
+      - DATABASE_URL=sqlite:///./data/app.db
+      - CHROMA_PERSIST_PATH=./data/chroma_data
+
+  frontend:
+    ports:
+      - "8080:80"   # 本地访问 http://localhost:8080,避免占用 80

@@ -33,7 +33,7 @@ def fixed_profile(monkeypatch):
     monkeypatch.setattr(
         evaluation,
         "compute_profile",
-        lambda session, student_id, course_id: SimpleNamespace(
+        lambda session, student_id, course_id, **kwargs: SimpleNamespace(
             academic_score=100.0,
             attitude_score=0.0,
             progress_score=50.0,

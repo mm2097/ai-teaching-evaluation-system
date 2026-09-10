@@ -194,6 +194,8 @@ export interface AnalysisQuery {
   targetId?: number
   courseId?: number
   semesterId?: number
+  /** 学期编码（如 2025-2026-1），semesterId 为前端选项索引、非真实编码 */
+  semesterCode?: string
   deptId?: number
   majorId?: number
   classId?: number

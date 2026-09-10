@@ -158,24 +158,29 @@ def _score_for_rule(
     fallback: float,
     profile,
     mastery_score: float,
+    semester: str | None = None,
 ) -> float:
-    """Resolve one configured indicator to a 0-100 score."""
+    """Resolve one configured indicator to a 0-100 score.
+
+    semester 非空时批次类规则（academic_part/direct）仅统计该学期批次。
+    """
     rule_type = str(rule.get("type", "")).strip().lower()
     if rule_type == "academic_part":
         # 学业水平组成部分（小班讨论/期中/期末/考勤/作业/其他），按批次名称关键字取分
         part = str(rule.get("part", "")).strip().lower()
-        value = _academic_part_score(session, student_id, course_id, part)
+        value = _academic_part_score(session, student_id, course_id, part, semester=semester)
         return float(value) if value is not None else fallback
     if rule_type == "direct":
         batch_type = rule.get("batch_type")
         if not isinstance(batch_type, int):
             return fallback
-        batch_ids = session.exec(
-            select(ExamBatch.batch_id).where(
-                ExamBatch.course_id == course_id,
-                ExamBatch.batch_type == batch_type,
-            )
-        ).all()
+        batch_stmt = select(ExamBatch.batch_id).where(
+            ExamBatch.course_id == course_id,
+            ExamBatch.batch_type == batch_type,
+        )
+        if semester:
+            batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+        batch_ids = session.exec(batch_stmt).all()
         if not batch_ids:
             return fallback
 
@@ -224,6 +229,7 @@ def _configured_dimension_scores(
     base_scores: dict[str, float],
     profile,
     mastery_score: float,
+    semester: str | None = None,
 ) -> dict[str, float]:
     """Apply each dimension's EvalIndex weights to its indicator scores.
 
@@ -231,6 +237,7 @@ def _configured_dimension_scores(
     - 维度无指标 → 0 分
     - 指标权重合计 != 100% 或含非法权重 → 内置维度回退基础分、自定义维度 0 分
     - 有效配置按权重加权；单个指标无数据时回退该维度基础分（内置）或 0（自定义）
+    - semester 非空时批次类指标仅统计该学期数据
     """
     result = dict(base_scores)
     dimensions = session.exec(
@@ -262,7 +269,8 @@ def _configured_dimension_scores(
             except (json.JSONDecodeError, TypeError):
                 rule = {}
             indicator_score = _score_for_rule(
-                session, student_id, course_id, rule, fallback, profile, mastery_score
+                session, student_id, course_id, rule, fallback, profile, mastery_score,
+                semester=semester,
             )
             weighted_score += weight / total * indicator_score
         result[key] = round(max(0.0, min(100.0, weighted_score)), 1)
@@ -461,6 +469,7 @@ def compute_evaluation(
     weights: dict | None = None,
     class_slopes: list[float] | None = None,
     profile: ProfileScores | None = None,
+    semester: str | None = None,
 ) -> EvaluationResult:
     """综合评价：各维度按占比加权求和 + 五档等级。
 
@@ -472,6 +481,7 @@ def compute_evaluation(
     class_slopes 供批量计算复用（profile.compute_class_slopes 的结果）；
     profile 供调用方传入已算好的画像，避免重复计算。
     二者缺省时由 compute_profile 实时计算。
+    semester 非空时画像与批次类指标仅统计该学期数据。
     """
     if weights:
         w = {**DEFAULT_WEIGHTS, **weights}
@@ -481,9 +491,11 @@ def compute_evaluation(
 
     if profile is None:
         if class_slopes is None:
-            profile = compute_profile(session, student_id, course_id)
+            profile = compute_profile(session, student_id, course_id, semester=semester)
         else:
-            profile = compute_profile(session, student_id, course_id, class_slopes=class_slopes)
+            profile = compute_profile(
+                session, student_id, course_id, class_slopes=class_slopes, semester=semester,
+            )
     masteries = compute_student_mastery(session, student_id, course_id)
     mastery_score = (
         sum(m.accuracy for m in masteries) / len(masteries)
@@ -497,7 +509,8 @@ def compute_evaluation(
         "mastery": round(mastery_score, 1),
     }
     dim_scores = _configured_dimension_scores(
-        session, student_id, course_id, base_scores, profile, mastery_score
+        session, student_id, course_id, base_scores, profile, mastery_score,
+        semester=semester,
     )
 
     profile_availability = getattr(profile, "data_availability", None)

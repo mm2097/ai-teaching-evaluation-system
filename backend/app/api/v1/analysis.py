@@ -229,6 +229,7 @@ def get_student_profile(
     student_id: int = Query(...),
     course_id: int | None = Query(default=None),
     class_id: int | None = Query(default=None, description="班级视角：返回班级平均画像（平均到课率/平均参与度等）"),
+    semester: str | None = Query(default=None, description="学期筛选（如 2025-2026-1），仅统计该学期数据"),
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ) -> dict | None:
@@ -238,10 +239,11 @@ def get_student_profile(
     - 任课教师仅可查看自己授课课程内的学生画像
     - 学生仅可查看自己的画像
     班级视角（class_id 非空）：仅任课教师，返回班级平均雷达。
+    semester 非空时考勤/参与/各成绩部分仅统计该学期批次，避免跨学期平均。
     """
     # ── 班级视角 ──
     if class_id is not None:
-        return _get_class_profile(session, class_id, course_id, current_user)
+        return _get_class_profile(session, class_id, course_id, current_user, semester)
 
     _check_profile_access(current_user, student_id, course_id, session)
 
@@ -284,9 +286,9 @@ def get_student_profile(
     ]
 
     # 画像和评价均按当前源数据实时计算，避免读取导入/删除前的持久化快照。
-    computed = compute_profile(session, student_id, profile_course_id)
+    computed = compute_profile(session, student_id, profile_course_id, semester=semester)
     evaluation = compute_evaluation(
-        session, student_id, profile_course_id, profile=computed
+        session, student_id, profile_course_id, profile=computed, semester=semester
     )
     comprehensive = evaluation.total_score if evaluation.has_data else 0.0
     dim_scores = []
@@ -349,10 +351,12 @@ def _get_class_profile(
     class_id: int,
     course_id: int | None,
     current_user: SysUser,
+    semester: str | None = None,
 ) -> dict | None:
     """班级视角画像：返回班级平均雷达（平均到课率、平均课堂参与度等）。
 
     权限：仅任课教师可查看自己授课课程的班级画像。
+    semester 非空时各子项仅统计该学期数据。
     """
     if course_id is None:
         raise HTTPException(status_code=400, detail="班级视角必须指定课程")
@@ -381,12 +385,15 @@ def _get_class_profile(
     if not student_ids:
         return None
 
-    batch_ids = session.exec(
-        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-    ).all()
+    batch_stmt = select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+    batch_ids = session.exec(batch_stmt).all()
 
     # 班级画像也从当前源数据实时聚合，避免使用上传/删除前的画像快照。
-    computed_profiles = [compute_profile(session, sid, course_id) for sid in student_ids]
+    computed_profiles = [
+        compute_profile(session, sid, course_id, semester=semester) for sid in student_ids
+    ]
 
     def _available_average(key: str, attr: str) -> float:
         values = [
@@ -420,7 +427,7 @@ def _get_class_profile(
     participation_rate = sum(part_rates) / len(part_rates) if part_rates else 0.0
 
     live_evaluations = [
-        compute_evaluation(session, sid, course_id, profile=profile)
+        compute_evaluation(session, sid, course_id, profile=profile, semester=semester)
         for sid, profile in zip(student_ids, computed_profiles)
     ]
     totals = [item.total_score for item in live_evaluations if item.has_data]

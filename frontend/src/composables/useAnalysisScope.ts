@@ -5,7 +5,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { fetchClasses, fetchCourses, fetchSemesters, searchStudents } from '@/api/dict'
 import { useUserStore } from '@/stores/user'
-import type { AnalysisQuery, LinkedStudentOption, TargetType, UserRole } from '@/types'
+import type { AnalysisQuery, LinkedStudentOption, Semester, TargetType, UserRole } from '@/types'
 
 /** 各角色允许的分析对象类型 */
 const roleTargetTypes: Record<UserRole, TargetType[]> = {
@@ -64,6 +64,12 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
   const studentLoading = ref(false)
 
   const semesterOptions = ref<{ label: string; value: number }[]>([])
+  /** 学期字典原文（semesterId 为选项索引，真实学期编码以此为准） */
+  const semesters = ref<Semester[]>([])
+  /** 当前选中学期的编码（如 2025-2026-1），用于后端学期过滤 */
+  const semesterCode = computed(() =>
+    semesters.value.find((s) => s.id === semesterId.value)?.semesterCode,
+  )
   const classOptions = ref<{ label: string; value: number }[]>([])
   const courseOptions = ref<{ label: string; value: number }[]>([])
 
@@ -104,11 +110,12 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
 
     loadingPromise = (async () => {
       const sems = await fetchSemesters()
+      semesters.value = sems
       semesterOptions.value = sems.map((s) => ({ label: s.semesterName, value: s.id }))
 
       if (role.value === 'teacher') {
         const teacherId = userStore.userInfo?.teacherId
-        const courses = await fetchCourses({ teacherId, semesterId: semesterId.value, deptId: 1 })
+        const courses = await fetchCourses({ teacherId, semesterCode: semesterCode.value })
         courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
         courseId.value = pickFirstOption(courseOptions.value, courseId.value)
 
@@ -122,7 +129,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
       } else if (role.value === 'student') {
         const studentClassId = userStore.userInfo?.classId
         const courses = studentClassId
-          ? await fetchCourses({ deptId: 1, semesterId: semesterId.value, classId: studentClassId })
+          ? await fetchCourses({ deptId: 1, semesterCode: semesterCode.value, classId: studentClassId })
           : []
         courseOptions.value = courses.map((c) => ({ label: c.courseName, value: c.id }))
         courseId.value = pickFirstOption(courseOptions.value, courseId.value)
@@ -177,6 +184,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
     targetType: targetType.value,
     targetId: targetType.value === 'class' ? (targetId.value ?? classId.value) : targetId.value,
     semesterId: semesterId.value,
+    semesterCode: semesterCode.value,
     deptId: 1,
     classId: classId.value,
     courseId: courseId.value,
@@ -187,6 +195,7 @@ export function useAnalysisScope(defaultTargetType?: TargetType) {
     allowedTargetTypes,
     targetType,
     semesterId,
+    semesterCode,
     classId,
     courseId,
     targetId,

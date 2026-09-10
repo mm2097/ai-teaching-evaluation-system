@@ -372,16 +372,14 @@ def test_attitude_without_course_score_does_not_create_total(engine):
         result = compute_evaluation(s, student_id=1, course_id=course_id, profile=profile)
 
         assert profile.data_availability["academic"] is False
-        assert profile.data_availability["attitude"] is True
+        # 仅有已发布作业任务、但学生从未提交，也无考勤/参与/互动 → 无态度数据
+        assert profile.data_availability["attitude"] is False
+        assert profile.homework_available is False
         assert result.has_data is False
         assert result.level == "—"
         dimensions = _computed_dimensions(s, course_id, result)
-        assert dimensions == [{
-            "dimensionId": attitude_dim.dimension_id,
-            "name": "学习态度",
-            "score": 0.0,
-            "weight": 40.0,
-        }]
+        # 态度维度不可用 → 不出现在维度列表
+        assert dimensions == []
 
         s.delete(task)
         for index in s.exec(select(EvalIndex).where(
@@ -396,6 +394,136 @@ def test_attitude_without_course_score_does_not_create_total(engine):
         )).one())
         s.delete(s.get(Course, course_id))
         s.commit()
+
+
+def test_homework_availability_requires_real_submission(engine):
+    """课程有已发布作业任务但学生从未提交 → homework_available=False。
+
+    给学生一条考勤记录以保留态度的另一个数据源，验证：
+    - homework_available 反映该生真实提交情况（而非课程级任务存在性）
+    - data_availability["attitude"] 因考勤存在仍为 True
+    """
+    from app.models import AnswerTask, StudentAnswerRecord
+    from datetime import date as _date
+
+    course_id = 994
+    with Session(engine) as s:
+        s.add(Course(
+            course_id=course_id,
+            course_code="HW994",
+            course_name="作业可用性测试课",
+            teacher_id=1,
+            semester="2025-2026-1",
+            college="计算机学院",
+        ))
+        s.add(CourseStudent(course_id=course_id, student_id=1))
+        s.commit()
+        task = AnswerTask(
+            course_id=course_id,
+            task_name="未提交作业",
+            task_type="assignment",
+            deadline=datetime.now() + timedelta(days=1),
+            status=1,
+            create_by=1,
+        )
+        s.add(task)
+        # 一条考勤记录：出勤 1 次 → 到课率 1.0，使态度有非作业数据源
+        s.add(AttendanceRecord(
+            course_id=course_id, student_id=1, status=0,
+            attendance_date=_date(2025, 9, 1), create_by=1,
+        ))
+        s.commit()
+
+        profile = compute_profile(s, student_id=1, course_id=course_id)
+
+        assert profile.homework_available is False
+        assert profile.homework_submitted_count == 0
+        assert profile.homework_assigned_count > 0
+        # 考勤存在 → 态度维度整体仍可用
+        assert profile.data_availability["attitude"] is True
+
+        s.delete(task)
+        for ar in s.exec(select(AttendanceRecord).where(
+            AttendanceRecord.course_id == course_id,
+            AttendanceRecord.student_id == 1,
+        )).all():
+            s.delete(ar)
+        s.delete(s.exec(select(CourseStudent).where(
+            CourseStudent.course_id == course_id,
+            CourseStudent.student_id == 1,
+        )).one())
+        s.delete(s.get(Course, course_id))
+        s.commit()
+
+
+def test_homework_availability_with_real_submission(engine):
+    """学生提交过至少一次答题任务 → homework_available=True。"""
+    from app.models import (
+        AnswerTask, TaskQuestion, StudentAnswerRecord,
+        KnowledgeModule, KnowledgePoint,
+    )
+    from app.models.question import AiQuestion
+
+    course_id = 995
+    with Session(engine) as s:
+        s.add(Course(
+            course_id=course_id,
+            course_code="HW995",
+            course_name="作业可用性-已提交测试课",
+            teacher_id=1,
+            semester="2025-2026-1",
+            college="计算机学院",
+        ))
+        s.add(CourseStudent(course_id=course_id, student_id=1))
+        # 知识模块 + 知识点 + 题目（满足 AiQuestion/StudentAnswerRecord 外键）
+        s.add(KnowledgeModule(module_id=995, course_id=course_id, module_name="测试模块"))
+        s.commit()
+        s.add(KnowledgePoint(point_id=995, module_id=995, point_name="测试知识点"))
+        s.commit()
+        task = AnswerTask(
+            course_id=course_id,
+            task_name="已提交作业",
+            task_type="assignment",
+            deadline=datetime.now() + timedelta(days=1),
+            status=1,
+            create_by=1,
+        )
+        s.add(task)
+        s.commit()
+        q = AiQuestion(
+            question_id=9901,
+            course_id=course_id, point_id=995, type=1,
+            content="测试题", correct_answer="A", create_by=1,
+        )
+        s.add(q)
+        s.commit()
+        s.add(TaskQuestion(rel_id=9901, task_id=task.task_id, question_id=q.question_id, sort_num=1))
+        s.add(StudentAnswerRecord(
+            answer_id=9901,
+            task_id=task.task_id, question_id=q.question_id,
+            student_id=1, user_answer="A", score=10, is_correct=1,
+        ))
+        s.commit()
+
+        profile = compute_profile(s, student_id=1, course_id=course_id)
+
+        assert profile.homework_available is True
+        assert profile.homework_submitted_count >= 1
+        assert profile.data_availability["attitude"] is True
+
+        s.delete(s.get(StudentAnswerRecord, 9901))
+        s.delete(s.get(TaskQuestion, 9901))
+        s.delete(s.get(AiQuestion, 9901))
+        s.delete(task)
+        s.delete(s.get(KnowledgePoint, 995))
+        s.delete(s.get(KnowledgeModule, 995))
+        s.delete(s.exec(select(CourseStudent).where(
+            CourseStudent.course_id == course_id,
+            CourseStudent.student_id == 1,
+        )).one())
+        s.delete(s.get(Course, course_id))
+        s.commit()
+
 
 def test_row_edit_targets_exact_score_table(engine):
     """不同成绩表主键相同时，编辑不得串改另一张表。"""

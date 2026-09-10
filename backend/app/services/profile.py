@@ -541,13 +541,9 @@ def compute_profile(
             InteractionRecord.type != 3,
         ).limit(1)
     ).first() is not None
-    has_homework_task = session.exec(
-        select(AnswerTask.task_id).where(
-            AnswerTask.course_id == course_id,
-            AnswerTask.task_type == TASK_TYPE_ASSIGNMENT,
-            AnswerTask.status >= 1,
-        ).limit(1)
-    ).first() is not None
+    # 该生是否真实提交过答题任务（与 _homework_progress 口径一致，
+    # 复用 compute_attitude_score 已算好的提交计数，避免重复查询课程级任务）
+    has_homework_submission = detail["homework_submitted_count"] > 0
     score_record_count = len(session.exec(
         select(ScoreRecord.score_id).where(
             ScoreRecord.student_id == student_id,
@@ -582,7 +578,7 @@ def compute_profile(
         w_homework=detail["w_homework"],
         attendance_available=_has_attendance_data(session, student_id, course_id),
         interaction_available=has_participation or has_interaction,
-        homework_available=has_homework_task,
+        homework_available=has_homework_submission,
         homework_assigned_count=detail["homework_assigned_count"],
         homework_submitted_count=detail["homework_submitted_count"],
         data_availability={
@@ -591,7 +587,7 @@ def compute_profile(
                 _has_attendance_data(session, student_id, course_id)
                 or has_participation
                 or has_interaction
-                or has_homework_task
+                or has_homework_submission
             ),
             "progress": score_record_count + individual_count + detail_count >= 2,
         },

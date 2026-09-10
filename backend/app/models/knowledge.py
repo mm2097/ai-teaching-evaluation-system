@@ -28,4 +28,6 @@ class KnowledgePoint(SQLModel, table=True):
     point_name: str = Field(max_length=64)
     description: Optional[str] = Field(default=None, max_length=255)
     sort_num: int = Field(default=0)
+    # 支撑的课程目标编号，逗号分隔，如 "CT1,CT2,CT4"；空表示未映射（不参与 CT 达成度归因）
+    course_objectives: Optional[str] = Field(default=None, max_length=64)
     create_time: datetime = Field(default_factory=datetime.now)

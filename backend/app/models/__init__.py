@@ -25,7 +25,7 @@ from app.models.question import (
     TaskQuestion,
 )
 from app.models.evaluation import EvalDimension, EvalIndex, StudentEvaluationResult, EvalDimensionScore
-from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile
+from app.models.analysis import KnowledgeMastery, StudyWarning, StudentProfile, CTAchievement
 from app.models.notification import Notification
 from app.models.log import AiGenerationLog, SysOperationLog
 from app.models.report import ReportHistory
@@ -42,7 +42,7 @@ __all__ = [
     "IndividualScore", "AttendanceSheet", "ParticipationSheet", "CourseTestDetail",
     "AiQuestion", "AnswerTask", "AnswerTaskClass", "TaskQuestion", "StudentAnswerRecord",
     "EvalDimension", "EvalIndex", "StudentEvaluationResult", "EvalDimensionScore",
-    "KnowledgeMastery", "StudyWarning", "StudentProfile",
+    "KnowledgeMastery", "StudyWarning", "StudentProfile", "CTAchievement",
     "Notification",
     "AiGenerationLog", "SysOperationLog",
     "ReportHistory",

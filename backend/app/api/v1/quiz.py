@@ -754,7 +754,7 @@ def _call_ai_judge(
         "max_score": 10.0,
     }
     try:
-        resp = httpx.post("http://127.0.0.1:8001/judge_answer", json=payload, timeout=90.0)
+        resp = httpx.post(f"{settings.AI_SERVICE_URL}/judge_answer", json=payload, timeout=90.0)
         resp.raise_for_status()
         data = resp.json()
     except (httpx.HTTPError, ValueError):
@@ -1544,7 +1544,7 @@ def _call_algo_generate(
         "reference_questions": reference_questions,
     }
     try:
-        resp = httpx.post("http://127.0.0.1:8001/generate_exercises", json=payload, timeout=180.0)
+        resp = httpx.post(f"{settings.AI_SERVICE_URL}/generate_exercises", json=payload, timeout=180.0)
         resp.raise_for_status()
         data = resp.json()
         return data.get("questions", []), data.get("meta", {}) or {}

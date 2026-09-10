@@ -31,9 +31,13 @@ class Settings(BaseSettings):
     AI_STUDENT_MAX_QUESTIONS: int = Field(default=10, ge=1, le=30)
     AI_STAFF_DAILY_REQUEST_LIMIT: int = Field(default=30, ge=1, le=1000)
     AI_SERVICE_PORT: int = Field(default=8001, ge=1, le=65535)
+    # 算法服务地址：本地开发默认 127.0.0.1:8001，Docker 部署设为 http://algorithm:8001
+    AI_SERVICE_URL: str = "http://127.0.0.1:8001"
     # 调 algorithm /agent/chat 单步 FC 的 HTTP 超时（秒）：必须大于算法侧 LLM_TIMEOUT，
     # 否则算法服务还在生成时这里会先掐断连接（曾写死 30s 导致 Agent 频繁超时）
     AI_PROXY_TIMEOUT: float = Field(default=150.0, ge=1)
+    # CORS 允许源：逗号分隔，留空或 * 表示放开所有源（Docker 部署经 nginx 同源代理时可不配）
+    CORS_ORIGINS: str = ""
 
     @model_validator(mode="after")
     def validate_secret_key(self) -> "Settings":

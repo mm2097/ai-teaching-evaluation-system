@@ -68,8 +68,9 @@ def _t_generate_exercises_wrapper(
     course_name = course.course_name if course else "未知课程"
 
     try:
+        from app.core.config import settings as _settings
         resp = httpx.post(
-            "http://127.0.0.1:8001/generate_exercises",
+            f"{_settings.AI_SERVICE_URL}/generate_exercises",
             json={
                 "course_name": course_name,
                 "course_id": cid,

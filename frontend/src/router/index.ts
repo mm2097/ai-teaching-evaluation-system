@@ -85,6 +85,12 @@ const router = createRouter({
           component: () => import('@/views/analysis/DiagnosisView.vue'),
           meta: { title: 'AI 学情分析', roles: ['teacher'] },
         },
+        {
+          path: 'analysis/ct-achievement',
+          name: 'CTAchievement',
+          component: () => import('@/views/analysis/CTAchievementView.vue'),
+          meta: { title: '课程目标达成度', roles: ['teacher'] },
+        },
         // ---- 数智化教学分析评价 ----
         {
           path: 'quiz/bank',

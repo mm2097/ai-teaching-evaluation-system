@@ -39,6 +39,7 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlmodel import Session, select
 
+from app.core.config import settings
 from app.core.database import get_session
 from app.core.operation_log import get_current_user
 from app.models import ClassInfo, Course, ReportHistory, Student, SysRole, SysUser, SysOperationLog
@@ -51,7 +52,7 @@ from app.services.report_template import (
 
 router = APIRouter()
 
-ALGO_BASE = "http://127.0.0.1:8001"
+ALGO_BASE = settings.AI_SERVICE_URL
 
 _REPORT_TYPE_SCOPE: dict[int, str] = {
     1: "class",

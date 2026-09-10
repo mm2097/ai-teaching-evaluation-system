@@ -677,13 +677,13 @@ def seed() -> None:
         session.commit()
 
         points = [
-            KnowledgePoint(module_id=1, point_name="OSI 七层模型", sort_num=1),
-            KnowledgePoint(module_id=1, point_name="TCP/IP 四层模型", sort_num=2),
-            KnowledgePoint(module_id=2, point_name="以太网帧格式", sort_num=1),
-            KnowledgePoint(module_id=2, point_name="ARP 协议", sort_num=2),
-            KnowledgePoint(module_id=3, point_name="TCP 三次握手", sort_num=1),
-            KnowledgePoint(module_id=3, point_name="TCP 四次挥手", sort_num=2),
-            KnowledgePoint(module_id=3, point_name="UDP 协议特点", sort_num=3),
+            KnowledgePoint(module_id=1, point_name="OSI 七层模型", sort_num=1, course_objectives="CT1,CT2"),
+            KnowledgePoint(module_id=1, point_name="TCP/IP 四层模型", sort_num=2, course_objectives="CT1,CT2"),
+            KnowledgePoint(module_id=2, point_name="以太网帧格式", sort_num=1, course_objectives="CT1,CT2,CT3"),
+            KnowledgePoint(module_id=2, point_name="ARP 协议", sort_num=2, course_objectives="CT1,CT2,CT3"),
+            KnowledgePoint(module_id=3, point_name="TCP 三次握手", sort_num=1, course_objectives="CT1,CT2,CT4"),
+            KnowledgePoint(module_id=3, point_name="TCP 四次挥手", sort_num=2, course_objectives="CT1,CT2,CT4"),
+            KnowledgePoint(module_id=3, point_name="UDP 协议特点", sort_num=3, course_objectives="CT1,CT2,CT4"),
             KnowledgePoint(module_id=4, point_name="进程状态转换", sort_num=1),
             KnowledgePoint(module_id=4, point_name="死锁检测与预防", sort_num=2),
             KnowledgePoint(module_id=5, point_name="页面置换算法", sort_num=1),

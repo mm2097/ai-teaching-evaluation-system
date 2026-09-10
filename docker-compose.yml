@@ -1,0 +1,92 @@
+# AI 教学评价系统 Docker Compose 编排
+# 三服务：前端(nginx:80) + 后端(fastapi:8000) + 算法服务(fastapi:8001)
+# 启动：docker compose up -d --build
+# 访问：http://localhost（前端 80 端口）
+#
+# 数据持久化：
+#   backend-data  → /app/app.db (SQLite) + /app/chroma_data (向量库)
+# 算法服务的 LLM 配置通过 .env 注入（见 .env.example）
+
+services:
+  # ===== 算法服务（AI 出题/判题/Agent） =====
+  algorithm:
+    build:
+      context: ./algorithm
+      dockerfile: Dockerfile
+    container_name: aies-algorithm
+    restart: unless-stopped
+    env_file:
+      - ./algorithm/.env
+    environment:
+      # 确保 Docker 网络内可被后端以 http://algorithm:8001 访问
+      - AI_SERVICE_PORT=8001
+      # LLM 配置（优先用 .env 文件，这里只是兜底默认值）
+      - AI_CORS_ORIGINS=http://localhost,http://backend:8000
+    ports:
+      - "8001:8001"   # 可选：调试时直接访问算法服务
+    networks:
+      - aies-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===== 后端服务（业务 API） =====
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aies-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      # Docker 网络内通过服务名访问算法服务
+      - AI_SERVICE_URL=http://algorithm:8001
+      - AI_SERVICE_PORT=8001
+      - ENVIRONMENT=production
+      # SECRET_KEY 必须配置（生产环境要求 >=32 字符），从 .env 读取
+      # CORS 默认放开所有源（经 nginx 同源代理，无需特别配置）
+      - CORS_ORIGINS=
+      # 数据库与向量库路径（指向持久化卷目录 /app/data）
+      - DATABASE_URL=sqlite:///./data/app.db
+      - CHROMA_PERSIST_PATH=./data/chroma_data
+    volumes:
+      - backend-data:/app/data
+    ports:
+      - "8000:8000"   # 可选：调试时直接访问后端
+    depends_on:
+      algorithm:
+        condition: service_healthy
+    networks:
+      - aies-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ===== 前端（Nginx 托管静态文件 + 反向代理） =====
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: aies-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - aies-net
+
+networks:
+  aies-net:
+    driver: bridge
+
+volumes:
+  backend-data:

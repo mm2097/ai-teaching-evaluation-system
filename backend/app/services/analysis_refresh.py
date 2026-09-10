@@ -28,6 +28,7 @@ from app.services.mastery import compute_student_mastery, refresh_student_master
 from app.services.profile import compute_class_slopes, compute_profile
 from app.services.tag import generate_tags
 from app.services.warning import evaluate_student, persist_warnings
+from app.services.ct_achievement import refresh_ct_achievement
 
 
 # ============================================================================
@@ -262,6 +263,12 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
             warning_results.append(wr)
 
     warnings_count = persist_warnings(session, warning_results, course_id)
+
+    # 5. 课程目标达成度（CT1-CT8，失败不阻断主流程）
+    try:
+        refresh_ct_achievement(session, course_id)
+    except Exception:
+        pass
 
     return {
         "students_processed": len(student_ids),

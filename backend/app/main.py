@@ -26,6 +26,7 @@ from app.api.v1.report import router as report_router
 from app.api.v1.vector_admin import router as vector_admin_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.assistants import router as assistants_router
+from app.api.v1.ct_achievement import router as ct_achievement_router
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.logging import setup_logging
@@ -56,10 +57,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS 允许源：优先读配置 CORS_ORIGINS（逗号分隔），留空/* 时放开所有源；
+# 本地开发默认放开，生产经 nginx 同源代理时无需特别配置。
+_cors_raw = (settings.CORS_ORIGINS or "").strip()
+if not _cors_raw or _cors_raw == "*":
+    _cors_origins: list[str] = ["*"]
+else:
+    _cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -87,3 +96,4 @@ app.include_router(report_router, prefix="/api/v1", tags=["报告生成"])
 app.include_router(vector_admin_router, prefix="/api/v1", tags=["向量索引"])
 app.include_router(admin_router, prefix="/api/v1", tags=["系统管理"])
 app.include_router(assistants_router, prefix="/api/v1", tags=["助教管理"])
+app.include_router(ct_achievement_router, prefix="/api/v1", tags=["课程目标达成度"])

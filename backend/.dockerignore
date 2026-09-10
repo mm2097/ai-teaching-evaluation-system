@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# 环境变量（含密钥，不入镜像）
+.env
+.env.*
+!.env.example
+
+# 数据库与数据（运行时挂载卷，不入镜像）
+app.db
+app.db-journal
+chroma_data/
+*.sqlite3
+
+# 测试与日志
+tests/
+*.log
+logs/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 文档
+*.md

@@ -41,8 +41,8 @@ class LLMProxy(ABC):
 class HTTPProxyLLMProxy(LLMProxy):
     """走 HTTP 调 algorithm 8001。"""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8001", timeout: float | None = None) -> None:
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, timeout: float | None = None) -> None:
+        self.base_url = (base_url or settings.AI_SERVICE_URL).rstrip("/")
         # 默认取配置 AI_PROXY_TIMEOUT：单步 LLM 调用（含工具/思考）常需 1~2 分钟，
         # 必须大于算法侧 LLM_TIMEOUT，否则会在算法服务仍在生成时被这里提前掐断
         self.timeout = timeout if timeout is not None else settings.AI_PROXY_TIMEOUT
@@ -121,7 +121,7 @@ def verify_diagnosis(
     content: str,
     course_id: int = 1,
     weak_points: list[str] | None = None,
-    base_url: str = "http://127.0.0.1:8001",
+    base_url: str | None = None,
     timeout: float = 10.0,
 ) -> dict | None:
     """调用 algorithm /verify 做小模型考核点验证(大小模型协同)。
@@ -134,9 +134,10 @@ def verify_diagnosis(
         验证报告 dict;algorithm 不可达/异常时返回 None(不阻断诊断)
     """
     import httpx
+    _base_url = (base_url or settings.AI_SERVICE_URL).rstrip("/")
     try:
         resp = httpx.post(
-            f"{base_url}/verify",
+            f"{_base_url}/verify",
             json={
                 "llm_output": content,
                 "scene": "diagnosis",

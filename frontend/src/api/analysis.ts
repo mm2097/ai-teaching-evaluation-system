@@ -285,3 +285,73 @@ export async function saveDiagnosisReport(params: {
   })
   return { id: data.id, name: data.name }
 }
+
+// ============ 课程目标达成度（CT1-CT8） ============
+
+export interface CTScoreItem {
+  score: number | null
+  level: string | null
+  confidence: 'high' | 'medium' | 'low' | null
+  desc: string
+  category: string
+}
+
+export interface CTStudentAchievement {
+  student_id: number
+  name: string
+  student_no: string
+  course_id: number
+  ct_scores: Record<string, CTScoreItem>
+  overall: { score: number; level: string }
+  weak_cts: string[]
+  strong_cts: string[]
+  radar: Record<string, number | null>
+}
+
+export interface CTClassAchievement {
+  course_id: number
+  student_count: number
+  ct_avg: Record<string, number>
+  ct_std: Record<string, number>
+  ct_pass_rate: Record<string, number>
+  weak_cts_class: string[]
+  students: {
+    student_id: number
+    name: string
+    ct_scores: Record<string, number | null>
+    overall: number
+    overall_level: string
+    weak_cts: string[]
+  }[]
+}
+
+/** CT1-CT8 定义 + 章节→CT 矩阵 */
+export async function fetchCTDefinitions() {
+  const { data } = await request.get('/v1/ct-achievement/definitions')
+  return data
+}
+
+/** 单学生 CT 达成度画像 */
+export async function fetchStudentCT(studentId: number, courseId: number): Promise<CTStudentAchievement | null> {
+  try {
+    const { data } = await request.get('/v1/ct-achievement/student', {
+      params: { student_id: studentId, course_id: courseId },
+    })
+    return data
+  } catch {
+    return null
+  }
+}
+
+/** 班级 CT 达成度总览 */
+export async function fetchClassCT(courseId: number, classId?: number): Promise<CTClassAchievement | null> {
+  try {
+    const { data } = await request.get('/v1/ct-achievement/class', {
+      params: { course_id: courseId, class_id: classId ?? 0 },
+    })
+    return data
+  } catch {
+    return null
+  }
+}
+

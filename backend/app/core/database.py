@@ -34,6 +34,8 @@ def init_db() -> None:
     _rename_homework_index()
     _migrate_evaluation_levels()
     _migrate_student_answers()
+    # course_objectives 列必须在读 KnowledgePoint 的迁移之前补建
+    _migrate_knowledge_point_ct()
     _migrate_split_combined_knowledge_points()
     _migrate_student_answer_verify()
 
@@ -641,6 +643,10 @@ def _migrate_legacy_tables() -> None:
         },
         "exam_batch": {
             "semester": "ALTER TABLE exam_batch ADD COLUMN semester VARCHAR(32) NOT NULL DEFAULT ''",
+            # exam_time 是非空字段，旧库缺该列会导致查询 ExamBatch 报 OperationalError。
+            # SQLite 不允许 ADD COLUMN 用 CURRENT_TIMESTAMP 等非常量默认值，
+            # 先用固定时间戳建列，再在 _backfill_exam_time 里 UPDATE 为当前时间。
+            "exam_time": "ALTER TABLE exam_batch ADD COLUMN exam_time DATETIME NOT NULL DEFAULT '2024-01-01 00:00:00'",
         },
         "score_record": {
             "source_data": "ALTER TABLE score_record ADD COLUMN source_data TEXT",
@@ -664,6 +670,8 @@ def _migrate_legacy_tables() -> None:
                     connection.execute(text(statement))
         if "class_info" in table_names:
             _backfill_class_dimensions(connection)
+        if "exam_batch" in table_names:
+            _backfill_exam_time(connection)
 
 
 def _backfill_class_dimensions(connection) -> None:
@@ -690,6 +698,19 @@ def _backfill_class_dimensions(connection) -> None:
     ))
 
 
+def _backfill_exam_time(connection) -> None:
+    """回填 exam_batch.exam_time：将占位默认值更新为当前时间（旧行无单独考核时间）。
+
+    建列时用了固定 '2024-01-01 00:00:00' 占位（SQLite 不允许非常量默认），
+    这里统一刷成迁移执行时刻，与模型 default_factory=datetime.now 语义一致。
+    幂等：只更新仍是占位值的行，避免覆盖已有真实考核时间。
+    """
+    connection.execute(text(
+        "UPDATE exam_batch SET exam_time = CURRENT_TIMESTAMP "
+        "WHERE exam_time = '2024-01-01 00:00:00'"
+    ))
+
+
 def get_session() -> Generator[Session, None, None]:
     """FastAPI dependency: yield a database session."""
     with Session(engine) as session:
@@ -706,4 +727,21 @@ def _migrate_student_answer_verify() -> None:
         if "verify_report" not in columns:
             connection.execute(text(
                 "ALTER TABLE student_answer_record ADD COLUMN verify_report TEXT"
+            ))
+
+
+def _migrate_knowledge_point_ct() -> None:
+    """knowledge_point 补建 course_objectives 列(课程目标映射,幂等)。
+
+    旧库的 knowledge_point 表没有 course_objectives 列，CT 达成度归因依赖它。
+    与 _migrate_student_answer_verify 同模式：inspect 检查列存在性，缺则补建。
+    """
+    with engine.begin() as connection:
+        inspector = inspect(connection)
+        if "knowledge_point" not in inspector.get_table_names():
+            return
+        columns = {column["name"] for column in inspector.get_columns("knowledge_point")}
+        if "course_objectives" not in columns:
+            connection.execute(text(
+                "ALTER TABLE knowledge_point ADD COLUMN course_objectives VARCHAR(64)"
             ))

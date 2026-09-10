@@ -17,7 +17,7 @@ def _ai_service_status() -> str:
     """Probe the algorithm service without blocking the admin page for long."""
     try:
         response = httpx.get(
-            f"http://127.0.0.1:{settings.AI_SERVICE_PORT}/health",
+            f"{settings.AI_SERVICE_URL}/health",
             timeout=0.6,
         )
         return "online" if response.is_success else "degraded"

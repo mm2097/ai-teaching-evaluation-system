@@ -112,22 +112,25 @@ def _batch_scores_by_keyword(
     course_id: int,
     keyword: str,
     exclude: tuple[str, ...] = (),
+    semester: str | None = None,
 ) -> float | None:
     """按批次名关键字取该生成绩均值。
 
     命中规则：batch_name 含 keyword 且不含 exclude 中任一关键字。
     数据源优先级：各题得分表（CourseTestDetail.total_score）
     → 单项成绩（IndividualScore.score）→ 旧成绩表（ScoreRecord.score）。
+    semester 非空时仅统计该学期（如 2025-2026-1）的批次，避免跨学期平均。
     无数据返回 None。
     """
     def _hit(name: str | None) -> bool:
         n = name or ""
         return keyword in n and not any(k in n for k in exclude)
 
+    batch_stmt = select(ExamBatch).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
     matched = [
-        b for b in session.exec(
-            select(ExamBatch).where(ExamBatch.course_id == course_id)
-        ).all()
+        b for b in session.exec(batch_stmt).all()
         if _hit(b.batch_name)
     ]
     if not matched:
@@ -158,11 +161,17 @@ def _batch_scores_by_keyword(
     return sum(vals) / len(vals) if vals else None
 
 
-def _has_attendance_data(session: Session, student_id: int, course_id: int) -> bool:
-    """判断该生在该课程是否存在考勤数据（新表 AttendanceSheet 或旧表）。"""
-    batch_ids = session.exec(
-        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-    ).all()
+def _has_attendance_data(
+    session: Session, student_id: int, course_id: int, semester: str | None = None,
+) -> bool:
+    """判断该生在该课程是否存在考勤数据（新表 AttendanceSheet 或旧表）。
+
+    semester 非空时新表仅查该学期批次；旧表 AttendanceRecord 无学期字段，不参与过滤。
+    """
+    batch_stmt = select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+    batch_ids = session.exec(batch_stmt).all()
     has_sheet = session.exec(
         select(AttendanceSheet.score_id).where(
             AttendanceSheet.student_id == student_id,
@@ -181,10 +190,12 @@ def _has_attendance_data(session: Session, student_id: int, course_id: int) -> b
 
 
 def _academic_part_score(
-    session: Session, student_id: int, course_id: int, part: str
+    session: Session, student_id: int, course_id: int, part: str,
+    semester: str | None = None,
 ) -> float | None:
     """学业水平单个组成部分的 0-100 得分；无数据返回 None（由配比归一化处理）。
 
+    semester 非空时仅统计该学期批次，避免同课程跨学期数据混算。
     组成部分（按批次/成绩名称关键字识别）：
       - discussion 小班讨论：成绩名称含"讨论"（单项成绩）
       - midterm    期中考试：批次名含"期中"（各题得分表优先）
@@ -195,25 +206,26 @@ def _academic_part_score(
     """
     part = (part or "").strip().lower()
     if part == "discussion":
-        return _batch_scores_by_keyword(session, student_id, course_id, "讨论")
+        return _batch_scores_by_keyword(session, student_id, course_id, "讨论", semester=semester)
     if part == "midterm":
         return _batch_scores_by_keyword(
-            session, student_id, course_id, "期中", exclude=("期末",)
+            session, student_id, course_id, "期中", exclude=("期末",), semester=semester
         )
     if part == "final":
-        return _batch_scores_by_keyword(session, student_id, course_id, "期末")
+        return _batch_scores_by_keyword(session, student_id, course_id, "期末", semester=semester)
     if part == "attendance":
-        if not _has_attendance_data(session, student_id, course_id):
+        if not _has_attendance_data(session, student_id, course_id, semester=semester):
             return None
-        return round(_attendance_rate(session, student_id, course_id) * 100.0, 1)
+        return round(_attendance_rate(session, student_id, course_id, semester=semester) * 100.0, 1)
     if part == "homework":
-        return _batch_scores_by_keyword(session, student_id, course_id, "作业")
+        return _batch_scores_by_keyword(session, student_id, course_id, "作业", semester=semester)
     if part == "other":
         # 其他（实验等）：批次名不含 讨论/期中/期末/作业 的成绩
+        batch_stmt = select(ExamBatch).where(ExamBatch.course_id == course_id)
+        if semester:
+            batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
         others = [
-            b for b in session.exec(
-                select(ExamBatch).where(ExamBatch.course_id == course_id)
-            ).all()
+            b for b in session.exec(batch_stmt).all()
             if not any(k in (b.batch_name or "") for k in ("讨论", "期中", "期末", "作业"))
         ]
         if not others:
@@ -240,10 +252,12 @@ def _academic_part_score(
 def compute_academic_score(
     session: Session, student_id: int, course_id: int,
     parts: dict[str, float] | None = None,
+    semester: str | None = None,
 ) -> float:
     """学业水平得分 = Σ(组成部分得分 × 配比)，配比合计固定 100%（教师可调）。
 
     - 配比来源：评价配置（load_academic_parts），未配置时用默认配比
+    - semester 非空时各组成部分仅统计该学期数据
     - 某部分无数据时，其配比按比例分摊到有数据的部分（归一化）
     - 全部无数据时返回 0 分，并通过 ProfileScores.data_availability 标记为无数据
     """
@@ -254,7 +268,7 @@ def compute_academic_score(
     for part, weight in parts.items():
         if weight <= 0:
             continue
-        value = _academic_part_score(session, student_id, course_id, part)
+        value = _academic_part_score(session, student_id, course_id, part, semester=semester)
         if value is not None:
             scored[part] = float(value)
 
@@ -270,17 +284,22 @@ def compute_academic_score(
 
 # ===== D03 学习态度 =====
 
-def _attendance_rate(session: Session, student_id: int, course_id: int) -> float:
+def _attendance_rate(
+    session: Session, student_id: int, course_id: int, semester: str | None = None,
+) -> float:
     """到课率：优先读新表 AttendanceSheet（上传的考勤数据），旧表 AttendanceRecord 兜底。
 
+    - semester 非空时仅统计该学期（如 2025-2026-1）考勤批次的到课率，
+      避免同课程多学期考勤被平均
     - 新表存在记录时，取到课率（attendance_rate）平均值
-    - 旧表按状态权重：status=0 计为出勤，迟到/早退/请假按半扣
+    - 旧表按状态权重：status=0 计为出勤，迟到/早退/请假按半扣（旧表无学期字段，不过滤）
     - 无任何数据时返回 0；上层同时标记该维度为无数据
     """
     # 新表：AttendanceSheet（含导入时计算的到课率）
-    batch_ids = session.exec(
-        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-    ).all()
+    batch_stmt = select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+    batch_ids = session.exec(batch_stmt).all()
     sheet_rates = session.exec(
         select(AttendanceSheet.attendance_rate).where(
             AttendanceSheet.student_id == student_id,
@@ -306,15 +325,16 @@ def _attendance_rate(session: Session, student_id: int, course_id: int) -> float
 
 
 def _participation_rate(
-    session: Session, student_id: int, course_id: int
+    session: Session, student_id: int, course_id: int, semester: str | None = None,
 ) -> tuple[float, int]:
     """课堂参与度：读 ParticipationSheet（上传的课堂参与数据）。
 
-    返回 (参与度 0-1, 参与课堂次数)。无数据时返回 (0, 0)。
+    semester 非空时仅统计该学期批次。返回 (参与度 0-1, 参与课堂次数)。无数据时返回 (0, 0)。
     """
-    batch_ids = session.exec(
-        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-    ).all()
+    batch_stmt = select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+    batch_ids = session.exec(batch_stmt).all()
     sheets = session.exec(
         select(ParticipationSheet).where(
             ParticipationSheet.student_id == student_id,
@@ -333,10 +353,12 @@ def _participation_rate(
 
 
 def _interaction_score(
-    session: Session, student_id: int, course_id: int
+    session: Session, student_id: int, course_id: int, semester: str | None = None,
 ) -> tuple[float, int]:
     """互动得分：优先用教师录入的课堂互动记录（InteractionRecord，type!=3 平均分）；
     无互动记录时回退课堂参与度（ParticipationSheet，0-1 → 0-100）。
+
+    InteractionRecord 无学期字段不参与过滤；参与度回退路径按学期过滤批次。
     """
     records = session.exec(
         select(InteractionRecord).where(
@@ -348,7 +370,7 @@ def _interaction_score(
     if records:
         avg = sum(float(r.score or 0.0) for r in records) / len(records)
         return max(0.0, min(100.0, avg)), len(records)
-    rate, count = _participation_rate(session, student_id, course_id)
+    rate, count = _participation_rate(session, student_id, course_id, semester=semester)
     return rate * 100.0, count
 
 
@@ -428,6 +450,7 @@ def _attitude_component_weights(
 def compute_attitude_score(
     session: Session, student_id: int, course_id: int,
     w_attendance: float | None = None, w_interaction: float | None = None, w_homework: float | None = None,
+    semester: str | None = None,
 ) -> tuple[float, dict]:
     """D03 学习态度得分 = w_attendance×到课率 + w_interaction×课堂参与度 + w_homework×测试提交率。
 
@@ -435,17 +458,18 @@ def compute_attitude_score(
     按指标名归一化）；无配置时回退 0.5/0.5/0.0。这与综合评价引擎
     _configured_dimension_scores（按 score_rule.type 加权）对同一配置推导出一致权重，
     保证学情画像与综合评价的态度分一致。调用方也可显式传入权重覆盖。
+    semester 非空时到课率/参与度仅统计该学期数据。
     """
     if w_attendance is None or w_interaction is None or w_homework is None:
         w_attendance, w_interaction, w_homework = _attitude_component_weights(
             session, course_id, 0.5, 0.5, 0.0
         )
 
-    att_rate = _attendance_rate(session, student_id, course_id)
+    att_rate = _attendance_rate(session, student_id, course_id, semester=semester)
     att_score = att_rate * 100.0
 
-    int_score, int_count = _interaction_score(session, student_id, course_id)
-    part_rate, _ = _participation_rate(session, student_id, course_id)
+    int_score, int_count = _interaction_score(session, student_id, course_id, semester=semester)
+    part_rate, _ = _participation_rate(session, student_id, course_id, semester=semester)
     hw_rate, hw_submitted, hw_assigned = _homework_progress(
         session, student_id, course_id
     )
@@ -514,20 +538,27 @@ def compute_progress_score(
 def compute_profile(
     session: Session, student_id: int, course_id: int,
     class_slopes: list[float] | None = None,
+    semester: str | None = None,
 ) -> ProfileScores:
-    """三维度同时计算。class_slopes 供批量计算复用（见 compute_class_slopes）。"""
+    """三维度同时计算。class_slopes 供批量计算复用（见 compute_class_slopes）。
+
+    semester 非空（如 2025-2026-1）时，学业/态度各子项仅统计该学期的批次数据，
+    避免同课程多学期数据被跨学期平均；D04 进步为成绩时间序列趋势，按课程整体计算。
+    """
     parts = load_academic_parts(session, course_id)
     academic_values = [
-        _academic_part_score(session, student_id, course_id, part)
+        _academic_part_score(session, student_id, course_id, part, semester=semester)
         for part, weight in parts.items()
         if weight > 0
     ]
-    academic = compute_academic_score(session, student_id, course_id, parts=parts)
-    attitude, detail = compute_attitude_score(session, student_id, course_id)
+    academic = compute_academic_score(session, student_id, course_id, parts=parts, semester=semester)
+    attitude, detail = compute_attitude_score(session, student_id, course_id, semester=semester)
     progress = compute_progress_score(session, student_id, course_id, class_slopes)
-    batch_ids = session.exec(
-        select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
-    ).all()
+    # 学期相关可用性判断使用学期过滤后的批次；进步维度可用性保持课程整体口径
+    batch_stmt = select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+    if semester:
+        batch_stmt = batch_stmt.where(ExamBatch.semester == semester)
+    batch_ids = session.exec(batch_stmt).all()
     has_participation = session.exec(
         select(ParticipationSheet.score_id).where(
             ParticipationSheet.student_id == student_id,
@@ -576,7 +607,7 @@ def compute_profile(
         w_attendance=detail["w_attendance"],
         w_interaction=detail["w_interaction"],
         w_homework=detail["w_homework"],
-        attendance_available=_has_attendance_data(session, student_id, course_id),
+        attendance_available=_has_attendance_data(session, student_id, course_id, semester=semester),
         interaction_available=has_participation or has_interaction,
         homework_available=has_homework_submission,
         homework_assigned_count=detail["homework_assigned_count"],
@@ -584,7 +615,7 @@ def compute_profile(
         data_availability={
             "academic": any(value is not None for value in academic_values),
             "attitude": (
-                _has_attendance_data(session, student_id, course_id)
+                _has_attendance_data(session, student_id, course_id, semester=semester)
                 or has_participation
                 or has_interaction
                 or has_homework_submission

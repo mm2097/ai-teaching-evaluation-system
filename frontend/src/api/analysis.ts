@@ -55,13 +55,15 @@ export async function fetchStudentProfile(query: AnalysisQuery): Promise<Student
   if (!query.targetId) return null
   try {
     // 学生视角 → student_id；班级视角 → class_id（后端返回班级平均画像）
-    const params: Record<string, number> = { course_id: query.courseId! }
+    const params: Record<string, number | string | undefined> = { course_id: query.courseId! }
     if (query.targetType === 'class') {
       params.class_id = query.targetId
       params.student_id = query.targetId
     } else {
       params.student_id = query.targetId
     }
+    // 学期过滤：仅统计所选学期数据，避免同课程多学期考勤等被平均
+    if (query.semesterCode) params.semester = query.semesterCode
     const res = await request.get('/v1/analysis/profile', { params })
     return res.data || null
   } catch {

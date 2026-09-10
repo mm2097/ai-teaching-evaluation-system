@@ -1,9 +1,11 @@
-# status.ps1 — 查看三服务运行状态
-. "$PSScriptRoot\paths.ps1"
+# status.ps1 - Check three services status
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
+. "$ScriptDir\paths.ps1"
 $cfg = $paths
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  AI 教学评价系统 - 服务状态" -ForegroundColor Cyan
+Write-Host "  Service Status" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -17,52 +19,50 @@ function Test-Port {
     } catch { return $false }
 }
 
-function Get-ServiceStatus {
+function Show-Status {
     param($Name, $Port, $HealthUrl)
     $portOpen = Test-Port -Port $Port
     $healthOk = $false
-    $healthDetail = ""
+    $detail = ""
     if ($portOpen -and $HealthUrl) {
         try {
             $resp = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 3
             $healthOk = ($resp.StatusCode -eq 200)
-            $healthDetail = $resp.Content.Substring(0, [Math]::Min(80, $resp.Content.Length))
+            $detail = $resp.Content.Substring(0, [Math]::Min(80, $resp.Content.Length))
         } catch {
-            $healthDetail = $_.Exception.Message.Substring(0, [Math]::Min(60, $_.Exception.Message.Length))
+            $detail = $_.Exception.Message.Substring(0, [Math]::Min(60, $_.Exception.Message.Length))
         }
     }
     if ($healthOk) {
-        Write-Host "  [$Name] 运行中 ✓" -ForegroundColor Green
-        Write-Host "    端口 $Port 开放,健康检查通过" -ForegroundColor Gray
-        Write-Host "    响应: $healthDetail" -ForegroundColor DarkGray
+        Write-Host "  [$Name] RUNNING OK" -ForegroundColor Green
+        Write-Host "    port $Port open, health check passed" -ForegroundColor Gray
+        Write-Host "    resp: $detail" -ForegroundColor DarkGray
     } elseif ($portOpen) {
-        Write-Host "  [$Name] 端口开放但健康检查未过 ?" -ForegroundColor Yellow
-        Write-Host "    端口 $Port 开放,但接口未响应" -ForegroundColor Gray
-        if ($healthDetail) { Write-Host "    $healthDetail" -ForegroundColor DarkGray }
+        Write-Host "  [$Name] PORT OPEN, health check failed" -ForegroundColor Yellow
+        if ($detail) { Write-Host "    $detail" -ForegroundColor DarkGray }
     } else {
-        Write-Host "  [$Name] 未运行 ✗" -ForegroundColor Red
-        Write-Host "    端口 $Port 未开放" -ForegroundColor Gray
+        Write-Host "  [$Name] NOT RUNNING" -ForegroundColor Red
+        Write-Host "    port $Port closed" -ForegroundColor Gray
     }
     Write-Host ""
 }
 
-Get-ServiceStatus -Name "算法服务 (8001)" -Port 8001 -HealthUrl "http://127.0.0.1:8001/health"
-Get-ServiceStatus -Name "后端服务 (8000)" -Port 8000 -HealthUrl "http://127.0.0.1:8000/api/health"
-Get-ServiceStatus -Name "前端 nginx (3000)" -Port 3000 -HealthUrl "http://127.0.0.1:3000"
+Show-Status -Name "Algorithm (8001)" -Port 8001 -HealthUrl "http://127.0.0.1:8001/health"
+Show-Status -Name "Backend    (8000)" -Port 8000 -HealthUrl "http://127.0.0.1:8000/api/health"
+Show-Status -Name "Frontend   (3000)" -Port 3000 -HealthUrl "http://127.0.0.1:3000"
 
-Write-Host "进程列表:"
-Write-Host "  ---"
-$procs = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='nginx.exe'" |
+Write-Host "Processes:"
+$procs = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='nginx.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*$($cfg.MfqRoot)*" -or $_.CommandLine -like "*uvicorn*" -or $_.Name -eq "nginx.exe" }
 if ($procs) {
     foreach ($p in $procs) {
-        $cmd = if ($p.CommandLine.Length -gt 80) { $p.CommandLine.Substring(0, 80) + "..." } else { $p.CommandLine }
+        $cmd = if ($p.CommandLine -and $p.CommandLine.Length -gt 80) { $p.CommandLine.Substring(0, 80) + "..." } else { $p.CommandLine }
         Write-Host "  PID $($p.ProcessId)  $($p.Name)" -ForegroundColor Gray
         Write-Host "    $cmd" -ForegroundColor DarkGray
     }
 } else {
-    Write-Host "  (无相关进程)" -ForegroundColor Gray
+    Write-Host "  (none)" -ForegroundColor Gray
 }
 Write-Host ""
-Write-Host "日志目录: $($cfg.LogsDir)"
+Write-Host "Logs: $($cfg.LogsDir)"
 Write-Host ""

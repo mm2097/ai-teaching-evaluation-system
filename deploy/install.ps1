@@ -1,156 +1,178 @@
-# install.ps1 — 环境安装脚本(仅当前用户,不需要管理员)
-# 在服务器上运行:cd deploy; Set-ExecutionPolicy Bypass -Scope Process -Force; .\install.ps1
+# install.ps1 - Environment setup (current user only, no admin needed)
+# Run: cd deploy; Set-ExecutionPolicy Bypass -Scope Process -Force; .\install.ps1
 
-$ErrorActionPreference = "Stop"
+# Continue on errors - native tools (pip/npm) write warnings to stderr which
+# would abort the script under "Stop". We handle real failures explicitly.
+$ErrorActionPreference = "Continue"
+
+# --- Force TLS 1.2 (Win Server defaults to TLS 1.0, causes HTTPS hangs) ---
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# --- Download helper ---
+function Download-File {
+    param($Url, $OutFile, $TimeoutSec = 120)
+    Write-Host "    GET $Url"
+    Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec $TimeoutSec
+    if (-not (Test-Path $OutFile)) { throw "Download failed (no file): $Url" }
+    $sizeMB = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
+    Write-Host "    done ($sizeMB MB)"
+}
+
+# --- Run native command via cmd /c to isolate stderr from PS error stream ---
+function Invoke-Native {
+    param([string]$CmdLine)
+    cmd /c "$CmdLine 2>&1" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Command failed (exit $LASTEXITCODE): $CmdLine" }
+}
+
+# --- Path resolution ---
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) { $ScriptDir = $PSScriptRoot }
+if (-not $ScriptDir) { $ScriptDir = (Get-Location).Path }
 $MfqRoot = "C:\mfq"
-$ProjectRoot = (Resolve-Path "$PSScriptRoot\..").Path
+$ProjectRoot = Split-Path -Parent $ScriptDir
 
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  AI 教学评价系统 - 环境安装" -ForegroundColor Cyan
+Write-Host "  AI Teaching Eval System - Install" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "安装目录: $MfqRoot"
-Write-Host "项目目录: $ProjectRoot"
+Write-Host "Install dir : $MfqRoot"
+Write-Host "Project dir : $ProjectRoot"
 Write-Host ""
 
-# 创建目录
 New-Item -ItemType Directory -Force -Path $MfqRoot | Out-Null
 New-Item -ItemType Directory -Force -Path "$MfqRoot\logs" | Out-Null
 New-Item -ItemType Directory -Force -Path "$MfqRoot\logs\nginx" | Out-Null
 New-Item -ItemType Directory -Force -Path "$MfqRoot\temp" | Out-Null
 
 # ============================================================
-# 1. 安装 Python 3.11(embeddable 绿色版,仅当前用户)
+# 1. Python 3.11 (embeddable)
 # ============================================================
-# embed 版没有 pip,需用 get-pip.py 手动装;装完和正式版功能一致
 $PythonDir = "$MfqRoot\Python311"
-if (Test-Path "$PythonDir\python.exe" -and (Test-Path "$PythonDir\Scripts\pip.exe")) {
-    Write-Host "[1/5] Python 3.11 已存在,跳过" -ForegroundColor Green
+$PythonExe = "$PythonDir\python.exe"
+if ((Test-Path $PythonExe) -and (Test-Path "$PythonDir\Scripts\pip.exe")) {
+    Write-Host "[1/5] Python 3.11 exists, skip" -ForegroundColor Green
 } else {
-    Write-Host "[1/5] 安装 Python 3.11..." -ForegroundColor Yellow
-    $pyUrl = "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+    Write-Host "[1/5] Installing Python 3.11..." -ForegroundColor Yellow
+    $pyUrl = "https://mirrors.huaweicloud.com/python/3.11.9/python-3.11.9-embed-amd64.zip"
     $pyZip = "$MfqRoot\temp\python.zip"
-    Write-Host "  下载 Python embeddable(约 11MB)..."
-    Invoke-WebRequest -Uri $pyUrl -OutFile $pyZip -UseBasicParsing
-    Write-Host "  解压中..."
+    Write-Host "  Downloading Python embeddable (~11MB)..."
+    Download-File -Url $pyUrl -OutFile $pyZip -TimeoutSec 120
+    Write-Host "  Extracting..."
     Expand-Archive -Path $pyZip -DestinationPath $PythonDir -Force
     Remove-Item $pyZip -Force
 
-    # embed 版的 python311._pth 默认禁用了 site-packages,要改开才能装 pip
+    # Enable site-packages in embed _pth file (required for pip)
     $pthFile = Get-ChildItem "$PythonDir\python*._pth" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pthFile) {
         $content = Get-Content $pthFile.FullName
-        # 取消 #import site 的注释
         $content = $content -replace '^#\s*import site', 'import site'
         $content | Set-Content $pthFile.FullName -Encoding ascii
     }
 
-    # 装 pip
-    Write-Host "  安装 pip..."
-    $getPipUrl = "https://bootstrap.pypa.io/get-pip.py"
+    # Install pip
+    Write-Host "  Installing pip..."
+    $getPipUrl = "https://mirrors.aliyun.com/pypi/get-pip.py"
     $getPip = "$MfqRoot\temp\get-pip.py"
-    Invoke-WebRequest -Uri $getPipUrl -OutFile $getPip -UseBasicParsing
-    & "$PythonDir\python.exe" $getPip 2>&1 | Out-Null
+    Download-File -Url $getPipUrl -OutFile $getPip -TimeoutSec 60
+    Invoke-Native "`"$PythonExe`" `"$getPip`" --quiet"
     Remove-Item $getPip -Force
-    & "$PythonDir\python.exe" -m pip install --upgrade pip 2>&1 | Out-Null
-    Write-Host "  Python 安装完成: $(& "$PythonDir\python.exe" --version)" -ForegroundColor Green
+    Invoke-Native "`"$PythonExe`" -m pip install --upgrade pip --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple"
+    Write-Host "  Python done" -ForegroundColor Green
 }
 
 # ============================================================
-# 2. 安装 Node.js 22(绿色版,仅当前用户)
+# 2. Node.js 22 (portable)
 # ============================================================
 $NodeDir = "$MfqRoot\nodejs"
-if (Test-Path "$NodeDir\node.exe") {
-    Write-Host "[2/5] Node.js 已存在,跳过" -ForegroundColor Green
+$NodeExe = "$NodeDir\node.exe"
+$NpmCmd = "$NodeDir\npm.cmd"
+if (Test-Path $NodeExe) {
+    Write-Host "[2/5] Node.js exists, skip" -ForegroundColor Green
 } else {
-    Write-Host "[2/5] 安装 Node.js 22..." -ForegroundColor Yellow
-    $nodeUrl = "https://nodejs.org/dist/v22.18.0/node-v22.18.0-win-x64.zip"
+    Write-Host "[2/5] Installing Node.js 22..." -ForegroundColor Yellow
+    $nodeUrl = "https://mirrors.huaweicloud.com/nodejs/v22.18.0/node-v22.18.0-win-x64.zip"
     $nodeZip = "$MfqRoot\temp\node.zip"
-    Write-Host "  下载中(约 30MB)..."
-    Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip -UseBasicParsing
-    Write-Host "  解压中..."
+    Write-Host "  Downloading (~30MB)..."
+    Download-File -Url $nodeUrl -OutFile $nodeZip -TimeoutSec 180
+    Write-Host "  Extracting..."
     Expand-Archive -Path $nodeZip -DestinationPath "$MfqRoot\temp\node-extract" -Force
-    # 解压后是 node-v22.18.0-win-x64 目录,移动到 nodejs
     $extracted = Get-ChildItem "$MfqRoot\temp\node-extract" -Directory | Select-Object -First 1
     Move-Item $extracted.FullName $NodeDir -Force
     Remove-Item "$MfqRoot\temp\node-extract" -Recurse -Force
     Remove-Item $nodeZip -Force
-    # npm 配置:仅当前用户
-    & "$NodeDir\npm.cmd" config set cache "$MfqRoot\npm-cache" --global 2>&1 | Out-Null
-    Write-Host "  Node.js 安装完成: $(& "$NodeDir\node.exe" --version)" -ForegroundColor Green
+    # npm config: current user + China mirror
+    cmd /c "`"$NpmCmd`" config set cache `"$MfqRoot\npm-cache`" --global 2>&1" | Out-Null
+    cmd /c "`"$NpmCmd`" config set registry https://registry.npmmirror.com --global 2>&1" | Out-Null
+    Write-Host "  Node.js done" -ForegroundColor Green
 }
 
 # ============================================================
-# 3. 安装 nginx(绿色版)
+# 3. nginx (portable)
 # ============================================================
 $NginxDir = "$MfqRoot\nginx"
 if (Test-Path "$NginxDir\nginx.exe") {
-    Write-Host "[3/5] nginx 已存在,跳过" -ForegroundColor Green
+    Write-Host "[3/5] nginx exists, skip" -ForegroundColor Green
 } else {
-    Write-Host "[3/5] 安装 nginx..." -ForegroundColor Yellow
-    $nginxUrl = "https://nginx.org/download/nginx-1.27.5.zip"
+    Write-Host "[3/5] Installing nginx..." -ForegroundColor Yellow
+    $nginxUrl = "https://mirrors.huaweicloud.com/nginx/nginx-1.27.5.zip"
     $nginxZip = "$MfqRoot\temp\nginx.zip"
-    Write-Host "  下载中..."
+    Write-Host "  Downloading..."
     try {
-        Invoke-WebRequest -Uri $nginxUrl -OutFile $nginxZip -UseBasicParsing
+        Download-File -Url $nginxUrl -OutFile $nginxZip -TimeoutSec 120
     } catch {
-        # 备用地址
-        $nginxUrl = "https://nginx.org/download/nginx-1.26.3.zip"
-        Invoke-WebRequest -Uri $nginxUrl -OutFile $nginxZip -UseBasicParsing
+        Write-Host "    primary failed, trying fallback..." -ForegroundColor Yellow
+        $nginxUrl = "https://mirrors.huaweicloud.com/nginx/nginx-1.26.3.zip"
+        Download-File -Url $nginxUrl -OutFile $nginxZip -TimeoutSec 120
     }
     Expand-Archive -Path $nginxZip -DestinationPath "$MfqRoot\temp\nginx-extract" -Force
     $extracted = Get-ChildItem "$MfqRoot\temp\nginx-extract" -Directory | Select-Object -First 1
     Move-Item $extracted.FullName $NginxDir -Force
     Remove-Item "$MfqRoot\temp\nginx-extract" -Recurse -Force
     Remove-Item $nginxZip -Force
-    Write-Host "  nginx 安装完成" -ForegroundColor Green
+    Write-Host "  nginx done" -ForegroundColor Green
 }
 
 # ============================================================
-# 4. 安装 Python 依赖(后端 + 算法服务)
+# 4. Python dependencies (Tsinghua mirror)
 # ============================================================
-$PythonExe = "$MfqRoot\Python311\python.exe"
-Write-Host "[4/5] 安装 Python 依赖..." -ForegroundColor Yellow
+$pipIndex = "https://pypi.tuna.tsinghua.edu.cn/simple"
+Write-Host "[4/5] Installing Python deps..." -ForegroundColor Yellow
 
-Write-Host "  后端依赖..."
+Write-Host "  Backend deps (chromadb/reportlab etc, 3-5 min)..."
 Push-Location "$ProjectRoot\backend"
-& $PythonExe -m pip install --upgrade pip 2>&1 | Out-Null
-& $PythonExe -m pip install -r requirements.txt 2>&1 | Out-Null
+Invoke-Native "`"$PythonExe`" -m pip install -r requirements.txt -i $pipIndex --quiet"
 Pop-Location
 
-Write-Host "  算法服务依赖..."
+Write-Host "  Algorithm deps..."
 Push-Location "$ProjectRoot\algorithm"
-& $PythonExe -m pip install -r requirements.txt 2>&1 | Out-Null
+Invoke-Native "`"$PythonExe`" -m pip install -r requirements.txt -i $pipIndex --quiet"
 Pop-Location
-Write-Host "  Python 依赖安装完成" -ForegroundColor Green
+Write-Host "  Python deps done" -ForegroundColor Green
 
 # ============================================================
-# 5. 构建前端
+# 5. Build frontend
 # ============================================================
-$NodeExe = "$MfqRoot\nodejs\node.exe"
-$NpmCmd = "$MfqRoot\nodejs\npm.cmd"
-Write-Host "[5/5] 构建前端..." -ForegroundColor Yellow
-
+Write-Host "[5/5] Building frontend..." -ForegroundColor Yellow
 Push-Location "$ProjectRoot\frontend"
-Write-Host "  安装 npm 依赖(首次较慢)..."
-& $NpmCmd install 2>&1 | Out-Null
-Write-Host "  构建生产版本..."
-& $NpmCmd run build-only 2>&1 | Out-Null
+Write-Host "  npm install (2-3 min)..."
+cmd /c "`"$NpmCmd`" install --registry=https://registry.npmmirror.com 2>&1" | Select-Object -Last 5
+if ($LASTEXITCODE -ne 0) { Write-Host "  [WARN] npm install had errors" -ForegroundColor Yellow }
+Write-Host "  Building production bundle..."
+cmd /c "`"$NpmCmd`" run build-only 2>&1" | Select-Object -Last 5
+if ($LASTEXITCODE -ne 0) { Write-Host "  [WARN] build had errors" -ForegroundColor Yellow }
 Pop-Location
 
 if (Test-Path "$ProjectRoot\frontend\dist\index.html") {
-    Write-Host "  前端构建完成" -ForegroundColor Green
+    Write-Host "  Frontend build done" -ForegroundColor Green
 } else {
-    Write-Host "  [警告] 前端构建可能失败,请检查 dist 目录" -ForegroundColor Red
-    Write-Host "  可手动执行: cd frontend; npm run build-only" -ForegroundColor Yellow
+    Write-Host "  [WARN] Frontend build may have failed, check dist/" -ForegroundColor Red
 }
 
 # ============================================================
-# 6. 生成 nginx 配置
+# 6. Generate nginx config
 # ============================================================
-Write-Host "生成 nginx 配置..." -ForegroundColor Yellow
-$nginxBin = "$NginxDir\nginx.exe"
+Write-Host "Generating nginx config..." -ForegroundColor Yellow
 $nginxConfDir = "$NginxDir\conf"
-$nginxConf = "$nginxConfDir\aies.conf"
 $distPath = "$ProjectRoot\frontend\dist".Replace("\", "/")
 
 $confContent = @"
@@ -167,7 +189,6 @@ http {
     keepalive_timeout  65;
     client_max_body_size 20m;
 
-    # gzip 压缩
     gzip on;
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
     gzip_min_length 1024;
@@ -179,7 +200,6 @@ http {
         root  $distPath;
         index index.html;
 
-        # 反向代理 /api -> 后端 8000
         location /api/ {
             proxy_pass http://127.0.0.1:8000;
             proxy_http_version 1.1;
@@ -187,14 +207,12 @@ http {
             proxy_set_header X-Real-IP `$remote_addr;
             proxy_set_header X-Forwarded-For `$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto `$scheme;
-            # SSE 流式支持
             proxy_buffering off;
             proxy_cache off;
             proxy_read_timeout 300s;
             proxy_send_timeout 300s;
         }
 
-        # SPA 路由回退
         location / {
             try_files `$uri `$uri/ /index.html;
         }
@@ -202,20 +220,16 @@ http {
 }
 "@
 
-# nginx 默认主配置 include conf.d,但绿色版默认没有 include。
-# 直接把配置写成 nginx.conf,覆盖默认的。
 $nginxMainConf = "$nginxConfDir\nginx.conf"
-$confContent | Out-File -FilePath $nginxMainConf -Encoding utf8 -Force
-Write-Host "  nginx 配置已写入: $nginxMainConf" -ForegroundColor Green
+# Write UTF-8 WITHOUT BOM (nginx chokes on BOM: "unknown directive")
+[System.IO.File]::WriteAllText($nginxMainConf, $confContent, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host "  nginx config written" -ForegroundColor Green
 
 # ============================================================
-# 7. 生成启动/停止/状态脚本辅助文件
+# 7. Save paths for start/stop/status scripts
 # ============================================================
-Write-Host "生成服务脚本..." -ForegroundColor Yellow
-
-# 记录安装路径,供 start/stop/status 脚本读取
 $config = @"
-@{
+`$paths = @{
     MfqRoot     = '$MfqRoot'
     ProjectRoot = '$ProjectRoot'
     PythonExe   = '$PythonExe'
@@ -224,25 +238,25 @@ $config = @"
     LogsDir     = '$MfqRoot\logs'
 }
 "@
-$config | Out-File -FilePath "$PSScriptRoot\paths.ps1" -Encoding utf8 -Force
+$config | Out-File -FilePath "$ScriptDir\paths.ps1" -Encoding utf8 -Force
 
 # ============================================================
-# 完成
+# Done
 # ============================================================
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Green
-Write-Host "  安装完成!" -ForegroundColor Green
+Write-Host "  Install complete!" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "下一步:" -ForegroundColor Cyan
-Write-Host "  1. 确认已配置 algorithm\.env 里的 LLM_API_KEY"
-Write-Host "  2. 确认已配置 backend\.env 里的 SECRET_KEY(>=32字符) 和 ENVIRONMENT=production"
-Write-Host "  3. 启动服务: .\start.ps1"
-Write-Host "  4. 访问: http://115.159.212.98:3000"
+Write-Host "Next steps:" -ForegroundColor Cyan
+Write-Host "  1. Ensure algorithm\.env has LLM_API_KEY"
+Write-Host "  2. Ensure backend\.env has SECRET_KEY (32+ chars) and ENVIRONMENT=production"
+Write-Host "  3. Start: .\start.ps1"
+Write-Host "  4. Visit: http://115.159.212.98:3000"
 Write-Host ""
-Write-Host "安装内容:"
-Write-Host "  Python: $(& $PythonExe --version)"
-Write-Host "  Node:   $(& $NodeExe --version)"
-Write-Host "  nginx:  $NginxDir"
-Write-Host "  占用空间: $([math]::Round((Get-ChildItem $MfqRoot -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)) MB"
+$pyVer = cmd /c "`"$PythonExe`" --version 2>&1"
+$nodeVer = cmd /c "`"$NodeExe`" --version 2>&1"
+Write-Host "Installed: Python $pyVer, Node $nodeVer"
+$usedMB = [math]::Round((Get-ChildItem $MfqRoot -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+Write-Host "Disk used: $usedMB MB"
 Write-Host ""

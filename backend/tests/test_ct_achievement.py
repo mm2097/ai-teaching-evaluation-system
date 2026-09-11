@@ -66,6 +66,13 @@ class TestCTConstants:
     def test_parse_ct_field_dedup(self):
         assert parse_ct_field("CT1,CT1,CT2") == ["CT1", "CT2"]
 
+    def test_demo_risk_scores_include_process_and_exam_failures(self):
+        from app.seed import _demo_score_series
+
+        scores = _demo_score_series(student_id=999, course_id=1, risk_student=True)
+        assert scores == [62.0, 45.0, 52.0, 44.0]
+        assert scores[-1] < scores[0]
+
 
 # ============================================================================
 # 知识点精确归因

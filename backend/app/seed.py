@@ -2274,6 +2274,8 @@ def main() -> None:
                         help="注入 AI 教学演示数据（题库/练习任务/答题记录，幂等）")
     parser.add_argument("--demo-data", action="store_true",
                         help="重建五门课程的完整验收演示数据（成绩/考勤/参与/评价/预警）")
+    parser.add_argument("--demo-students", action="store_true",
+                        help="仅补齐 2024 级五个演示班学生账号，不清空现有数据")
     parser.add_argument("--full-demo", action="store_true",
                         help="删库后生成完整验收演示数据与 AI 教学数据")
     parser.add_argument("--all", action="store_true",
@@ -2292,6 +2294,10 @@ def main() -> None:
         _seed_ai_teaching()
     elif args.demo_data:
         inject_demo_data()
+    elif args.demo_students:
+        with Session(engine) as session:
+            _ensure_demo_class_students(session)
+        print("演示学生账号补齐完成，可继续通过数据管理上传课程数据。")
     elif args.inject_analysis:
         inject_analysis_data()
     elif args.ai_teaching:

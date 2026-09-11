@@ -385,15 +385,7 @@ def compute_class_mastery(
     if class_id is not None:
         stmt = stmt.where(Student.class_id == class_id)
     student_ids = list(session.exec(stmt).all())
-    accuracy_index = compute_assignment_accuracy_index(session, course_id, student_ids)
-
-    # 考试扣分折算掌握度合并进索引（并存取平均），保持"仅有数据的学生计入均值"语义
-    exam_index = compute_exam_mastery_indexes(session, course_id, student_ids)
-    for pair, exam_score in exam_index.items():
-        if pair in accuracy_index:
-            accuracy_index[pair] = round((accuracy_index[pair] + exam_score) / 2.0, 1)
-        else:
-            accuracy_index[pair] = exam_score
+    accuracy_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
 
     results: list[MasteryStat] = []
     for p in points:
@@ -402,7 +394,9 @@ def compute_class_mastery(
             for sid in student_ids
             if (sid, p.point_id) in accuracy_index
         ]
-        avg_acc = sum(accs) / len(accs) if accs else 0.0
+        if not accs:
+            continue
+        avg_acc = sum(accs) / len(accs)
 
         level, color = accuracy_to_level(avg_acc)
         results.append(

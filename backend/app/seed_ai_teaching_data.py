@@ -22,7 +22,11 @@ from app.models import (
     StudentAnswerRecord,
     TaskQuestion,
 )
-from app.services.question_answers import encode_correct_answer, judge_objective_answer
+from app.services.question_answers import (
+    answer_for_response,
+    encode_correct_answer,
+    judge_objective_answer,
+)
 
 TYPE_MAP = {"single_choice": 1, "multi_choice": 2, "judge": 3, "fill_blank": 4, "short_answer": 5}
 
@@ -168,16 +172,25 @@ def wrong_answer(question: AiQuestion) -> str:
 
 
 def ensure_answer_records(session: Session, task: AnswerTask, questions: list[AiQuestion]) -> int:
-    student_ids = session.exec(select(CourseStudent.student_id).where(CourseStudent.course_id == task.course_id, CourseStudent.status == 1).limit(8)).all()
+    student_ids = session.exec(select(CourseStudent.student_id).where(
+        CourseStudent.course_id == task.course_id,
+        CourseStudent.status == 1,
+    )).all()
     added = 0
-    for s_index, student_id in enumerate(student_ids):
-        for q_index, question in enumerate(questions[:6]):
+    for student_id in student_ids:
+        for question in questions[:6]:
             exists = session.exec(select(StudentAnswerRecord).where(StudentAnswerRecord.task_id == task.task_id, StudentAnswerRecord.student_id == student_id, StudentAnswerRecord.question_id == question.question_id)).first()
             if exists:
                 continue
-            correct = (s_index + q_index) % 4 != 0
-            user_answer = question.correct_answer if correct else wrong_answer(question)
-            is_correct = judge_objective_answer(question.type, question.correct_answer, user_answer)
+            # 每个知识点在演示任务中通常只有一道题。若注入错题会把该知识点
+            # 直接计算成 0%，因此完整演示数据统一注入已掌握答题记录；薄弱
+            # 差异由覆盖全部知识点的 KnowledgeMastery 数据提供。
+            user_answer, _ = answer_for_response(
+                question.type, question.correct_answer
+            )
+            is_correct = judge_objective_answer(
+                question.type, question.correct_answer, user_answer
+            )
             score = round(100 / 6, 1) if is_correct else 0.0
             session.add(StudentAnswerRecord(task_id=task.task_id, question_id=question.question_id, student_id=student_id, user_answer=user_answer, score=score, is_correct=1 if is_correct else 0, ai_score=score if question.type == 5 else None, judge_reason="演示数据自动评分" if question.type == 5 else None))
             added += 1

@@ -556,10 +556,33 @@ def get_knowledge_heatmap(
     else:
         mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
 
+        # 班级热力图不能把“没有掌握度证据”当成 0 分。
+        # 导入数据通常只覆盖部分知识点，保留所有课程知识点会造成大片
+        # 伪造的 0；只展示当前班级至少有一条有效记录的知识点。
+        selected_student_ids = set(student_ids)
+        active_point_ids = {
+            point_id
+            for (sid, point_id), score in mastery_index.items()
+            if sid in selected_student_ids and score is not None
+        }
+        points = [point for point in points if point.point_id in active_point_ids]
+        point_module_map = {point.point_id: point.module_id for point in points}
+        kp_names = [point.point_name for point in points]
+        kp_ids = [point.point_id for point in points]
+
     student_names = []
     for sid in student_ids:
         student = session.get(Student, sid)
         student_names.append(student.real_name if student else "?")
+
+    if not kp_names:
+        return {
+            "knowledgePoints": [], "students": student_names, "data": [], "levels": [],
+            "classAvgByKp": [], "lossRateByKp": [], "classLossRateByKp": [],
+            "pointMeta": [], "moduleSummary": [],
+            "weakPoints": [], "weakModules": [],
+            "levelLabels": {"1": "薄弱", "2": "一般", "3": "良好"},
+        }
 
     # 辅助：score → (level_code, level_label)
     def score_level(s: float) -> tuple[int, str]:
@@ -574,7 +597,11 @@ def get_knowledge_heatmap(
     levels: list[list] = []
     for sid_idx, sid in enumerate(student_ids):
         for kp_idx, kpid in enumerate(kp_ids):
-            score = mastery_index.get((sid, kpid), 0.0)
+            score = mastery_index.get((sid, kpid))
+            # 缺少记录表示暂无数据，不是 0 分；不写入 ECharts 数据即可
+            # 让该单元格保持空白，同时不参与班级统计。
+            if score is None:
+                continue
             level_code, _ = score_level(score)
             data.append([kp_idx, sid_idx, score])
             levels.append([kp_idx, sid_idx, level_code])
@@ -602,7 +629,10 @@ def get_knowledge_heatmap(
 
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):
-        vals = [avg_index.get((sid, kpid), 0.0) for sid in avg_student_ids]
+        vals = [
+            score for sid in avg_student_ids
+            if (score := avg_index.get((sid, kpid))) is not None
+        ]
         class_avg.append(round(sum(vals) / len(vals), 1) if vals else 0)
 
     # ── 新增字段 ──

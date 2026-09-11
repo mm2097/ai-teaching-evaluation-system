@@ -161,7 +161,7 @@ def build() -> None:
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(22)
-    add_text(p, "适用版本：完整演示数据集（--full-demo）", size=11)
+    add_text(p, "适用版本：数据管理模块 SQLite 导入演示数据集", size=11)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     add_text(p, "数据库：SQLite  |  前端：5173  |  后端：8000  |  AI服务：8001", size=10, color=(89, 89, 89))
@@ -169,16 +169,14 @@ def build() -> None:
     page_break(doc)
     add_heading(doc, "1. 演示前准备")
     add_numbered(doc, [
-        "关闭正在运行的后端和前端服务，避免数据库被占用。",
-        "打开 PowerShell，进入项目根目录：D:\\aiteaching\\code\\ai-teaching-evaluation-system。",
-        "如需保留当前数据库，先复制 backend\\app.db；后续完整重建会覆盖该文件。",
-        "执行完整演示数据重建命令。命令完成后，不再手工导入成绩文件，以免改变验收数据。",
+        "服务器先完成基础项目部署，并已初始化默认课程、教师和学生账号；导入文件只补充教学过程数据，不会创建学生账号。",
+        "将“导入数据”目录中的五个 SQLite 文件上传或复制到可访问位置；不要替换服务器的 backend\\app.db。",
+        "使用 teacher / 123456 登录，进入 数据采集 → 上传数据，数据类型选择“数据库导入”。",
+        "先选择对应课程，再上传同名课程文件。每次只上传一个文件；导入完成后等待页面提示分析刷新完成，再切换下一门课程。",
     ])
-    add_code(doc, "cd backend")
-    add_code(doc, "..\\.venv\\Scripts\\python.exe -m app.seed --full-demo")
     p = doc.add_paragraph()
     add_text(p, "完成标志：", bold=True)
-    add_text(p, "终端显示 [demo-data] 生成完成；数据库已包含五门课程的完整过程数据。")
+    add_text(p, "上传结果显示“单项成绩、成绩考勤情况、课堂参与情况、课程测试各题扣分情况”，错误数为 0。")
 
     add_heading(doc, "2. 演示数据设计", level=1)
     add_table(doc, ["项目", "设计"], [
@@ -188,6 +186,14 @@ def build() -> None:
         ["评分状态", "多数学生为良好或优秀；主演示学生为正向案例"],
         ["预警状态", "每门课程仅保留 1 条下滑风险案例，共 5 条，用于演示预警与约谈"],
     ], [1.3, 5.7])
+    add_table(doc, ["上传课程", "上传文件", "预期导入量"], [
+        ["计算机网络", "01-计算机网络-完整演示数据.sqlite", "546 条"],
+        ["操作系统", "02-操作系统-完整演示数据.sqlite", "364 条"],
+        ["数据结构", "03-数据结构-完整演示数据.sqlite", "413 条"],
+        ["软件工程", "04-软件工程-完整演示数据.sqlite", "364 条"],
+        ["概率论与数理统计", "05-概率论与数理统计-完整演示数据.sqlite", "406 条"],
+    ], [1.4, 3.6, 2.0])
+    page_break(doc)
     add_table(doc, ["账号", "用户名/密码", "演示用途"], [
         ["管理员", "admin / 123456", "用户、数据、日志、报告中心"],
         ["教师", "teacher / 123456", "计算机网络、操作系统、学情分析、AI"],
@@ -195,7 +201,6 @@ def build() -> None:
         ["助教", "assistant / 123456", "数据采集与课程授权范围"],
     ], [1.0, 2.0, 4.0])
 
-    page_break(doc)
     add_heading(doc, "3. 启动项目")
     add_numbered(doc, [
         "启动后端。浏览器打开 http://127.0.0.1:8000/api/health，显示 status 为 ok 后继续。",

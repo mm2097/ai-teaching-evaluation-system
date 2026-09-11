@@ -110,7 +110,7 @@ const radarOption = computed<EChartsOption>(() => {
 // ============ 班级达成率柱状图 ============
 const passRateOption = computed<EChartsOption>(() => {
   const rates = CT_CODES.map((ct) =>
-    Math.round((classData.value?.ct_pass_rate?.[ct] ?? 0) * 100),
+    Math.round((classData.value?.ct_pass_rate?.[ct] ?? 0) * 1000) / 10,
   )
   return {
     tooltip: { trigger: 'axis', formatter: '{b}: {c}%' },
@@ -212,7 +212,7 @@ const tableRows = computed(() => {
           <BaseChart :option="radarOption" height="340px" />
         </div>
         <div class="content-card chart-card">
-          <div class="card-title">各课程目标达成率</div>
+          <div class="card-title">各课程目标学生达标率（达成度 ≥ 60 分）</div>
           <BaseChart :option="passRateOption" height="340px" />
         </div>
       </div>

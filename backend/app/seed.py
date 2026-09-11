@@ -1884,7 +1884,7 @@ def _seed_ai_teaching() -> None:
 def _demo_score_series(student_id: int, course_id: int, risk_student: bool) -> list[float]:
     """生成验收展示用的四阶段成绩，保证期末成绩处于完整过程的最后一项。"""
     if risk_student:
-        return [70.0, 66.0, 59.0, 55.0]
+        return [62.0, 45.0, 52.0, 44.0]
     # 学生端主账号作为完整正向案例，四门课程均有可解释的过程性提升。
     if student_id == 1:
         main_account_scores = {
@@ -2096,6 +2096,7 @@ def _ensure_demo_teacher_courses(session: Session) -> None:
 
 def _audit_demo_data(session: Session, course_ids: list[int]) -> None:
     """校验演示课程的源数据覆盖，发现缺口立即中止并报告。"""
+    from app.services.ct_achievement import compute_class_ct
     from app.services.mastery import compute_class_mastery
 
     issues: list[str] = []
@@ -2185,6 +2186,15 @@ def _audit_demo_data(session: Session, course_ids: list[int]) -> None:
         if computed_zeros:
             issues.append(
                 f"课程 {course_id} 最终掌握度仍有 {len(computed_zeros)} 个零值"
+            )
+
+        ct_result = compute_class_ct(session, course_id)
+        full_pass_cts = [
+            ct for ct, rate in ct_result["ct_pass_rate"].items() if rate >= 1.0
+        ]
+        if full_pass_cts:
+            issues.append(
+                f"课程 {course_id} 仍有 100% 达标率目标: {','.join(full_pass_cts)}"
             )
 
         summaries.append(
@@ -2335,7 +2345,7 @@ def inject_demo_data() -> None:
                 ))
                 counts["attendance"] += 1
 
-                participation_rate = 0.56 if risk_student else round(0.83 + ((student_id + course_id) % 12) / 100, 2)
+                participation_rate = 0.50 if risk_student else round(0.83 + ((student_id + course_id) % 12) / 100, 2)
                 session.add(ParticipationSheet(
                     student_id=student_id,
                     exam_batch_id=batches[(course_id, 0)].batch_id,

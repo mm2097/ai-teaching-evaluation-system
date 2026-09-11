@@ -9,7 +9,7 @@
 设计要点：
   - 无证据的 CT 标 None，不计入总体达成度（不强行赋 0 分）。
   - 计算全程 try/except 降级，失败不阻断 analysis_refresh 主流程。
-  - 复用 mastery.compute_student_mastery / compute_class_mastery，不重复造轮子。
+  - 复用 mastery.compute_mastery_index_with_fallback，不重复造轮子。
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from app.services.ct_constants import (
     degree_to_level,
     parse_ct_field,
 )
-from app.services.mastery import compute_student_mastery
+from app.services.mastery import compute_mastery_index_with_fallback
 
 # 试卷每大题满分（5 大题 × 20 分 = 100 分，与 mastery.EXAM_QUESTION_FULL_SCORE 一致）
 _EXAM_Q_FULL = 20.0
@@ -110,16 +110,18 @@ def _knowledge_ct_scores(
     取学生各知识点掌握度，按 KnowledgePoint.course_objectives 分配到对应 CT。
     返回 (ct_score_map, ct_confidence_map)，仅含有证据的 CT。
     """
-    masteries = compute_student_mastery(session, student_id, course_id)
+    mastery_index = compute_mastery_index_with_fallback(
+        session, course_id, [student_id]
+    )
     ct_acc: dict[str, list[float]] = {ct: [] for ct in CT_CODES[:4]}  # CT1-CT4
-    for m in masteries:
-        kp = session.get(KnowledgePoint, m.point_id)
-        if not kp:
+    for kp in _course_points(session, course_id):
+        score = mastery_index.get((student_id, kp.point_id))
+        if score is None:
             continue
         cts = parse_ct_field(kp.course_objectives)
         for ct in cts:
             if ct in ct_acc:
-                ct_acc[ct].append(m.accuracy)
+                ct_acc[ct].append(score)
     scores: dict[str, float] = {}
     confidence: dict[str, str] = {}
     for ct, accs in ct_acc.items():

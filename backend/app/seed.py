@@ -601,11 +601,11 @@ def seed() -> None:
                    semester="2025-2026-1", college="计算机学院", credit=3.0, status=1),
             Course(course_code="CS3002", course_name="操作系统", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=4.0, status=1),
-            Course(course_code="CS3003", course_name="数据结构", teacher_id=2,
+            Course(course_code="CS3003", course_name="数据结构", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=3.5, status=1),
-            Course(course_code="SE3001", course_name="软件工程", teacher_id=2,
+            Course(course_code="SE3001", course_name="软件工程", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=3.0, status=1),
-            Course(course_code="MA3001", course_name="概率论与数理统计", teacher_id=3,
+            Course(course_code="MA3001", course_name="概率论与数理统计", teacher_id=1,
                    semester="2025-2026-1", college="数学与统计学院", credit=4.0, status=1),
         ]
         session.add_all(courses)
@@ -2064,6 +2064,30 @@ def _ensure_demo_class_students(session: Session) -> None:
     print(f"  补齐 2024 级演示学生: {len(additions)} 人")
 
 
+def _ensure_demo_teacher_courses(session: Session) -> None:
+    """将五门验收课程统一授权给 teacher 账号，便于单账号完成演示。"""
+    teacher_user = session.exec(
+        select(SysUser).where(SysUser.username == "teacher")
+    ).first()
+    if teacher_user is None:
+        return
+    teacher = session.exec(
+        select(Teacher).where(Teacher.user_id == teacher_user.user_id)
+    ).first()
+    if teacher is None:
+        return
+    courses = session.exec(select(Course).where(Course.course_id.in_([1, 2, 3, 4, 5]))).all()
+    changed = 0
+    for course in courses:
+        if course.teacher_id != teacher.teacher_id:
+            course.teacher_id = teacher.teacher_id
+            session.add(course)
+            changed += 1
+    if changed:
+        session.commit()
+        print(f"  统一演示课程教师权限: {changed} 门")
+
+
 def inject_demo_data() -> None:
     """生成覆盖全部课程的验收演示数据。
 
@@ -2276,6 +2300,8 @@ def main() -> None:
                         help="重建五门课程的完整验收演示数据（成绩/考勤/参与/评价/预警）")
     parser.add_argument("--demo-students", action="store_true",
                         help="仅补齐 2024 级五个演示班学生账号，不清空现有数据")
+    parser.add_argument("--demo-course-access", action="store_true",
+                        help="仅将五门演示课程授权给 teacher 账号，不清空现有数据")
     parser.add_argument("--full-demo", action="store_true",
                         help="删库后生成完整验收演示数据与 AI 教学数据")
     parser.add_argument("--all", action="store_true",
@@ -2298,6 +2324,10 @@ def main() -> None:
         with Session(engine) as session:
             _ensure_demo_class_students(session)
         print("演示学生账号补齐完成，可继续通过数据管理上传课程数据。")
+    elif args.demo_course_access:
+        with Session(engine) as session:
+            _ensure_demo_teacher_courses(session)
+        print("演示课程教师权限同步完成。")
     elif args.inject_analysis:
         inject_analysis_data()
     elif args.ai_teaching:

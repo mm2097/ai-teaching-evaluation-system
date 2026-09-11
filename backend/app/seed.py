@@ -2018,6 +2018,52 @@ def _ensure_demo_evaluation_config(session: Session, course_ids: list[int]) -> N
     session.flush()
 
 
+def _ensure_demo_class_students(session: Session) -> None:
+    """补齐 2024 级五个班的演示学生，保证班级分析有足够样本。"""
+    student_role = session.exec(
+        select(SysRole).where(SysRole.role_code == "student")
+    ).first()
+    if student_role is None:
+        return
+
+    existing_nos = set(session.exec(select(Student.student_no)).all())
+    existing_usernames = set(session.exec(select(SysUser.username)).all())
+    additions: list[tuple[int, str, str]] = []
+    target_counts = {1: 20, 2: 20, 3: 20, 4: 20, 5: 20}
+    for class_id, target_count in target_counts.items():
+        current_count = session.exec(
+            select(Student.student_id).where(Student.class_id == class_id)
+        ).all()
+        for slot in range(len(current_count) + 1, target_count + 1):
+            student_no = f"2024{class_id:02d}{slot:04d}"
+            if student_no in existing_nos or student_no in existing_usernames:
+                continue
+            additions.append((class_id, student_no, f"演示学生{class_id:02d}{slot:02d}"))
+
+    if not additions:
+        return
+
+    for class_id, student_no, real_name in additions:
+        user = SysUser(
+            username=student_no,
+            password=hash_password("123456"),
+            real_name=real_name,
+            role_id=student_role.role_id,
+            status=1,
+        )
+        session.add(user)
+        session.flush()
+        session.add(Student(
+            student_no=student_no,
+            real_name=real_name,
+            gender=1 if int(student_no[-1]) % 2 else 0,
+            class_id=class_id,
+            user_id=user.user_id,
+        ))
+    session.commit()
+    print(f"  补齐 2024 级演示学生: {len(additions)} 人")
+
+
 def inject_demo_data() -> None:
     """生成覆盖全部课程的验收演示数据。
 
@@ -2036,6 +2082,7 @@ def inject_demo_data() -> None:
     ]
 
     with Session(engine) as session:
+        _ensure_demo_class_students(session)
         students = session.exec(select(Student).order_by(Student.student_id)).all()
         courses = {course.course_id: course for course in session.exec(select(Course)).all()}
         if not students or not all(course_id in courses for course_id in course_ids):

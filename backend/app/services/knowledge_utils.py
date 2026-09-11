@@ -15,6 +15,22 @@ import re
 
 _SPLIT_RE = re.compile(r"[、,，;；]+")
 
+# 演示数据和历史题库曾使用过的同义名称统一映射到课程知识树中的规范名称。
+_KNOWLEDGE_NAME_ALIASES = {
+    "UDP 协议": "UDP 协议特点",
+    "进程状态": "进程状态转换",
+    "页面置换": "页面置换算法",
+    "链表": "链表操作",
+    "二叉树": "二叉树遍历",
+    "图遍历": "图的遍历",
+}
+
+
+def canonicalize_knowledge_name(raw: str | None) -> str:
+    """返回知识点的规范名称，消除同义标签造成的重复列。"""
+    name = re.sub(r"\s+", " ", str(raw or "").strip())
+    return _KNOWLEDGE_NAME_ALIASES.get(name, name)
+
 
 def split_knowledge_names(raw: str | None) -> list[str]:
     """把一个知识点名称拆分为多个规范知识点名称。

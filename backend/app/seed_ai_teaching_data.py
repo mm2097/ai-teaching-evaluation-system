@@ -22,6 +22,8 @@ from app.models import (
     StudentAnswerRecord,
     TaskQuestion,
 )
+from app.models.question import TASK_TYPE_SELF_PRACTICE
+from app.services.knowledge_utils import canonicalize_knowledge_name
 from app.services.question_answers import (
     answer_for_response,
     encode_correct_answer,
@@ -93,18 +95,29 @@ QUESTION_SETS: dict[str, list[dict[str, Any]]] = {
 
 
 def get_or_create_point(session: Session, course_id: int, point_name: str, sort_num: int) -> KnowledgePoint:
+    point_name = canonicalize_knowledge_name(point_name)
+    point = session.exec(
+        select(KnowledgePoint)
+        .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
+        .where(
+            KnowledgeModule.course_id == course_id,
+            KnowledgePoint.point_name == point_name,
+        )
+        .order_by(KnowledgePoint.point_id)
+    ).first()
+    if point:
+        return point
+
     module = session.exec(select(KnowledgeModule).where(KnowledgeModule.course_id == course_id, KnowledgeModule.module_name == "AI 辅助教学知识点")).first()
     if not module:
         module = KnowledgeModule(course_id=course_id, module_name="AI 辅助教学知识点", sort_num=99)
         session.add(module)
         session.commit()
         session.refresh(module)
-    point = session.exec(select(KnowledgePoint).where(KnowledgePoint.module_id == module.module_id, KnowledgePoint.point_name == point_name)).first()
-    if not point:
-        point = KnowledgePoint(module_id=module.module_id, point_name=point_name, sort_num=sort_num)
-        session.add(point)
-        session.commit()
-        session.refresh(point)
+    point = KnowledgePoint(module_id=module.module_id, point_name=point_name, sort_num=sort_num)
+    session.add(point)
+    session.commit()
+    session.refresh(point)
     return point
 
 
@@ -141,6 +154,7 @@ def ensure_task(session: Session, course: Course, questions: list[AiQuestion]) -
         task = AnswerTask(
             course_id=course.course_id,
             task_name=task_name,
+            task_type=TASK_TYPE_SELF_PRACTICE,
             publish_time=now - timedelta(days=1),
             deadline=now + timedelta(days=14),
             status=1,
@@ -151,6 +165,10 @@ def ensure_task(session: Session, course: Course, questions: list[AiQuestion]) -
         session.add(task)
         session.commit()
         session.refresh(task)
+    elif task.task_type != TASK_TYPE_SELF_PRACTICE:
+        task.task_type = TASK_TYPE_SELF_PRACTICE
+        session.add(task)
+        session.commit()
     linked = {rel.question_id for rel in session.exec(select(TaskQuestion).where(TaskQuestion.task_id == task.task_id)).all()}
     for index, question in enumerate(questions[:6], start=1):
         if question.question_id not in linked:

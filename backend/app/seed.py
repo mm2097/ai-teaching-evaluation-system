@@ -14,6 +14,7 @@ from sqlmodel import Session, SQLModel, select
 
 from app.core.database import engine, init_db
 from app.core.security import hash_password
+from app.services.knowledge_utils import canonicalize_knowledge_name
 from app.models import (
     SysUser, SysRole, Teacher, TeachingAssistant, CourseAssistant,
     Student, ClassInfo, Course, CourseStudent,
@@ -1947,10 +1948,15 @@ def _ensure_demo_knowledge_points(session: Session) -> None:
                 session.add(module)
                 session.flush()
                 sort_num += 1
-            existing_points = set(session.exec(select(KnowledgePoint.point_name).where(
-                KnowledgePoint.module_id == module.module_id
-            )).all())
+            existing_points = {
+                canonicalize_knowledge_name(name) for name in session.exec(
+                select(KnowledgePoint.point_name)
+                .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
+                .where(KnowledgeModule.course_id == course_id)
+                ).all()
+            }
             for point_sort, point_name in enumerate(points, start=1):
+                point_name = canonicalize_knowledge_name(point_name)
                 if point_name not in existing_points:
                     session.add(KnowledgePoint(
                         module_id=module.module_id,
@@ -2106,11 +2112,15 @@ def _audit_demo_data(session: Session, course_ids: list[int]) -> None:
         batch_ids = session.exec(
             select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
         ).all()
-        point_ids = set(session.exec(
-            select(KnowledgePoint.point_id)
+        point_rows = session.exec(
+            select(KnowledgePoint)
             .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
             .where(KnowledgeModule.course_id == course_id)
-        ).all())
+        ).all()
+        point_ids = {point.point_id for point in point_rows}
+        point_names = [canonicalize_knowledge_name(point.point_name) for point in point_rows]
+        if len(point_names) != len(set(point_names)):
+            issues.append(f"课程 {course_id} 存在重复知识点名称")
 
         score_counts = {student_id: 0 for student_id in enrolled_ids}
         for student_id in session.exec(

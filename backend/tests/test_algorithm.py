@@ -15,6 +15,16 @@ from __future__ import annotations
 import pytest
 
 
+def test_knowledge_name_aliases_are_canonicalized():
+    """题库旧名称必须归并到课程知识树的唯一规范名称。"""
+    from app.services.knowledge_utils import canonicalize_knowledge_name
+
+    assert canonicalize_knowledge_name(" 图遍历 ") == "图的遍历"
+    assert canonicalize_knowledge_name("链表") == "链表操作"
+    assert canonicalize_knowledge_name("UDP   协议") == "UDP 协议特点"
+    assert canonicalize_knowledge_name("最短路径") == "最短路径"
+
+
 # ===== D01 成绩预测 =====
 
 class TestPredict:

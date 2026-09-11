@@ -1880,6 +1880,344 @@ def _seed_ai_teaching() -> None:
     seed_ai_teaching_data()
 
 
+def _demo_score_series(student_id: int, course_id: int, risk_student: bool) -> list[float]:
+    """生成验收展示用的四阶段成绩，保证期末成绩处于完整过程的最后一项。"""
+    if risk_student:
+        return [70.0, 66.0, 59.0, 55.0]
+    # 学生端主账号作为完整正向案例，四门课程均有可解释的过程性提升。
+    if student_id == 1:
+        main_account_scores = {
+            1: [91.0, 90.0, 94.0, 96.0],
+            2: [88.0, 89.0, 92.0, 94.0],
+            3: [87.0, 88.0, 91.0, 93.0],
+            5: [89.0, 90.0, 92.0, 94.0],
+        }
+        if course_id in main_account_scores:
+            return main_account_scores[course_id]
+
+    seed_value = sum(int(ch) for ch in str(student_id) if ch.isdigit())
+    group = student_id % 20
+    base = 93 if group >= 15 else (86 if group >= 7 else 78)
+    base += ((course_id * 3 + seed_value) % 5) - 2
+    if student_id % 9 == 0:
+        values = [base - 7, base - 3, base + 2, base + 6]
+    elif student_id % 11 == 0:
+        values = [base + 3, base + 1, base, base + 2]
+    else:
+        values = [base + 1, base - 1, base + 2, base + 3]
+    return [round(max(65.0, min(98.0, value)), 1) for value in values]
+
+
+def _demo_attendance_statuses(student_id: int, risk_student: bool) -> list[int]:
+    """展示数据以正常出勤为主，仅保留少量可解释的风险样本。"""
+    if risk_student:
+        return [3 if index in (4, 10, 17, 25) else 0 for index in range(_ATT_SLOTS)]
+    return [1 if (student_id + index) % 19 == 0 else 0 for index in range(_ATT_SLOTS)]
+
+
+def _ensure_demo_knowledge_points(session: Session) -> None:
+    """补齐原始种子未覆盖的课程知识点，避免课程分析出现空白热力图。"""
+    definitions = {
+        4: [
+            ("需求工程", "需求获取、建模与验证", ["用例建模", "需求规格说明"]),
+            ("软件设计", "架构设计与设计模式", ["分层架构", "设计模式"]),
+        ],
+        5: [
+            ("概率基础", "随机事件与概率计算", ["条件概率", "全概率公式"]),
+            ("随机变量", "分布、期望与方差", ["常见分布", "数学期望"]),
+        ],
+    }
+    for course_id, modules in definitions.items():
+        existing_names = set(session.exec(
+            select(KnowledgeModule.module_name).where(KnowledgeModule.course_id == course_id)
+        ).all())
+        sort_num = len(existing_names) + 1
+        for module_name, description, points in modules:
+            module = session.exec(select(KnowledgeModule).where(
+                KnowledgeModule.course_id == course_id,
+                KnowledgeModule.module_name == module_name,
+            )).first()
+            if not module:
+                module = KnowledgeModule(
+                    course_id=course_id,
+                    module_name=module_name,
+                    description=description,
+                    sort_num=sort_num,
+                )
+                session.add(module)
+                session.flush()
+                sort_num += 1
+            existing_points = set(session.exec(select(KnowledgePoint.point_name).where(
+                KnowledgePoint.module_id == module.module_id
+            )).all())
+            for point_sort, point_name in enumerate(points, start=1):
+                if point_name not in existing_points:
+                    session.add(KnowledgePoint(
+                        module_id=module.module_id,
+                        point_name=point_name,
+                        sort_num=point_sort,
+                    ))
+    session.flush()
+
+
+def _ensure_demo_evaluation_config(session: Session, course_ids: list[int]) -> None:
+    """为每门演示课程提供同一套可追溯的评价口径。"""
+    for course_id in course_ids:
+        old_dimensions = session.exec(
+            select(EvalDimension).where(EvalDimension.course_id == course_id)
+        ).all()
+        old_ids = [item.dimension_id for item in old_dimensions if item.dimension_id is not None]
+        if old_ids:
+            for index in session.exec(
+                select(EvalIndex).where(EvalIndex.dimension_id.in_(old_ids))  # type: ignore[arg-type]
+            ).all():
+                session.delete(index)
+        for dimension in old_dimensions:
+            session.delete(dimension)
+        session.flush()
+
+        academic = EvalDimension(
+            course_id=course_id,
+            dimension_name="学业水平",
+            description="课程成绩类型构成：作业、实践、期中、期末与考勤",
+            sort_num=1,
+            weight=60,
+        )
+        attitude = EvalDimension(
+            course_id=course_id,
+            dimension_name="学习态度",
+            description="数据来源：课程考勤 40%、课堂参与 30%、作业提交 30%",
+            sort_num=2,
+            weight=40,
+        )
+        session.add_all([academic, attitude])
+        session.flush()
+        session.add_all([
+            EvalIndex(dimension_id=academic.dimension_id, index_name="期中考试", weight=30,
+                      score_rule=json.dumps({"type": "academic_part", "part": "midterm"}),
+                      description="期中考试成绩"),
+            EvalIndex(dimension_id=academic.dimension_id, index_name="期末考试", weight=30,
+                      score_rule=json.dumps({"type": "academic_part", "part": "final"}),
+                      description="期末考试成绩"),
+            EvalIndex(dimension_id=academic.dimension_id, index_name="课程考勤", weight=10,
+                      score_rule=json.dumps({"type": "academic_part", "part": "attendance"}),
+                      description="到课率折算成绩"),
+            EvalIndex(dimension_id=academic.dimension_id, index_name="平时作业", weight=10,
+                      score_rule=json.dumps({"type": "academic_part", "part": "homework"}),
+                      description="平时作业成绩"),
+            EvalIndex(dimension_id=academic.dimension_id, index_name="实验实践", weight=20,
+                      score_rule=json.dumps({"type": "academic_part", "part": "other"}),
+                      description="实验或课程项目成绩"),
+            EvalIndex(dimension_id=attitude.dimension_id, index_name="出勤率", weight=40,
+                      score_rule=json.dumps({"type": "attendance"}), description="考勤表到课率"),
+            EvalIndex(dimension_id=attitude.dimension_id, index_name="课堂参与", weight=30,
+                      score_rule=json.dumps({"type": "interaction"}), description="课堂参与记录"),
+            EvalIndex(dimension_id=attitude.dimension_id, index_name="作业提交", weight=30,
+                      score_rule=json.dumps({"type": "homework"}), description="作业任务提交率"),
+        ])
+    session.flush()
+
+
+def inject_demo_data() -> None:
+    """生成覆盖全部课程的验收演示数据。
+
+    该数据集以真实课程过程为主线：每门课都有四阶段成绩、考勤、课堂参与、
+    知识点掌握度与评价结果。绝大多数学生为正常或良好状态，只保留每门课一名
+    风险学生，用于演示预警、约谈等功能而不让页面被预警淹没。
+    """
+    print("[demo-data] 开始生成完整验收演示数据...")
+    course_ids = [1, 2, 3, 4, 5]
+    creator_by_course = {1: 2, 2: 2, 3: 3, 4: 3, 5: 4}
+    batch_specs = [
+        ("平时作业", 1, 15.0, datetime(2025, 9, 26)),
+        ("实验实践", 2, 20.0, datetime(2025, 10, 24)),
+        ("期中考试", 3, 30.0, datetime(2025, 11, 14)),
+        ("期末考试", 4, 35.0, datetime(2026, 1, 9)),
+    ]
+
+    with Session(engine) as session:
+        students = session.exec(select(Student).order_by(Student.student_id)).all()
+        courses = {course.course_id: course for course in session.exec(select(Course)).all()}
+        if not students or not all(course_id in courses for course_id in course_ids):
+            print("[demo-data] 基础数据不完整，请先运行 seed --reset")
+            return
+
+        # 清理仅由演示数据使用的数据表，确保反复执行不会形成重复成绩或旧快照。
+        old_evals = session.exec(select(StudentEvaluationResult)).all()
+        old_eval_ids = [item.eval_id for item in old_evals if item.eval_id is not None]
+        if old_eval_ids:
+            for item in session.exec(
+                select(EvalDimensionScore).where(EvalDimensionScore.eval_id.in_(old_eval_ids))  # type: ignore[arg-type]
+            ).all():
+                session.delete(item)
+        for model in (ScoreRecord, IndividualScore, AttendanceSheet, ParticipationSheet,
+                      CourseTestDetail, AttendanceRecord, InteractionRecord,
+                      KnowledgeMastery, StudentProfile, StudyWarning):
+            for item in session.exec(select(model)).all():
+                session.delete(item)
+        for item in old_evals:
+            session.delete(item)
+        for item in session.exec(select(CourseStudent)).all():
+            session.delete(item)
+        for item in session.exec(select(ExamBatch)).all():
+            session.delete(item)
+        session.flush()
+
+        _ensure_demo_knowledge_points(session)
+        _ensure_demo_evaluation_config(session, course_ids)
+
+        batches: dict[tuple[int, int], ExamBatch] = {}
+        for course_id in course_ids:
+            course = courses[course_id]
+            for stage, (name, batch_type, weight, exam_time) in enumerate(batch_specs):
+                batch = ExamBatch(
+                    course_id=course_id,
+                    batch_name=name,
+                    batch_type=batch_type,
+                    batch_weight=weight,
+                    semester=course.semester,
+                    exam_time=exam_time,
+                    full_score=100,
+                    create_by=creator_by_course[course_id],
+                )
+                session.add(batch)
+                session.flush()
+                batches[(course_id, stage)] = batch
+            attendance_batch = _get_or_create_attendance_batch(
+                session, course, creator_by_course[course_id]
+            )
+            batches[(course_id, 4)] = attendance_batch
+
+        student_ids = [student.student_id for student in students if student.student_id is not None]
+        enrollments: dict[int, list[int]] = {
+            1: student_ids,
+            2: [sid for index, sid in enumerate(student_ids) if index % 3 != 2],
+            3: [sid for index, sid in enumerate(student_ids) if index % 4 != 3],
+            4: [sid for index, sid in enumerate(student_ids) if index % 3 != 0],
+            5: [sid for index, sid in enumerate(student_ids) if index % 4 != 1],
+        }
+        # 主演示账号赵伟固定拥有四门课程，便于学生端连续演示。
+        for course_id in (1, 2, 3, 5):
+            if 1 not in enrollments[course_id]:
+                enrollments[course_id].append(1)
+        enrollments[4] = [sid for sid in enrollments[4] if sid != 1]
+
+        student_map = {student.student_id: student for student in students}
+        point_ids_by_course: dict[int, list[int]] = {}
+        for course_id in course_ids:
+            point_ids_by_course[course_id] = session.exec(
+                select(KnowledgePoint.point_id)
+                .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
+                .where(KnowledgeModule.course_id == course_id)
+                .order_by(KnowledgePoint.point_id)
+            ).all()
+
+        counts = {"enrollments": 0, "scores": 0, "attendance": 0, "participation": 0, "mastery": 0}
+        risk_by_course: dict[int, int] = {}
+        for course_id, enrolled_ids in enrollments.items():
+            risk_by_course[course_id] = enrolled_ids[-1]
+            course = courses[course_id]
+            for row_no, student_id in enumerate(enrolled_ids, start=1):
+                student = student_map[student_id]
+                risk_student = student_id == risk_by_course[course_id]
+                scores = _demo_score_series(student_id, course_id, risk_student)
+                session.add(CourseStudent(course_id=course_id, student_id=student_id))
+                counts["enrollments"] += 1
+
+                for stage, score_value in enumerate(scores):
+                    batch = batches[(course_id, stage)]
+                    session.add(ScoreRecord(
+                        course_id=course_id,
+                        student_id=student_id,
+                        batch_id=batch.batch_id,
+                        score=score_value,
+                        is_pass=1 if score_value >= 60 else 0,
+                        source_data=_pre_inject_source(_score_source_fields(
+                            batch, course, student, score_value, row_no,
+                        )),
+                        create_by=creator_by_course[course_id],
+                    ))
+                    counts["scores"] += 1
+
+                statuses = _demo_attendance_statuses(student_id, risk_student)
+                attendance_batch = batches[(course_id, 4)]
+                session.add(_build_attendance_sheet(
+                    student=student,
+                    course=course,
+                    exam_batch_id=attendance_batch.batch_id,
+                    statuses=statuses,
+                    row_no=row_no,
+                    create_by=creator_by_course[course_id],
+                ))
+                counts["attendance"] += 1
+
+                participation_rate = 0.56 if risk_student else round(0.83 + ((student_id + course_id) % 12) / 100, 2)
+                session.add(ParticipationSheet(
+                    student_id=student_id,
+                    exam_batch_id=batches[(course_id, 0)].batch_id,
+                    total_count=16,
+                    participation_rate=participation_rate,
+                    source_data=_pre_inject_source(_participation_source_fields(
+                        batches[(course_id, 0)], course, student, 16, participation_rate, row_no,
+                    )),
+                    create_by=creator_by_course[course_id],
+                ))
+                counts["participation"] += 1
+
+                average_score = sum(scores) / len(scores)
+                for point_id in point_ids_by_course[course_id]:
+                    offset = ((student_id * 7 + point_id * 3) % 11) - 5
+                    mastery = 50.0 + offset if risk_student else average_score + offset
+                    mastery = round(max(35.0, min(98.0, mastery)), 1)
+                    session.add(KnowledgeMastery(
+                        course_id=course_id,
+                        student_id=student_id,
+                        point_id=point_id,
+                        mastery_score=mastery,
+                        mastery_level=3 if mastery >= 80 else (2 if mastery >= 60 else 1),
+                    ))
+                    counts["mastery"] += 1
+        session.commit()
+
+        # 评价和画像从刚写入的源数据计算，再落库为教师端列表和报告中心提供快照。
+        from app.services.evaluation import compute_evaluation, persist_evaluation
+        from app.services.profile import compute_profile
+
+        for course_id, enrolled_ids in enrollments.items():
+            for student_id in enrolled_ids:
+                profile = compute_profile(session, student_id, course_id, semester=courses[course_id].semester)
+                risk_student = student_id == risk_by_course[course_id]
+                session.add(StudentProfile(
+                    course_id=course_id,
+                    student_id=student_id,
+                    academic_score=profile.academic_score,
+                    attitude_score=profile.attitude_score,
+                    progress_score=profile.progress_score,
+                    total_profile_score=round((profile.academic_score + profile.attitude_score + profile.progress_score) / 3, 1),
+                    study_tags="需重点关注,成绩下滑,出勤风险" if risk_student else "学习投入稳定,课程过程完整",
+                    good_modules="核心知识点掌握良好" if not risk_student else "",
+                    weak_modules="多个核心知识点需复习" if risk_student else "",
+                ))
+                evaluation = compute_evaluation(
+                    session, student_id, course_id, profile=profile, semester=courses[course_id].semester
+                )
+                persist_evaluation(session, student_id, course_id, evaluation)
+                if risk_student:
+                    session.add(StudyWarning(
+                        course_id=course_id,
+                        student_id=student_id,
+                        warning_type="成绩下滑",
+                        warning_level=2,
+                        warning_reason="期末成绩较平时作业下降 15 分，建议安排针对性辅导",
+                    ))
+        session.commit()
+
+    print("[demo-data] 生成完成："
+          f"选修 {counts['enrollments']} 条，成绩 {counts['scores']} 条，"
+          f"考勤 {counts['attendance']} 条，课堂参与 {counts['participation']} 条，"
+          f"知识点掌握度 {counts['mastery']} 条，预警 5 条。")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="灌入演示数据")
     parser.add_argument("--reset", action="store_true", help="删库重建后再灌入")
@@ -1887,15 +2225,26 @@ def main() -> None:
                         help="为所有学生注入智能分析数据（学情画像/成绩趋势/知识点/预警）")
     parser.add_argument("--ai-teaching", action="store_true",
                         help="注入 AI 教学演示数据（题库/练习任务/答题记录，幂等）")
+    parser.add_argument("--demo-data", action="store_true",
+                        help="重建五门课程的完整验收演示数据（成绩/考勤/参与/评价/预警）")
+    parser.add_argument("--full-demo", action="store_true",
+                        help="删库后生成完整验收演示数据与 AI 教学数据")
     parser.add_argument("--all", action="store_true",
                         help="一键全量注入：基础数据 + 分析数据 + AI 教学数据")
     args = parser.parse_args()
 
-    if args.all:
-        # 一键注入：基础数据 → 分析数据 → AI 教学数据（各自幂等/守卫，可重复执行）
+    if args.full_demo:
+        reset()
         seed()
-        inject_analysis_data()
+        inject_demo_data()
         _seed_ai_teaching()
+    elif args.all:
+        # 保持旧命令兼容，但改用覆盖五门课程的完整演示数据集。
+        seed()
+        inject_demo_data()
+        _seed_ai_teaching()
+    elif args.demo_data:
+        inject_demo_data()
     elif args.inject_analysis:
         inject_analysis_data()
     elif args.ai_teaching:

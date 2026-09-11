@@ -104,10 +104,14 @@ uvicorn app.main:app --reload      # 启动开发服务器
 ```bash
 cd backend
 python -m app.seed --reset     # 删库重建 + 灌入演示数据(推荐)
+python -m app.seed --full-demo # 删库重建 + 五门课程完整验收演示数据 + AI 教学数据
 python -m app.seed             # 只追加灌入(表已存在时)
 ```
 
-任何时候数据乱了,重跑 `--reset` 立刻回到统一起点。
+任何时候验收数据被改动，重跑 `--full-demo` 即可恢复统一的完整演示起点。
+
+验收展示请使用 `--full-demo`：该命令为五门课程补齐四阶段成绩、考勤、课堂参与、
+知识点掌握度和评价数据，并且只保留少量可解释的预警样本。
 
 > **新增表后**:在 `backend/app/seed.py` 的 `seed()` 函数里按注释示例添加插入语句。
 

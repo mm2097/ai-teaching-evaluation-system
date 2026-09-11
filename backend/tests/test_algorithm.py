@@ -130,6 +130,31 @@ class TestMastery:
 # ===== D06/D07 预警 =====
 
 class TestWarning:
+    def test_w5_reason_lists_three_weakest_points(self, session):
+        """W5 原因应列出掌握度最低的三个具体知识点。"""
+        from app.services.warning import evaluate_student
+
+        weak_points = [
+            ("链表", 55.0),
+            ("红黑树", 20.0),
+            ("快速排序", 45.0),
+            ("图的遍历", 35.0),
+        ]
+        result = evaluate_student(
+            session,
+            student_id=2,
+            course_id=1,
+            weak_count=len(weak_points),
+            weak_points=weak_points,
+        )
+
+        w5 = next(hit for hit in result.hits if hit.rule == "W5")
+        assert w5.reason == (
+            "薄弱知识点 4 个：红黑树（20.0%）、图的遍历（35.0%）、"
+            "快速排序（45.0%）"
+        )
+        assert "链表" not in w5.reason
+
     def test_w1_score_drop(self, session):
         """W1 成绩下滑检测。"""
         from app.services.warning import evaluate_student

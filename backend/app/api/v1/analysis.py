@@ -22,7 +22,11 @@ from app.services.mastery import (
     compute_student_mastery,
 )
 from app.services.knowledge_utils import split_knowledge_names
-from app.services.warning import scan_course_warnings, persist_warnings
+from app.services.warning import (
+    build_weak_point_reason,
+    persist_warnings,
+    scan_course_warnings,
+)
 from app.services.profile import compute_profile
 from app.services.evaluation import compute_evaluation, custom_dimension_key, dimension_key
 
@@ -746,7 +750,27 @@ def _parse_warning_type(raw_type: str) -> tuple[str, str]:
     return "", raw_type or ""
 
 
-def _warning_response(w, student, course, cls, notified: bool = False) -> dict:
+def _detailed_warning_reason(session: Session, warning, rule_code: str) -> str:
+    """为旧版 W5 记录实时补齐具体知识点，避免必须重新扫描才生效。"""
+    reason = warning.warning_reason or ""
+    if rule_code != "W5" or "：" in reason:
+        return reason
+
+    weak_points = [
+        (item.point_name, item.accuracy)
+        for item in compute_student_mastery(
+            session, warning.student_id, warning.course_id
+        )
+        if item.accuracy < 60
+    ]
+    if len(weak_points) < 3:
+        return reason
+    return build_weak_point_reason(weak_points)
+
+
+def _warning_response(
+    w, student, course, cls, notified: bool = False, session: Session | None = None
+) -> dict:
     """将 StudyWarning 模型转为 API 响应格式。"""
     rule_code, display_type = _parse_warning_type(w.warning_type)
     level_label = {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低")
@@ -765,7 +789,8 @@ def _warning_response(w, student, course, cls, notified: bool = False) -> dict:
         "type": display_type,             # 清理后的显示文本
         "level": level_label,             # 高/中/低（Analysis.Warning.Level）
         "levelCode": w.warning_level,     # 1/2/3
-        "reason": w.warning_reason,
+        "reason": _detailed_warning_reason(session, w, rule_code)
+        if session else w.warning_reason,
         "warningTime": w.create_time.strftime("%Y-%m-%d %H:%M") if w.create_time else "",
         "status": w.handle_status,
         "statusLabel": status_label,      # 待处理/已处理
@@ -855,6 +880,7 @@ def get_warnings(
 
         result.append(_warning_response(
             w, student, course, cls, notified=w.warning_id in notified_ids,
+            session=session,
         ))
 
     return result
@@ -895,7 +921,9 @@ def update_warning_status(
     notified = session.exec(
         select(Notification).where(Notification.warning_id == warning.warning_id)
     ).first() is not None
-    return _warning_response(warning, student, course, cls, notified=notified)
+    return _warning_response(
+        warning, student, course, cls, notified=notified, session=session
+    )
 
 
 @router.post("/analysis/warnings/{warning_id}/notify", tags=["学情分析"])
@@ -928,12 +956,13 @@ def notify_warning_student(
         raise HTTPException(status_code=404, detail="预警学生不存在")
     course = session.get(Course, warning.course_id)
 
-    _, display_type = _parse_warning_type(warning.warning_type)
+    rule_code, display_type = _parse_warning_type(warning.warning_type)
+    warning_reason = _detailed_warning_reason(session, warning, rule_code)
     level_label = {1: "低", 2: "中", 3: "高"}.get(warning.warning_level, "低")
     title = f"学情预警：{display_type}"
     content = (
         f"您在《{course.course_name if course else ''}》课程中触发学情预警"
-        f"（{level_label}风险）：{warning.warning_reason}。"
+        f"（{level_label}风险）：{warning_reason}。"
         f"请及时关注学习状态，并与任课老师沟通。"
     )
 

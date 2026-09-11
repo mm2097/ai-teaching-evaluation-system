@@ -433,7 +433,12 @@ def build_student_context(
         _fill_score_stats(ctx, history_scores, last_name)
         ctx.avg_score = pred.get("current") or ctx.avg_score
 
-    warning = evaluate_student(session, student_id, course_id, len(ctx.weak_points))
+    weak_point_scores = [
+        (m.point_name, m.accuracy) for m in masteries if m.accuracy < 60
+    ]
+    warning = evaluate_student(
+        session, student_id, course_id, len(weak_point_scores), weak_point_scores
+    )
     if warning.hits:
         ctx.warnings = [{
             "student_id": student_id,

@@ -27,7 +27,7 @@ from app.services.evaluation import compute_evaluation, persist_evaluation
 from app.services.mastery import compute_student_mastery, refresh_student_mastery
 from app.services.profile import compute_class_slopes, compute_profile
 from app.services.tag import generate_tags
-from app.services.warning import evaluate_student, persist_warnings
+from app.services.warning import evaluate_student, persist_warnings, warning_type_for_hit
 from app.services.ct_achievement import refresh_ct_achievement
 
 
@@ -190,18 +190,21 @@ def refresh_student_analysis(session: Session, student_id: int, course_id: int) 
         )
     ).all():
         session.delete(warning)
-    weak_count = sum(
-        1 for item in compute_student_mastery(session, student_id, course_id)
+    weak_points = [
+        (item.point_name, item.accuracy)
+        for item in compute_student_mastery(session, student_id, course_id)
         if item.accuracy < 60
+    ]
+    warning_result = evaluate_student(
+        session, student_id, course_id, len(weak_points), weak_points
     )
-    warning_result = evaluate_student(session, student_id, course_id, weak_count)
     for hit in warning_result.hits:
         session.add(StudyWarning(
             course_id=course_id,
             student_id=student_id,
-            warning_type=f"{hit.rule}:{hit.reason[:30]}",
+            warning_type=warning_type_for_hit(hit),
             warning_level=warning_result.level_code,
-            warning_reason=hit.reason,
+            warning_reason=hit.reason[:255],
             handle_status=0,
         ))
     session.commit()
@@ -254,11 +257,14 @@ def refresh_course_analysis(session: Session, course_id: int) -> dict:
         persist_evaluation(session, sid, course_id, class_slopes=class_slopes)
 
         # 4. 预警扫描
-        weak_count = sum(
-            1 for s in compute_student_mastery(session, sid, course_id)
-            if s.accuracy < 60
+        weak_points = [
+            (item.point_name, item.accuracy)
+            for item in compute_student_mastery(session, sid, course_id)
+            if item.accuracy < 60
+        ]
+        wr = evaluate_student(
+            session, sid, course_id, len(weak_points), weak_points
         )
-        wr = evaluate_student(session, sid, course_id, weak_count)
         if wr.hits:
             warning_results.append(wr)
 

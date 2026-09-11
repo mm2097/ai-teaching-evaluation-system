@@ -269,14 +269,41 @@ def _check_w4_homework(
         )]
     return []
 
+
+def build_weak_point_reason(
+    weak_points: list[tuple[str, float]], weak_count: int | None = None
+) -> str:
+    """生成包含 Top3 具体知识点的 W5 预警原因。"""
+    ordered = sorted(weak_points, key=lambda item: (item[1], item[0]))
+    total = len(ordered) if weak_count is None else weak_count
+    summary = f"薄弱知识点 {total} 个"
+    if not ordered:
+        return summary
+
+    details = "、".join(
+        f"{name}（{score:.1f}%）" for name, score in ordered[:3]
+    )
+    return f"{summary}：{details}"
+
+
+def warning_type_for_hit(hit: WarningHit) -> str:
+    """生成简洁的预警类型，详细证据仅放在 warning_reason。"""
+    display = hit.reason.split("：", 1)[0] if hit.rule == "W5" else hit.reason[:30]
+    return f"{hit.rule}:{display}"
+
+
 def _check_w5_mastery(
-    session: Session, student_id: int, course_id: int, weak_count: int
+    session: Session,
+    student_id: int,
+    course_id: int,
+    weak_count: int,
+    weak_points: list[tuple[str, float]] | None = None,
 ) -> list[WarningHit]:
-    """W5 知识点薄弱堆积（薄弱数由调用方传入）。"""
+    """W5 知识点薄弱堆积，并附掌握度最低的三个知识点。"""
     if weak_count >= WARNING_CONFIG["w5_weak_count"]:
         return [WarningHit(
             rule="W5", level="低",
-            reason=f"薄弱知识点 {weak_count} 个"
+            reason=build_weak_point_reason(weak_points or [], weak_count),
         )]
     return []
 
@@ -300,7 +327,11 @@ def _resolve_level(hits: list[WarningHit]) -> tuple[str, int]:
 
 
 def evaluate_student(
-    session: Session, student_id: int, course_id: int, weak_count: int = 0
+    session: Session,
+    student_id: int,
+    course_id: int,
+    weak_count: int = 0,
+    weak_points: list[tuple[str, float]] | None = None,
 ) -> WarningResult:
     """对单个学生执行全部规则评估。"""
     result = WarningResult(student_id=student_id)
@@ -310,7 +341,9 @@ def evaluate_student(
         result.add(h)
     for h in _check_w4_homework(session, student_id, course_id):
         result.add(h)
-    for h in _check_w5_mastery(session, student_id, course_id, weak_count):
+    for h in _check_w5_mastery(
+        session, student_id, course_id, weak_count, weak_points
+    ):
         result.add(h)
 
     level, code = _resolve_level(result.hits)
@@ -335,12 +368,14 @@ def scan_course_warnings(
 
     out: list[WarningResult] = []
     for sid in student_ids:
-        # 计算薄弱数
-        weak_count = 0
-        for m in compute_student_mastery(session, sid, course_id):
-            if m.accuracy < WARNING_CONFIG["weak_threshold"]:
-                weak_count += 1
-        r = evaluate_student(session, sid, course_id, weak_count)
+        weak_points = [
+            (m.point_name, m.accuracy)
+            for m in compute_student_mastery(session, sid, course_id)
+            if m.accuracy < WARNING_CONFIG["weak_threshold"]
+        ]
+        r = evaluate_student(
+            session, sid, course_id, len(weak_points), weak_points
+        )
         if r.hits:
             out.append(r)
     return out
@@ -376,9 +411,9 @@ def persist_warnings(
             session.add(StudyWarning(
                 course_id=course_id,
                 student_id=r.student_id,
-                warning_type=f"{h.rule}:{h.reason[:30]}",
+                warning_type=warning_type_for_hit(h),
                 warning_level=r.level_code,
-                warning_reason=h.reason,
+                warning_reason=h.reason[:255],
                 handle_status=0,
             ))
             count += 1

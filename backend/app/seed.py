@@ -601,11 +601,11 @@ def seed() -> None:
                    semester="2025-2026-1", college="计算机学院", credit=3.0, status=1),
             Course(course_code="CS3002", course_name="操作系统", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=4.0, status=1),
-            Course(course_code="CS3003", course_name="数据结构", teacher_id=2,
+            Course(course_code="CS3003", course_name="数据结构", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=3.5, status=1),
-            Course(course_code="SE3001", course_name="软件工程", teacher_id=2,
+            Course(course_code="SE3001", course_name="软件工程", teacher_id=1,
                    semester="2025-2026-1", college="计算机学院", credit=3.0, status=1),
-            Course(course_code="MA3001", course_name="概率论与数理统计", teacher_id=3,
+            Course(course_code="MA3001", course_name="概率论与数理统计", teacher_id=1,
                    semester="2025-2026-1", college="数学与统计学院", credit=4.0, status=1),
         ]
         session.add_all(courses)
@@ -2064,6 +2064,133 @@ def _ensure_demo_class_students(session: Session) -> None:
     print(f"  补齐 2024 级演示学生: {len(additions)} 人")
 
 
+def _ensure_demo_teacher_courses(session: Session) -> None:
+    """将五门验收课程统一授权给 teacher 账号，便于单账号完成演示。"""
+    teacher_user = session.exec(
+        select(SysUser).where(SysUser.username == "teacher")
+    ).first()
+    if teacher_user is None:
+        return
+    teacher = session.exec(
+        select(Teacher).where(Teacher.user_id == teacher_user.user_id)
+    ).first()
+    if teacher is None:
+        return
+    courses = session.exec(select(Course).where(Course.course_id.in_([1, 2, 3, 4, 5]))).all()
+    changed = 0
+    for course in courses:
+        if course.teacher_id != teacher.teacher_id:
+            course.teacher_id = teacher.teacher_id
+            session.add(course)
+            changed += 1
+    if changed:
+        session.commit()
+        print(f"  统一演示课程教师权限: {changed} 门")
+
+
+def _audit_demo_data(session: Session, course_ids: list[int]) -> None:
+    """校验演示课程的源数据覆盖，发现缺口立即中止并报告。"""
+    from app.services.mastery import compute_class_mastery
+
+    issues: list[str] = []
+    summaries: list[str] = []
+
+    for course_id in course_ids:
+        course = session.get(Course, course_id)
+        enrolled_ids = set(session.exec(
+            select(CourseStudent.student_id).where(
+                CourseStudent.course_id == course_id,
+                CourseStudent.status == 1,
+            )
+        ).all())
+        batch_ids = session.exec(
+            select(ExamBatch.batch_id).where(ExamBatch.course_id == course_id)
+        ).all()
+        point_ids = set(session.exec(
+            select(KnowledgePoint.point_id)
+            .join(KnowledgeModule, KnowledgePoint.module_id == KnowledgeModule.module_id)
+            .where(KnowledgeModule.course_id == course_id)
+        ).all())
+
+        score_counts = {student_id: 0 for student_id in enrolled_ids}
+        for student_id in session.exec(
+            select(ScoreRecord.student_id).where(ScoreRecord.course_id == course_id)
+        ).all():
+            if student_id in score_counts:
+                score_counts[student_id] += 1
+        attendance_ids = set(session.exec(
+            select(AttendanceSheet.student_id).where(
+                AttendanceSheet.exam_batch_id.in_(batch_ids)  # type: ignore[arg-type]
+            )
+        ).all())
+        participation_ids = set(session.exec(
+            select(ParticipationSheet.student_id).where(
+                ParticipationSheet.exam_batch_id.in_(batch_ids)  # type: ignore[arg-type]
+            )
+        ).all())
+        mastery_rows = session.exec(
+            select(KnowledgeMastery).where(KnowledgeMastery.course_id == course_id)
+        ).all()
+        mastery_pairs = {(row.student_id, row.point_id) for row in mastery_rows}
+        expected_pairs = {
+            (student_id, point_id)
+            for student_id in enrolled_ids
+            for point_id in point_ids
+        }
+        profile_ids = set(session.exec(
+            select(StudentProfile.student_id).where(StudentProfile.course_id == course_id)
+        ).all())
+        evaluation_ids = set(session.exec(
+            select(StudentEvaluationResult.student_id).where(
+                StudentEvaluationResult.course_id == course_id
+            )
+        ).all())
+
+        checks = {
+            "四类成绩": {sid for sid, count in score_counts.items() if count >= 4},
+            "考勤": attendance_ids,
+            "课堂参与": participation_ids,
+            "画像": profile_ids,
+            "评价": evaluation_ids,
+        }
+        for label, covered_ids in checks.items():
+            missing = enrolled_ids - covered_ids
+            if missing:
+                issues.append(f"课程 {course_id} {label}缺失 {len(missing)} 人")
+
+        missing_mastery = expected_pairs - mastery_pairs
+        if missing_mastery:
+            issues.append(f"课程 {course_id} 掌握度缺失 {len(missing_mastery)} 组")
+        zero_mastery = [row for row in mastery_rows if row.mastery_score <= 0]
+        if zero_mastery:
+            issues.append(f"课程 {course_id} 掌握度非正值 {len(zero_mastery)} 组")
+
+        computed_mastery = compute_class_mastery(session, course_id)
+        if len(computed_mastery) != len(point_ids):
+            issues.append(
+                f"课程 {course_id} 最终掌握度仅覆盖 "
+                f"{len(computed_mastery)}/{len(point_ids)} 个知识点"
+            )
+        computed_zeros = [item for item in computed_mastery if item.accuracy <= 0]
+        if computed_zeros:
+            issues.append(
+                f"课程 {course_id} 最终掌握度仍有 {len(computed_zeros)} 个零值"
+            )
+
+        summaries.append(
+            f"{course.course_name if course else course_id}: 学生 {len(enrolled_ids)}，"
+            f"成绩 {sum(score_counts.values())}，知识点 {len(point_ids)}，"
+            f"掌握度 {len(mastery_pairs)}"
+        )
+
+    if issues:
+        raise RuntimeError("演示数据完整性校验失败：" + "；".join(issues))
+
+    print("[demo-data] 完整性校验通过：")
+    for summary in summaries:
+        print(f"  {summary}")
+
+
 def inject_demo_data() -> None:
     """生成覆盖全部课程的验收演示数据。
 
@@ -2259,6 +2386,8 @@ def inject_demo_data() -> None:
                     ))
         session.commit()
 
+        _audit_demo_data(session, course_ids)
+
     print("[demo-data] 生成完成："
           f"选修 {counts['enrollments']} 条，成绩 {counts['scores']} 条，"
           f"考勤 {counts['attendance']} 条，课堂参与 {counts['participation']} 条，"
@@ -2276,6 +2405,8 @@ def main() -> None:
                         help="重建五门课程的完整验收演示数据（成绩/考勤/参与/评价/预警）")
     parser.add_argument("--demo-students", action="store_true",
                         help="仅补齐 2024 级五个演示班学生账号，不清空现有数据")
+    parser.add_argument("--demo-course-access", action="store_true",
+                        help="仅将五门演示课程授权给 teacher 账号，不清空现有数据")
     parser.add_argument("--full-demo", action="store_true",
                         help="删库后生成完整验收演示数据与 AI 教学数据")
     parser.add_argument("--all", action="store_true",
@@ -2285,19 +2416,30 @@ def main() -> None:
     if args.full_demo:
         reset()
         seed()
-        inject_demo_data()
         _seed_ai_teaching()
+        inject_demo_data()
+        # 选修关系在完整数据生成后扩充，再次执行以补齐全体学生答题记录。
+        _seed_ai_teaching()
+        with Session(engine) as session:
+            _audit_demo_data(session, [1, 2, 3, 4, 5])
     elif args.all:
         # 保持旧命令兼容，但改用覆盖五门课程的完整演示数据集。
         seed()
+        _seed_ai_teaching()
         inject_demo_data()
         _seed_ai_teaching()
+        with Session(engine) as session:
+            _audit_demo_data(session, [1, 2, 3, 4, 5])
     elif args.demo_data:
         inject_demo_data()
     elif args.demo_students:
         with Session(engine) as session:
             _ensure_demo_class_students(session)
         print("演示学生账号补齐完成，可继续通过数据管理上传课程数据。")
+    elif args.demo_course_access:
+        with Session(engine) as session:
+            _ensure_demo_teacher_courses(session)
+        print("演示课程教师权限同步完成。")
     elif args.inject_analysis:
         inject_analysis_data()
     elif args.ai_teaching:

@@ -22,7 +22,11 @@ from app.services.mastery import (
     compute_student_mastery,
 )
 from app.services.knowledge_utils import split_knowledge_names
-from app.services.warning import scan_course_warnings, persist_warnings
+from app.services.warning import (
+    build_weak_point_reason,
+    persist_warnings,
+    scan_course_warnings,
+)
 from app.services.profile import compute_profile
 from app.services.evaluation import compute_evaluation, custom_dimension_key, dimension_key
 
@@ -556,10 +560,33 @@ def get_knowledge_heatmap(
     else:
         mastery_index = compute_mastery_index_with_fallback(session, course_id, student_ids)
 
+        # 班级热力图不能把“没有掌握度证据”当成 0 分。
+        # 导入数据通常只覆盖部分知识点，保留所有课程知识点会造成大片
+        # 伪造的 0；只展示当前班级至少有一条有效记录的知识点。
+        selected_student_ids = set(student_ids)
+        active_point_ids = {
+            point_id
+            for (sid, point_id), score in mastery_index.items()
+            if sid in selected_student_ids and score is not None
+        }
+        points = [point for point in points if point.point_id in active_point_ids]
+        point_module_map = {point.point_id: point.module_id for point in points}
+        kp_names = [point.point_name for point in points]
+        kp_ids = [point.point_id for point in points]
+
     student_names = []
     for sid in student_ids:
         student = session.get(Student, sid)
         student_names.append(student.real_name if student else "?")
+
+    if not kp_names:
+        return {
+            "knowledgePoints": [], "students": student_names, "data": [], "levels": [],
+            "classAvgByKp": [], "lossRateByKp": [], "classLossRateByKp": [],
+            "pointMeta": [], "moduleSummary": [],
+            "weakPoints": [], "weakModules": [],
+            "levelLabels": {"1": "薄弱", "2": "一般", "3": "良好"},
+        }
 
     # 辅助：score → (level_code, level_label)
     def score_level(s: float) -> tuple[int, str]:
@@ -574,7 +601,11 @@ def get_knowledge_heatmap(
     levels: list[list] = []
     for sid_idx, sid in enumerate(student_ids):
         for kp_idx, kpid in enumerate(kp_ids):
-            score = mastery_index.get((sid, kpid), 0.0)
+            score = mastery_index.get((sid, kpid))
+            # 缺少记录表示暂无数据，不是 0 分；不写入 ECharts 数据即可
+            # 让该单元格保持空白，同时不参与班级统计。
+            if score is None:
+                continue
             level_code, _ = score_level(score)
             data.append([kp_idx, sid_idx, score])
             levels.append([kp_idx, sid_idx, level_code])
@@ -602,7 +633,10 @@ def get_knowledge_heatmap(
 
     class_avg: list[float] = []
     for kp_idx, kpid in enumerate(kp_ids):
-        vals = [avg_index.get((sid, kpid), 0.0) for sid in avg_student_ids]
+        vals = [
+            score for sid in avg_student_ids
+            if (score := avg_index.get((sid, kpid))) is not None
+        ]
         class_avg.append(round(sum(vals) / len(vals), 1) if vals else 0)
 
     # ── 新增字段 ──
@@ -716,7 +750,27 @@ def _parse_warning_type(raw_type: str) -> tuple[str, str]:
     return "", raw_type or ""
 
 
-def _warning_response(w, student, course, cls, notified: bool = False) -> dict:
+def _detailed_warning_reason(session: Session, warning, rule_code: str) -> str:
+    """为旧版 W5 记录实时补齐具体知识点，避免必须重新扫描才生效。"""
+    reason = warning.warning_reason or ""
+    if rule_code != "W5" or "：" in reason:
+        return reason
+
+    weak_points = [
+        (item.point_name, item.accuracy)
+        for item in compute_student_mastery(
+            session, warning.student_id, warning.course_id
+        )
+        if item.accuracy < 60
+    ]
+    if len(weak_points) < 3:
+        return reason
+    return build_weak_point_reason(weak_points)
+
+
+def _warning_response(
+    w, student, course, cls, notified: bool = False, session: Session | None = None
+) -> dict:
     """将 StudyWarning 模型转为 API 响应格式。"""
     rule_code, display_type = _parse_warning_type(w.warning_type)
     level_label = {1: "低", 2: "中", 3: "高"}.get(w.warning_level, "低")
@@ -735,7 +789,8 @@ def _warning_response(w, student, course, cls, notified: bool = False) -> dict:
         "type": display_type,             # 清理后的显示文本
         "level": level_label,             # 高/中/低（Analysis.Warning.Level）
         "levelCode": w.warning_level,     # 1/2/3
-        "reason": w.warning_reason,
+        "reason": _detailed_warning_reason(session, w, rule_code)
+        if session else w.warning_reason,
         "warningTime": w.create_time.strftime("%Y-%m-%d %H:%M") if w.create_time else "",
         "status": w.handle_status,
         "statusLabel": status_label,      # 待处理/已处理
@@ -825,6 +880,7 @@ def get_warnings(
 
         result.append(_warning_response(
             w, student, course, cls, notified=w.warning_id in notified_ids,
+            session=session,
         ))
 
     return result
@@ -865,7 +921,9 @@ def update_warning_status(
     notified = session.exec(
         select(Notification).where(Notification.warning_id == warning.warning_id)
     ).first() is not None
-    return _warning_response(warning, student, course, cls, notified=notified)
+    return _warning_response(
+        warning, student, course, cls, notified=notified, session=session
+    )
 
 
 @router.post("/analysis/warnings/{warning_id}/notify", tags=["学情分析"])
@@ -898,12 +956,13 @@ def notify_warning_student(
         raise HTTPException(status_code=404, detail="预警学生不存在")
     course = session.get(Course, warning.course_id)
 
-    _, display_type = _parse_warning_type(warning.warning_type)
+    rule_code, display_type = _parse_warning_type(warning.warning_type)
+    warning_reason = _detailed_warning_reason(session, warning, rule_code)
     level_label = {1: "低", 2: "中", 3: "高"}.get(warning.warning_level, "低")
     title = f"学情预警：{display_type}"
     content = (
         f"您在《{course.course_name if course else ''}》课程中触发学情预警"
-        f"（{level_label}风险）：{warning.warning_reason}。"
+        f"（{level_label}风险）：{warning_reason}。"
         f"请及时关注学习状态，并与任课老师沟通。"
     )
 

@@ -56,6 +56,56 @@ class TestDiagnosisTools:
         assert "pass_rate" in result
         assert "attendance_rate" in result
 
+    def test_course_overview_skips_scoreless_latest_batch(self, session):
+        """考勤等无成绩批次不能把课程总览成绩覆盖成 0。"""
+        from datetime import datetime
+
+        from app.models import ExamBatch
+        from app.services.agent.tools.queries import _t_get_course_overview
+
+        scoreless_batch = ExamBatch(
+            course_id=1,
+            batch_name="数据结构-考勤情况",
+            batch_type=5,
+            batch_weight=0,
+            semester="2024-2025-1",
+            exam_time=datetime(2025, 1, 10),
+            full_score=100,
+            create_by=1,
+            create_time=datetime(2030, 1, 1),
+        )
+        session.add(scoreless_batch)
+        session.commit()
+
+        result = _t_get_course_overview(_ctx(session), course_id=1)
+        assert result["avg_score"] == pytest.approx(67.7, abs=0.1)
+        assert result["pass_rate"] == pytest.approx(66.7, abs=0.1)
+        session.delete(scoreless_batch)
+        session.commit()
+
+    def test_course_overview_reads_attendance_sheet(self, session):
+        """课程总览应读取当前数据管理模块使用的新考勤表。"""
+        from app.models import AttendanceSheet
+        from app.services.agent.tools.queries import _t_get_course_overview
+
+        sheet = AttendanceSheet(
+            student_id=1,
+            exam_batch_id=1,
+            total_count=4,
+            present_count=3,
+            attendance_rate=0.75,
+            create_by=1,
+        )
+        session.add(sheet)
+        session.commit()
+
+        try:
+            result = _t_get_course_overview(_ctx(session), course_id=1)
+            assert result["attendance_rate"] == pytest.approx(58.3, abs=0.1)
+        finally:
+            session.delete(sheet)
+            session.commit()
+
     def test_get_weak_knowledge_points(self, session):
         """薄弱知识点 TopK：红黑树 mastery=30 应排前列。"""
         from app.services.agent.tools.queries import _t_get_weak_knowledge_points
@@ -124,6 +174,7 @@ class TestDiagnosisTools:
         assert result["scope"] == "class"
         assert len(result["points"]) == 4
         assert all("accuracy" in p and "level" in p for p in result["points"])
+        assert all(p["accuracy"] > 0 for p in result["points"])
 
     def test_tool_failure_fallback(self, session):
         """工具参数错误时返回 error dict，不抛异常（SAFE-03）。"""

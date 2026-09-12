@@ -22,7 +22,6 @@ from app.models import (
     SysRole,
     SysUser,
     Teacher,
-    CTAchievement,
 )
 from app.services.ct_constants import (
     CHAPTER_CT_MAP,
@@ -128,23 +127,12 @@ def get_student_ct(
     session: Session = Depends(get_session),
     current_user: SysUser = Depends(get_current_user),
 ):
-    """单学生 CT1-CT8 达成度画像。
+    """单学生 CT1-CT8 达成度画像（含归因证据链）。
 
-    优先读已落库的 ct_achievement（分析刷新时计算）；无落库记录时实时计算。
+    实时计算以保证 evidence 证据链完整（落库表只存分数，不含证据）。
     """
     _check_profile_access(current_user, student_id, course_id, session)
 
-    # 优先读库
-    row = session.exec(
-        select(CTAchievement).where(
-            CTAchievement.course_id == course_id,
-            CTAchievement.student_id == student_id,
-        )
-    ).first()
-    if row:
-        return _row_to_student_response(row, session)
-
-    # 实时计算
     result = compute_student_ct(session, student_id, course_id)
     stu = session.get(Student, student_id)
     resp = result.to_dict()
@@ -197,43 +185,3 @@ def update_knowledge_ct(
     session.add(point)
     session.commit()
     return {"point_id": point_id, "course_objectives": point.course_objectives}
-
-
-# ============================================================================
-# 辅助
-# ============================================================================
-
-def _row_to_student_response(row: CTAchievement, session: Session) -> dict:
-    """ct_achievement 落库行 → 前端响应结构（与 compute_student_ct.to_dict 同构）。"""
-    from app.services.ct_constants import degree_to_level
-    scores = {
-        "CT1": row.ct1_score, "CT2": row.ct2_score, "CT3": row.ct3_score, "CT4": row.ct4_score,
-        "CT5": row.ct5_score, "CT6": row.ct6_score, "CT7": row.ct7_score, "CT8": row.ct8_score,
-    }
-    # 解析置信度串（顺序 CT1-8）
-    conf_list = (row.ct_confidence or "").split(",")
-    conf_map = {ct: (conf_list[i].strip() if i < len(conf_list) and conf_list[i].strip() else None)
-                for i, ct in enumerate(CT_CODES)}
-    weak = [c for c in (row.weak_cts or "").split(",") if c.strip()]
-    strong = [c for c in (row.strong_cts or "").split(",") if c.strip()]
-    stu = session.get(Student, row.student_id)
-    return {
-        "student_id": row.student_id,
-        "name": stu.real_name if stu else "",
-        "student_no": stu.student_no if stu else "",
-        "course_id": row.course_id,
-        "ct_scores": {
-            ct: {
-                "score": scores[ct],
-                "level": degree_to_level(scores[ct]) if scores[ct] is not None else None,
-                "confidence": conf_map.get(ct),
-                "desc": CT_DEFINITIONS[ct]["desc"],
-                "category": CT_DEFINITIONS[ct]["category"],
-            }
-            for ct in CT_CODES
-        },
-        "overall": {"score": row.overall_score, "level": row.overall_level},
-        "weak_cts": weak,
-        "strong_cts": strong,
-        "radar": {ct: scores[ct] for ct in CT_CODES},
-    }

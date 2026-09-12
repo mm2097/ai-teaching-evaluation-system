@@ -15,6 +15,7 @@ from sqlmodel import Session, SQLModel, select
 from app.core.database import engine, init_db
 from app.core.security import hash_password
 from app.services.knowledge_utils import canonicalize_knowledge_name
+from app.services.ct_constants import parse_ct_field
 from app.models import (
     SysUser, SysRole, Teacher, TeachingAssistant, CourseAssistant,
     Student, ClassInfo, Course, CourseStudent,
@@ -678,13 +679,15 @@ def seed() -> None:
         session.commit()
 
         points = [
+            # 计网知识点：course_objectives 第一个 CT 为主归属(权重1.0)，其余次归属(0.4)。
+            # 让 CT1-CT4 各有独立主归属知识点，归因后产生差异。
             KnowledgePoint(module_id=1, point_name="OSI 七层模型", sort_num=1, course_objectives="CT1,CT2"),
-            KnowledgePoint(module_id=1, point_name="TCP/IP 四层模型", sort_num=2, course_objectives="CT1,CT2"),
-            KnowledgePoint(module_id=2, point_name="以太网帧格式", sort_num=1, course_objectives="CT1,CT2,CT3"),
-            KnowledgePoint(module_id=2, point_name="ARP 协议", sort_num=2, course_objectives="CT1,CT2,CT3"),
-            KnowledgePoint(module_id=3, point_name="TCP 三次握手", sort_num=1, course_objectives="CT1,CT2,CT4"),
-            KnowledgePoint(module_id=3, point_name="TCP 四次挥手", sort_num=2, course_objectives="CT1,CT2,CT4"),
-            KnowledgePoint(module_id=3, point_name="UDP 协议特点", sort_num=3, course_objectives="CT1,CT2,CT4"),
+            KnowledgePoint(module_id=1, point_name="TCP/IP 四层模型", sort_num=2, course_objectives="CT2,CT1"),
+            KnowledgePoint(module_id=2, point_name="以太网帧格式", sort_num=1, course_objectives="CT3,CT2"),
+            KnowledgePoint(module_id=2, point_name="ARP 协议", sort_num=2, course_objectives="CT1,CT3"),
+            KnowledgePoint(module_id=3, point_name="TCP 三次握手", sort_num=1, course_objectives="CT4,CT1,CT2"),
+            KnowledgePoint(module_id=3, point_name="TCP 四次挥手", sort_num=2, course_objectives="CT4,CT1,CT2"),
+            KnowledgePoint(module_id=3, point_name="UDP 协议特点", sort_num=3, course_objectives="CT2,CT1,CT4"),
             KnowledgePoint(module_id=4, point_name="进程状态转换", sort_num=1),
             KnowledgePoint(module_id=4, point_name="死锁检测与预防", sort_num=2),
             KnowledgePoint(module_id=5, point_name="页面置换算法", sort_num=1),
@@ -694,6 +697,9 @@ def seed() -> None:
             KnowledgePoint(module_id=7, point_name="图的遍历", sort_num=2),
             KnowledgePoint(module_id=8, point_name="快速排序", sort_num=1),
             KnowledgePoint(module_id=8, point_name="归并排序", sort_num=2),
+            # 计网补充知识点（CT3 主归属，强化网络层/地址划分这条教学难点线）
+            KnowledgePoint(module_id=2, point_name="IPv4 地址划分", sort_num=3, course_objectives="CT3,CT1,CT2"),
+            KnowledgePoint(module_id=2, point_name="子网掩码与路由", sort_num=4, course_objectives="CT3,CT4"),
         ]
         session.add_all(points)
         session.commit()
@@ -1906,7 +1912,62 @@ def _demo_score_series(student_id: int, course_id: int, risk_student: bool) -> l
         values = [base + 3, base + 1, base, base + 2]
     else:
         values = [base + 1, base - 1, base + 2, base + 3]
-    return [round(max(65.0, min(98.0, value)), 1) for value in values]
+    values = [round(max(65.0, min(98.0, value)), 1) for value in values]
+    # 薄弱层（约 20%，与掌握度薄弱生同口径）：成绩序列整体偏低 15-20 分，
+    # 让 CT 批次归因也产生低分，达成率分布真实（非全员≥60）。
+    if student_id % 5 in (2, 4):
+        values = [round(max(48.0, min(72.0, v - 18.0)), 1) for v in values]
+    return values
+
+
+# 计网期中/期末试卷 5 大题：知识点 + 扣分难度权重（权重越大该题扣分越多）。
+# 第3题(IPv4地址划分)是公认难点，扣分权重最高；第1题(OSI概论)最低。
+_EXAM_QUESTIONS = [
+    ("OSI 七层模型", 1.0),
+    ("TCP 三次握手", 1.5),
+    ("IPv4 地址划分", 2.5),
+    ("以太网帧格式", 1.8),
+    ("子网掩码与路由", 2.2),
+]
+
+
+def _build_course_test_detail(
+    student, exam_batch_id: int, total_score: float, create_by: int, row_no: int,
+):
+    """生成计网试卷大题扣分明细（CourseTestDetail）。
+
+    总扣分 = 100 - 总得分，按各题难度权重分配到 5 题（每题满分 20）。
+    保证 total_score 与 ScoreRecord 一致，扣分之和 = 100 - total_score。
+    """
+    from app.models import CourseTestDetail
+    total_deduction = max(0.0, min(100.0, 100.0 - total_score))
+    weight_sum = sum(w for _, w in _EXAM_QUESTIONS)
+    # 按权重分配扣分，加 row_no 微扰让同一分数段学生也有个体差异
+    deductions = []
+    for idx, (_, w) in enumerate(_EXAM_QUESTIONS):
+        jitter = ((row_no + idx) % 3 - 1) * 0.3
+        d = total_deduction * (w / weight_sum) + jitter
+        deductions.append(round(max(0.0, min(20.0, d)), 1))
+    # 修正取整误差，使扣分之和精确等于 total_deduction
+    diff = round(total_deduction - sum(deductions), 1)
+    deductions[2] = round(max(0.0, min(20.0, deductions[2] + diff)), 1)
+
+    return CourseTestDetail(
+        student_id=student.student_id,
+        exam_batch_id=exam_batch_id,
+        question1_score=deductions[0],
+        question2_score=deductions[1],
+        question3_score=deductions[2],
+        question4_score=deductions[3],
+        question5_score=deductions[4],
+        question1_knowledge=_EXAM_QUESTIONS[0][0],
+        question2_knowledge=_EXAM_QUESTIONS[1][0],
+        question3_knowledge=_EXAM_QUESTIONS[2][0],
+        question4_knowledge=_EXAM_QUESTIONS[3][0],
+        question5_knowledge=_EXAM_QUESTIONS[4][0],
+        total_score=total_score,
+        create_by=create_by,
+    )
 
 
 def _demo_attendance_statuses(student_id: int, risk_student: bool) -> list[int]:
@@ -2333,6 +2394,18 @@ def inject_demo_data() -> None:
                     ))
                     counts["scores"] += 1
 
+                    # 计网期中(stage2)/期末(stage3)：补 CourseTestDetail 试卷大题扣分，
+                    # 让 ct_achievement 的"试卷大题归因"有真实数据支撑。
+                    if course_id == 1 and stage in (2, 3):
+                        session.add(_build_course_test_detail(
+                            student=student,
+                            exam_batch_id=batch.batch_id,
+                            total_score=score_value,
+                            create_by=creator_by_course[course_id],
+                            row_no=row_no,
+                        ))
+                        counts["scores"] += 1
+
                 statuses = _demo_attendance_statuses(student_id, risk_student)
                 attendance_batch = batches[(course_id, 4)]
                 session.add(_build_attendance_sheet(
@@ -2359,10 +2432,36 @@ def inject_demo_data() -> None:
                 counts["participation"] += 1
 
                 average_score = sum(scores) / len(scores)
+                # 计网知识点按主归属 CT 引入教学结构化偏移：
+                # CT1(概论/通信原理,易) +3、CT2(体系结构,中) -2、
+                # CT3(IP地址划分/子网掩码,公认难点) -10、CT4(握手分析) -4。
+                # 主归属 = KnowledgePoint.course_objectives 第一个 CT。
+                kp_primary_ct: dict[int, str] = {
+                    p.point_id: (parse_ct_field(p.course_objectives)[0] if p.course_objectives else "")
+                    for p in session.exec(
+                        select(KnowledgePoint).where(
+                            KnowledgePoint.point_id.in_(point_ids_by_course[course_id])  # type: ignore[arg-type]
+                        )
+                    ).all()
+                } if course_id == 1 else {}
+                ct_struct_offset = {"CT1": 3.0, "CT2": -2.0, "CT3": -10.0, "CT4": -4.0}
+                # 薄弱层：约 20% 学生整体偏低（不止风险生 1 人），让达成率分布真实
+                # 用 student_id 分组确定性选取，薄弱生在难点 CT 上明显不及格
+                is_weak_student = (student_id % 5 in (2, 4)) and not risk_student
                 for point_id in point_ids_by_course[course_id]:
-                    offset = ((student_id * 7 + point_id * 3) % 11) - 5
-                    mastery = 50.0 + offset if risk_student else average_score + offset
-                    mastery = round(max(35.0, min(98.0, mastery)), 1)
+                    # 个体扰动拉大到 ±10，让同 CT 内学生分数分散
+                    jitter = ((student_id * 7 + point_id * 3) % 21) - 10
+                    primary = kp_primary_ct.get(point_id, "")
+                    struct = ct_struct_offset.get(primary, 0.0)
+                    if risk_student:
+                        mastery = 42.0 + jitter
+                    elif is_weak_student:
+                        # 薄弱生：绝对值落在 45-60 区间，难点 CT（CT3/CT5）再低确保不及格
+                        weak_extra = -12.0 if primary in ("CT3", "CT5") else 0.0
+                        mastery = 52.0 + struct + weak_extra + jitter
+                    else:
+                        mastery = average_score + struct + jitter
+                    mastery = round(max(30.0, min(98.0, mastery)), 1)
                     session.add(KnowledgeMastery(
                         course_id=course_id,
                         student_id=student_id,

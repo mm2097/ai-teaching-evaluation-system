@@ -90,13 +90,13 @@ class TestKnowledgeCTAttribution:
         session.commit()
 
     def test_knowledge_point_with_ct_maps_to_correct_ct(self, session: Session):
-        """有 CT 映射的知识点掌握度正确分配到对应 CT。"""
+        """有 CT 映射的知识点掌握度正确分配到对应 CT，且主/次权重产生差异。"""
         # conftest 知识点：1=二叉树 2=红黑树 3=快速排序 4=归并排序
-        # 给知识点 1 映射 CT1,CT2；知识点 2 映射 CT1,CT2,CT4
+        # 知识点1 主归属 CT1、次归属 CT2；知识点2 主归属 CT2、次归属 CT1
         kp1 = session.get(KnowledgePoint, 1)
         kp1.course_objectives = "CT1,CT2"
         kp2 = session.get(KnowledgePoint, 2)
-        kp2.course_objectives = "CT1,CT2,CT4"
+        kp2.course_objectives = "CT2,CT1"
         session.add_all([kp1, kp2])
         session.commit()
 
@@ -106,6 +106,41 @@ class TestKnowledgeCTAttribution:
             assert result.ct_scores["CT1"] is not None
             assert result.ct_scores["CT2"] is not None
             assert result.ct_confidence.get("CT1") == "high"
+            assert result.ct_confidence.get("CT2") == "high"
+            # evidence 非空，含 knowledge 类型证据
+            d = result.to_dict()
+            assert len(d["ct_scores"]["CT1"]["evidence"]) >= 1
+            assert d["ct_scores"]["CT1"]["evidence"][0]["source_type"] == "knowledge"
+        finally:
+            self._reset_kp_ct(session)
+
+    def test_primary_secondary_weights_produce_difference(self, session: Session):
+        """主归属权重 1.0、次归属 0.4，主/次归属不同的 CT 证据权重结构不同。
+
+        kp1 主归 CT1 次 CT2，kp2 主归 CT2 次 CT1：
+        CT1 的证据含一条主权重(1.0)+一条次权重(0.4)，CT2 同理但来源知识点不同。
+        验证权重常量正确应用且两 CT 证据来源可区分。
+        """
+        from app.services.ct_achievement import _knowledge_ct_evidence
+        kp1 = session.get(KnowledgePoint, 1)
+        kp1.course_objectives = "CT1,CT2"
+        kp2 = session.get(KnowledgePoint, 2)
+        kp2.course_objectives = "CT2,CT1"
+        session.add_all([kp1, kp2])
+        session.commit()
+
+        try:
+            ev_map = _knowledge_ct_evidence(session, student_id=1, course_id=1)
+            assert len(ev_map["CT1"]) == 2
+            assert len(ev_map["CT2"]) == 2
+            # 主归属权重 1.0、次归属 0.4 都存在
+            w_ct1 = sorted(e.weight for e in ev_map["CT1"])
+            assert w_ct1 == [0.4, 1.0]
+            # CT1 的主权重证据来源是 kp1(二叉树)，CT2 主权重来源是 kp2(红黑树)
+            ct1_primary = [e for e in ev_map["CT1"] if e.weight == 1.0][0]
+            ct2_primary = [e for e in ev_map["CT2"] if e.weight == 1.0][0]
+            assert "二叉树" in ct1_primary.source
+            assert "红黑树" in ct2_primary.source
         finally:
             self._reset_kp_ct(session)
 

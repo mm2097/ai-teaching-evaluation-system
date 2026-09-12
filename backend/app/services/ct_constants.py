@@ -36,14 +36,22 @@ CHAPTER_CT_MAP: dict[str, list[str]] = {
 
 # 考核批次类型(batch_type) -> CT 归因权重
 # 1=平时(测验/作业) 2=实验 3=期中 4=期末 5=考勤
-# 权重含义：该批次成绩得分率按权重分配到各 CT
+# 权重含义：该批次成绩得分率按权重分配到各 CT。
+# CT5(工具观测)仅实验批次；CT6(编程实现)含实验+期末（编程题在期末也考查），
+# 不同证据组合使 CT5≠CT6（单一批次归一化会抹平权重差异）。
 BATCH_TYPE_CT_WEIGHTS: dict[int, dict[str, float]] = {
     1: {"CT1": 0.3, "CT2": 0.3, "CT3": 0.2, "CT4": 0.2},
-    2: {"CT4": 0.2, "CT5": 0.3, "CT6": 0.3, "CT7": 0.1, "CT8": 0.1},
+    2: {"CT4": 0.2, "CT5": 0.4, "CT6": 0.3, "CT7": 0.05, "CT8": 0.05},
     3: {"CT1": 0.25, "CT2": 0.25, "CT3": 0.25, "CT4": 0.25},
-    4: {"CT1": 0.25, "CT2": 0.25, "CT3": 0.25, "CT4": 0.25},
+    4: {"CT1": 0.2, "CT2": 0.2, "CT3": 0.2, "CT4": 0.2, "CT6": 0.2},
     5: {"CT7": 0.6, "CT8": 0.4},
 }
+
+# 知识点 -> CT 归因的主/次权重
+# KnowledgePoint.course_objectives 中第一个 CT 为该知识点的"主归属"课程目标，
+# 其余为"次归属"。主归属权重 1.0、次归属 0.4，使不同 CT 因主/次分布不同而产生差异。
+KP_CT_PRIMARY_WEIGHT: float = 1.0
+KP_CT_SECONDARY_WEIGHT: float = 0.4
 
 # 素养类 CT7/CT8 推断权重（无客观题证据，用实践成绩+考勤+参与组合推断）
 CT7_LITERACY_WEIGHTS = {"practice": 0.5, "attendance": 0.3, "participation": 0.2}

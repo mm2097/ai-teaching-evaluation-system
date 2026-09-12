@@ -290,12 +290,22 @@ export async function saveDiagnosisReport(params: {
 
 // ============ 课程目标达成度（CT1-CT8） ============
 
+/** 单条归因证据：某数据源对某 CT 的贡献 */
+export interface CTEvidence {
+  source: string          // 来源名："期中考试·大题"/"知识点:以太网帧格式"/"实验报告"/"考勤"
+  source_type: string     // "exam"|"knowledge"|"batch"|"literacy"
+  weight: number          // 归因权重
+  score: number           // 得分率（0-100）
+  contribution: number    // weight * score
+}
+
 export interface CTScoreItem {
   score: number | null
   level: string | null
   confidence: 'high' | 'medium' | 'low' | null
   desc: string
   category: string
+  evidence: CTEvidence[]
 }
 
 export interface CTStudentAchievement {
@@ -310,13 +320,31 @@ export interface CTStudentAchievement {
   radar: Record<string, number | null>
 }
 
+/** 班级各 CT 的证据来源汇总条目 */
+export interface CTEvidenceSummaryItem {
+  source: string
+  avg_weight: number
+  avg_score: number
+  count: number
+}
+
+/** 班级各 CT 的等级分布占比：优秀≥85 / 良好70-84 / 合格60-69 / 未达成<60 */
+export interface CTLevelDist {
+  excellent: number
+  good: number
+  pass: number
+  fail: number
+}
+
 export interface CTClassAchievement {
   course_id: number
   student_count: number
   ct_avg: Record<string, number>
   ct_std: Record<string, number>
   ct_pass_rate: Record<string, number>
+  ct_level_dist: Record<string, CTLevelDist>
   weak_cts_class: string[]
+  ct_evidence_summary: Record<string, CTEvidenceSummaryItem[]>
   students: {
     student_id: number
     name: string
